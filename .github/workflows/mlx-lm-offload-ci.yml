@@ -36,7 +36,7 @@ jobs:
         run: pip install -e ".[test]"
       - name: Run offload-focused tests
         run: |
-          pytest tests/test_expert_offload.py \
+          python -m pytest tests/test_expert_offload.py \
             tests/test_quantized_offload.py \
             tests/test_nemotron_quantized_offload_config.py \
             tests/test_server_hardening.py \
