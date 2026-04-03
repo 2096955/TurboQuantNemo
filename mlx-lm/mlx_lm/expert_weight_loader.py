@@ -12,13 +12,6 @@ import mlx.core as mx
 
 from .expert_offload import is_nemotron_routed_expert_weight_key
 
-try:
-    from safetensors import safe_open
-except ImportError as e:  # pragma: no cover
-    raise ImportError(
-        "expert offload requires the `safetensors` package. Install with: pip install safetensors"
-    ) from e
-
 
 def load_weight_map(model_path: Path) -> dict[str, str] | None:
     """Return weight_map from model.safetensors.index.json, or None if missing."""
@@ -37,21 +30,18 @@ def build_weight_map_single_shard(
     path = model_path / shard_name
     if not path.is_file():
         raise FileNotFoundError(f"No {shard_name} in {model_path}")
-    with safe_open(path, framework="numpy") as f:
-        keys = list(f.keys())
-    return {k: shard_name for k in keys}
+    shard_data = mx.load(str(path))
+    return {k: shard_name for k in shard_data.keys()}
 
 
 def build_weight_map_multi_glob(model_path: Path) -> dict[str, str]:
     """Scan all model*.safetensors shards and assign keys (slow; avoids index.json)."""
-    import glob
-
     weight_map: dict[str, str] = {}
-    for wf in sorted(glob.glob(str(model_path / "model*.safetensors"))):
-        shard = Path(wf).name
-        with safe_open(wf, framework="numpy") as f:
-            for k in f.keys():
-                weight_map[k] = shard
+    for wf in sorted(model_path.glob("model*.safetensors")):
+        shard = wf.name
+        shard_data = mx.load(str(wf))
+        for k in shard_data.keys():
+            weight_map[k] = shard
     if not weight_map:
         raise FileNotFoundError(
             f"No model*.safetensors tensors found under {model_path} (empty glob or unreadable shards)."

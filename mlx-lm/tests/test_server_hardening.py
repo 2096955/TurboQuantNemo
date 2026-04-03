@@ -93,7 +93,7 @@ class TestServerHardening(unittest.TestCase):
         payload = json.loads(handler.wfile.getvalue().decode())
         self.assertFalse(payload["ready"])
         self.assertFalse(payload["generation_worker_alive"])
-        self.assertIn("worker died", payload["generation_worker_error"])
+        self.assertTrue(payload["generation_worker_error"])
 
     def test_protected_get_requires_api_key(self):
         handler = make_handler(

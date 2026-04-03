@@ -37,7 +37,7 @@ class ExpertLoadError(RuntimeError):
 
 def http_status_for_generation_failure(exc: BaseException) -> int:
     """HTTP status for chat/completions when generation fails before streaming."""
-    return 503 if isinstance(exc, (ExpertLoadError, MemoryError)) else 404
+    return 503 if isinstance(exc, (ExpertLoadError, MemoryError)) else 500
 
 
 def parse_nemotron_expert_key(key: str) -> tuple[int, int, str, str] | None:
@@ -81,18 +81,22 @@ class ExpertOffloadManager:
         weight_map: dict[str, str],
         expert_key_table: dict[tuple[int, int], dict[str, str]],
         max_resident_experts: int = 16,
+        max_cached_shards: int = 4,
     ):
         self.base_path = Path(base_path)
         self.weight_map = weight_map
         self.expert_key_table = expert_key_table
         self.max_resident_experts = max(1, int(max_resident_experts))
+        self.max_cached_shards = max(1, int(max_cached_shards))
 
         self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
         self._lru: OrderedDict[tuple[int, int], None] = OrderedDict()
         self._cache: dict[tuple[int, int], dict[str, mx.array]] = {}
+        self._loading: set[tuple[int, int]] = set()
 
         # Persistent shard file handles — avoid repeated open/close
-        self._shard_handles: dict[str, Any] = {}
+        self._shard_handles: OrderedDict[str, Any] = OrderedDict()
 
         self.hits = 0
         self.misses = 0
@@ -143,15 +147,18 @@ class ExpertOffloadManager:
             }
 
     def _record_load_metrics(self, dt_ms: float) -> None:
-        """Update load timing counters (do not call while holding self._lock)."""
-        self.load_time_ms_total += dt_ms
-        self.load_count += 1
+        """Update load timing counters."""
+        with self._lock:
+            self.load_time_ms_total += dt_ms
+            self.load_count += 1
 
     def _get_shard_handle(self, shard_name: str):
         """Return cached shard tensor dict, loading on first use via mx.load (handles uint32 + bfloat16)."""
-        data = self._shard_handles.get(shard_name)
-        if data is not None:
-            return data
+        with self._lock:
+            data = self._shard_handles.get(shard_name)
+            if data is not None:
+                self._shard_handles.move_to_end(shard_name)
+                return data
         shard_path = self.base_path / shard_name
         if not shard_path.is_file():
             raise ExpertLoadError(
@@ -159,8 +166,16 @@ class ExpertOffloadManager:
                 shard_path=str(shard_path),
             )
         data = mx.load(str(shard_path))
-        self._shard_handles[shard_name] = data
-        return data
+        with self._lock:
+            existing = self._shard_handles.get(shard_name)
+            if existing is not None:
+                self._shard_handles.move_to_end(shard_name)
+                return existing
+            self._shard_handles[shard_name] = data
+            self._shard_handles.move_to_end(shard_name)
+            while len(self._shard_handles) > self.max_cached_shards:
+                self._shard_handles.popitem(last=False)
+            return data
 
     def _load_expert_pair_tensors(self, spec: dict[str, str]) -> dict[str, mx.array]:
         """Load fc1/fc2 for one expert using persistent shard handles. Quantized = 6 tensors, dense = 2."""
@@ -204,6 +219,30 @@ class ExpertOffloadManager:
                 f"Failed loading expert tensors: {e}", tensor_key=base_key
             ) from e
 
+        # H3 fix: validate loaded tensor dtypes to catch corrupt checkpoints early.
+        for tname, tensor in result.items():
+            if tname.endswith("_weight") and tensor.dtype not in (
+                mx.uint32,
+                mx.float16,
+                mx.bfloat16,
+                mx.float32,
+            ):
+                raise ExpertLoadError(
+                    f"Unexpected dtype {tensor.dtype} for {tname} "
+                    f"(expected uint32/float16/bfloat16/float32)",
+                    tensor_key=tname,
+                )
+            if tname.endswith("_scales") and tensor.dtype not in (
+                mx.float16,
+                mx.bfloat16,
+                mx.float32,
+            ):
+                raise ExpertLoadError(
+                    f"Unexpected dtype {tensor.dtype} for {tname} "
+                    f"(expected float16/bfloat16/float32)",
+                    tensor_key=tname,
+                )
+
         dt = (time.perf_counter() - t0) * 1000.0
         self._record_load_metrics(dt)
         return result
@@ -244,6 +283,65 @@ class ExpertOffloadManager:
             self.evictions += 1
             return True
         return False
+
+    def _plan_expert_loads(
+        self, layer_idx: int, indices: mx.array
+    ) -> tuple[mx.array, list[int], list[tuple[tuple[int, int], dict[str, str]]], bool]:
+        """Reserve cache slots for any missing experts and return the load plan."""
+        with self._lock:
+            self._record_gather_call()
+
+        mx.eval(indices)
+        flat_mx = indices.reshape(-1)
+        unique_eids = sorted(set(flat_mx.tolist()))
+        if any(int(eid) < 0 for eid in unique_eids):
+            raise ValueError("expert indices must be non-negative")
+        pinned = {(layer_idx, int(e)) for e in unique_eids}
+        to_load: list[tuple[tuple[int, int], dict[str, str]]] = []
+        evicted_any = False
+
+        with self._cond:
+            for eid in unique_eids:
+                key = (layer_idx, int(eid))
+                while key in self._loading:
+                    self._cond.wait()
+                if key in self._cache:
+                    self._record_cache_access(hit=True)
+                    self._touch(key)
+                    continue
+
+                self._record_cache_access(hit=False)
+                while (
+                    len(self._cache) + len(self._loading) >= self.max_resident_experts
+                    and self._lru
+                ):
+                    if not self._evict_one_unpinned(pinned):
+                        raise MemoryError(
+                            f"expert offload: cannot evict enough experts to satisfy --max-resident-experts={self.max_resident_experts} (pinned={len(pinned)} unique experts this layer)"
+                        )
+                    evicted_any = True
+                spec = self.expert_key_table.get(key)
+                if not spec or "fc1_weight" not in spec or "fc2_weight" not in spec:
+                    raise ExpertLoadError(
+                        f"No expert weight keys indexed for layer={layer_idx} expert={eid}",
+                        layer_idx=layer_idx,
+                    )
+                self._loading.add(key)
+                to_load.append((key, spec))
+
+        return flat_mx, unique_eids, to_load, evicted_any
+
+    def _complete_reserved_load(
+        self, key: tuple[int, int], tensors: dict[str, mx.array] | None
+    ) -> None:
+        with self._cond:
+            try:
+                if tensors is not None and key not in self._cache:
+                    self._cache[key] = tensors
+                    self._touch(key)
+            finally:
+                self._loading.discard(key)
+                self._cond.notify_all()
 
     def prepare_gather(
         self,
@@ -303,6 +401,9 @@ class ExpertOffloadManager:
             tensors = self._load_expert_pair_tensors(spec)
             with self._lock:
                 if key not in self._cache:
+                    # Re-check capacity after re-acquiring lock (C1 race fix)
+                    while len(self._cache) >= self.max_resident_experts and self._lru:
+                        self._evict_one_unpinned(pinned)
                     self._cache[key] = tensors
                     self._touch(key)
 
@@ -374,6 +475,9 @@ class ExpertOffloadManager:
             tensors = self._load_expert_pair_tensors(spec)
             with self._lock:
                 if key not in self._cache:
+                    # Re-check capacity after re-acquiring lock (C1 race fix)
+                    while len(self._cache) >= self.max_resident_experts and self._lru:
+                        self._evict_one_unpinned(pinned)
                     self._cache[key] = tensors
                     self._touch(key)
 
@@ -450,6 +554,9 @@ class ExpertOffloadManager:
             tensors = self._load_expert_pair_tensors(spec)
             with self._lock:
                 if key not in self._cache:
+                    # Re-check capacity after re-acquiring lock (C1 race fix)
+                    while len(self._cache) >= self.max_resident_experts and self._lru:
+                        self._evict_one_unpinned(pinned)
                     self._cache[key] = tensors
                     self._touch(key)
 

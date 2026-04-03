@@ -4,7 +4,6 @@ import argparse
 import copy
 import json
 import logging
-import pickle
 import platform
 import secrets
 import socket
@@ -20,7 +19,18 @@ from queue import Empty as QueueEmpty
 from queue import Full as QueueFull
 from queue import Queue
 from threading import Lock, Thread
-from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 _CLI_HELP_ONLY = __name__ == "__main__" and any(
     arg in {"-h", "--help"} for arg in sys.argv[1:]
@@ -58,8 +68,10 @@ else:
 
 
 def get_system_fingerprint():
-    gpu_arch = mx.device_info()["architecture"]
-    return f"{__version__}-{mx.__version__}-{platform.platform()}-{gpu_arch}"
+    import hashlib
+
+    raw = f"{__version__}-{mx.__version__}-{platform.platform()}-{mx.device_info().get('architecture', '')}"
+    return f"fp-{hashlib.sha256(raw.encode()).hexdigest()[:12]}"
 
 
 def parse_size(x):
@@ -679,9 +691,20 @@ class ModelProvider:
             self.default_model_map[self.cli_args.model] = "default_model"
             self.load(self.cli_args.model, draft_model_path="default_model")
 
-    # Added in adapter_path to load dynamically
     def load(self, model_path, adapter_path=None, draft_model_path=None):
         model_path = self.default_model_map.get(model_path, model_path)
+
+        # C2 fix: reject dynamic model loading from request bodies unless
+        # explicitly opted in. Prevents arbitrary HF downloads and RCE via
+        # --trust-remote-code.
+        if not getattr(self.cli_args, "allow_dynamic_models", False):
+            if model_path != "default_model" and model_path != self.cli_args.model:
+                raise ValueError(
+                    f"Dynamic model loading is disabled. Requested model "
+                    f"{model_path!r} does not match the startup model. "
+                    f"Use --allow-dynamic-models to enable runtime model switching."
+                )
+
         if self.model_key == (model_path, adapter_path, draft_model_path):
             return self.model, self.tokenizer
 
@@ -885,7 +908,12 @@ class ResponseGenerator:
                     mx.eval(mx.distributed.all_sum(0))
                     return None
                 else:
-                    data = mx.array(pickle.dumps(obj))
+                    # C3 fix: use JSON instead of pickle to prevent
+                    # arbitrary code execution from compromised peers.
+                    data = mx.array(
+                        list(json.dumps(obj, default=str).encode("utf-8")),
+                        dtype=mx.uint8,
+                    )
                     mx.eval(mx.distributed.all_sum(data.size))
                     mx.eval(mx.distributed.all_sum(data))
                     return obj
@@ -896,7 +924,7 @@ class ResponseGenerator:
                 else:
                     data = mx.zeros(size, dtype=mx.uint8)
                     data = mx.distributed.all_sum(data)
-                    return pickle.loads(data)
+                    return json.loads(bytes(data.tolist()).decode("utf-8"))
 
     def _share_request(self, request):
         if not self._is_distributed:
@@ -1173,8 +1201,10 @@ class ResponseGenerator:
                         )
                         self._queue_put(rqueue, ctx, ctx=ctx)
 
-                        cache, rest, old_position = self.prompt_cache.fetch_nearest_cache(
-                            current_model_key, cache_key_prompt
+                        cache, rest, old_position = (
+                            self.prompt_cache.fetch_nearest_cache(
+                                current_model_key, cache_key_prompt
+                            )
                         )
                         ctx.prompt_cache_count = len(cache_key_prompt) - len(rest)
 
@@ -1190,7 +1220,10 @@ class ResponseGenerator:
                             )
                             old_position = None
 
-                        ncaches, nbytes = len(self.prompt_cache), self.prompt_cache.nbytes
+                        ncaches, nbytes = (
+                            len(self.prompt_cache),
+                            self.prompt_cache.nbytes,
+                        )
                         logging.info(
                             f"We have {ncaches} kv caches that take {nbytes / 1e9:.2f} GB"
                         )
@@ -1338,9 +1371,7 @@ class ResponseGenerator:
 
         # Define the progress callback
         def progress(tokens_processed, tokens_total):
-            self._queue_put(
-                rqueue, (tokens_processed, tokens_total), ctx=ctx
-            )
+            self._queue_put(rqueue, (tokens_processed, tokens_total), ctx=ctx)
 
         try:
             # Load the model and tokenizer
@@ -1711,6 +1742,10 @@ class APIHandler(BaseHTTPRequestHandler):
             self.max_tokens = self.body.get(
                 "max_tokens", self.response_generator.cli_args.max_tokens
             )
+        # H8 fix: enforce server-side upper bound on max_tokens
+        max_max = getattr(self.response_generator.cli_args, "max_max_tokens", None)
+        if max_max is not None and self.max_tokens is not None:
+            self.max_tokens = min(int(self.max_tokens), int(max_max))
         self.temperature = self.body.get(
             "temperature", self.response_generator.cli_args.temp
         )
@@ -1997,7 +2032,11 @@ class APIHandler(BaseHTTPRequestHandler):
                 e,
                 status,
             )
-            self._write_json_error(status, str(e))
+            # H5 fix: sanitize error messages to avoid leaking internals
+            safe_msg = type(e).__name__
+            if isinstance(e, (ValueError, TypeError)):
+                safe_msg = str(e)  # validation errors are safe to expose
+            self._write_json_error(status, safe_msg)
             return
 
         try:
@@ -2299,9 +2338,8 @@ class APIHandler(BaseHTTPRequestHandler):
             "version": __version__,
             "mlx": mx.__version__,
             "generation_worker_alive": rg.worker_alive,
-            "generation_worker_error": (
-                None if rg._worker_error is None else str(rg._worker_error)
-            ),
+            "generation_worker_alive": rg.worker_alive,
+            "generation_worker_error": rg._worker_error is not None,
         }
         self.wfile.write(json.dumps(payload).encode())
         self.wfile.flush()
@@ -2323,9 +2361,7 @@ class APIHandler(BaseHTTPRequestHandler):
             "model_loaded": mp.model is not None,
             "tokenizer_loaded": mp.tokenizer is not None,
             "generation_worker_alive": rg.worker_alive,
-            "generation_worker_error": (
-                None if rg._worker_error is None else str(rg._worker_error)
-            ),
+            "generation_worker_error": rg._worker_error is not None,
         }
         self.wfile.write(json.dumps(body).encode())
         self.wfile.flush()
@@ -2534,6 +2570,12 @@ def main():
         help="Enable trusting remote code for tokenizer",
     )
     parser.add_argument(
+        "--allow-dynamic-models",
+        action="store_true",
+        help="Allow request bodies to specify arbitrary model paths. "
+        "Disabled by default to prevent unauthorized model downloads.",
+    )
+    parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
@@ -2581,6 +2623,13 @@ def main():
         type=int,
         default=512,
         help="Default maximum number of tokens to generate (default: 512)",
+    )
+    parser.add_argument(
+        "--max-max-tokens",
+        type=int,
+        default=None,
+        help="Hard upper bound on max_tokens regardless of client request. "
+        "Prevents clients from monopolizing GPU with huge generation requests.",
     )
     parser.add_argument(
         "--chat-template-args",

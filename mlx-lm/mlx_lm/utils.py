@@ -312,6 +312,18 @@ def load_model(
         from .expert_weight_loader import load_non_expert_weights, resolve_weight_map
 
         offload_dir = config.get("expert_offload_dir")
+        if offload_dir:
+            offload_path = Path(offload_dir).resolve()
+            model_resolved = model_path.resolve()
+            # H10 fix: prevent path traversal via malicious config.json
+            if not (
+                offload_path == model_resolved
+                or str(offload_path).startswith(str(model_resolved) + "/")
+            ):
+                raise ValueError(
+                    f"expert_offload_dir {offload_dir!r} is outside the model directory "
+                    f"{model_resolved}. This is not allowed for security reasons."
+                )
         ckpt_root = Path(offload_dir) if offload_dir else model_path
         wm = resolve_weight_map(ckpt_root)
 
