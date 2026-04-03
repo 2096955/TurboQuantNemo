@@ -41,29 +41,49 @@ That framing avoids overstating: it names **three separate contributions** (MoE 
 
 This is **orthogonal** to MoE expert weight quantization. Summary follows the [TurboQuant paper](https://arxiv.org/abs/2504.19874) and the in-repo `turboquant-mlx/README.md`.
 
+The core idea: during inference, attention keys and values grow linearly with sequence length. TurboQuant compresses them to 2-4 bits per element while keeping attention scores accurate enough that output quality barely changes.
+
 ### 3.1 Codebooks (Lloyd–Max)
 
-Per-coordinate scalar quantization uses **precomputed centroids** and **boundaries** for head dimension \(D\) and bit width \(b\). Codebooks are stored as `dim_{D}_{b}bit.npz` (e.g. `dim_128_3bit.npz`).
+**Problem:** You need to map a continuous key value to one of 2^b discrete levels (e.g., 8 levels for 3-bit).
+
+**Solution:** Precompute optimal quantization levels (centroids) and decision boundaries using the Lloyd-Max algorithm, which minimizes mean squared error for a given distribution. Each coordinate dimension and bit width gets its own codebook, stored as `dim_{D}_{b}bit.npz`.
+
+**Why it works:** Lloyd-Max places centroids where the data is dense, so common values get precise representation while rare extremes share levels. This beats uniform quantization significantly.
 
 ### 3.2 Random rotation
 
-Keys are multiplied by a **random orthogonal** matrix so coordinates behave roughly Gaussian, making scalar quantization predictable.
+**Problem:** Real key vectors have uneven coordinate distributions — some dimensions carry most of the signal, others are near-zero. Scalar quantization wastes bits on the quiet dimensions.
+
+**Solution:** Multiply keys by a random orthogonal matrix before quantizing. This spreads the signal evenly across all coordinates, making each dimension roughly Gaussian with similar variance.
+
+**Why it works:** The rotation is information-preserving (orthogonal = no loss) but makes every coordinate equally important, so the codebook can treat them uniformly.
 
 ### 3.3 QJL 1-bit residual
 
-The quantization residual is projected with a random Gaussian matrix and only **signs** are stored, reducing bias in inner-product estimates.
+**Problem:** Even with good codebooks, quantization introduces error. That error biases the attention score estimate.
+
+**Solution:** Compute the quantization residual (true key minus codebook reconstruction), project it through a random Gaussian matrix S, and store only the **signs** (1 bit per projection dimension). This is the QJL (Quantized Johnson-Lindenstraum) technique from [arXiv:2406.03482](https://arxiv.org/abs/2406.03482).
+
+**Why it works:** The sign of a random projection preserves directional information about the residual. At query time, the correction term cancels the systematic bias from codebook quantization, using only 1 extra bit per dimension.
 
 ### 3.4 Asymmetric attention score estimator
 
-As in `turboquant-mlx/README.md`, the attention score is approximated as:
+Putting it all together, the attention score between query q and key k is estimated as:
 
-\[
-\langle q, k \rangle \approx \langle q, k_{\text{mse}} \rangle + \frac{\|\text{residual}\| \sqrt{\pi/2}}{m} \langle S q, \operatorname{sign}(S \cdot \text{residual}) \rangle
-\]
+$$\langle q, k \rangle \approx \underbrace{\langle q, k_{\text{mse}} \rangle}_{\text{codebook term}} + \underbrace{\frac{\|r\| \sqrt{\pi/2}}{m} \langle Sq, \text{sign}(S \cdot r) \rangle}_{\text{QJL residual correction}}$$
 
-where \(k_{\text{mse}}\) is the codebook reconstruction, \(S\) is the QJL projection, and \(m\) is the projection dimension (details in the paper).
+where:
+- **k_mse** = codebook reconstruction of k (the "best guess" from quantization)
+- **r** = k - k_mse (the quantization residual)
+- **S** = random Gaussian projection matrix (shared across all keys)
+- **m** = number of projection dimensions
+- The first term is the standard dot product with the quantized key
+- The second term corrects for quantization error using only the stored signs
 
-**Important:** Current MLX integration may still use **dense value buffers** in places; full theoretical memory footprint requires packed storage and kernels—see `turboquant-mlx/README.md` Phase 5 notes.
+**"Asymmetric"** means the query q is used at full precision — only the key is quantized. This is natural for attention: queries are computed fresh each forward pass, while keys accumulate in the cache.
+
+**Current status:** The MLX implementation in `turboquant-mlx/` covers codebooks, rotation, QJL signs, and the asymmetric estimator. Value compression may still use dense buffers in places; full theoretical memory savings require packed storage — see `turboquant-mlx/README.md`.
 
 ---
 
