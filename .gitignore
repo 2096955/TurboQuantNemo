@@ -45,12 +45,12 @@ nemotron-30b-mixed/
 # Codebook precomputes (regenerate locally)
 turboquant-mlx/codebooks/
 
-# Temporary and one-off scripts
-check_*.py
-patch_*.py
-test_demo*.py
-test_quant*.py
-test_rmsnorm.py
+# Temporary and one-off root scripts (not mlx-lm/tests/)
+/check_*.py
+/patch_*.py
+/test_demo*.py
+/test_quant*.py
+/test_rmsnorm.py
 update_plan_v2.py
 plan2.md
 acceptance_criteria.json
