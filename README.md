@@ -1,25 +1,42 @@
 # TurboQuantNemo
 
-Run **Nemotron-H** as a local coding specialist for **Claude Code** on Apple Silicon.
+**Run a 120B coding model on your laptop. No cloud GPU. No $200/month subscriptions.**
 
-| Profile | RAM | Model | Disk | Decode |
-|---|---|---|---|---|
-| **120B** | 32 GB | Nemotron-H 120B (2-bit experts) | ~80 GB | ~18.7 tok/s |
-| **30B** | 16 GB | Nemotron-H 30B (2-bit experts) | ~11 GB | faster |
+100B+ MoE models are unusable on a laptop if every expert stays in BF16 in RAM. But MoE models only *route* a few experts per token — the rest can live on disk. Quantize those routed experts aggressively (2-bit), keep the dense layers at 4-bit, load experts on demand, and a 120B model fits in 17 GB of memory at ~19 tok/s.
 
-Claude Code orchestrates. The local model runs via quantized expert offload. You pay for Claude API tokens only on coordination, not code generation.
+This repo is the validated implementation of that idea for **Nemotron-H** on **Apple Silicon**, wired into **Claude Code** so you get a 120B local coding specialist for the price of a coordination API call.
 
-## What this does
+| Profile | RAM | Model | Disk | Decode | Status |
+|---------|-----|-------|------|--------|--------|
+| **120B** | 32 GB | Nemotron-H 120B (2-bit experts) | ~80 GB | ~18.7 tok/s | Quality-gated |
+| **30B** | 16 GB | Nemotron-H 30B (2-bit experts) | ~11 GB | ~25+ tok/s | Quality-gated |
+
+## How it works
 
 ```text
-You (Claude Code) ──> Claude API (orchestrator, token-efficient via RTK)
-                  ──> Local Nemotron-H (code generation, review, debug)
-                       └─ 2-bit experts, 4-bit dense, expert offload
-                       └─ TurboQuant KV cache compression
-                       └─ Fits in 16 GB (30B) or 17 GB (120B)
+You ──> Claude Code (orchestrator)
+            │
+            ├── Plans the approach (Claude API, small token cost)
+            ├── Delegates code generation to local model (0 API tokens)
+            │       └── mlx_lm.server + expert offload
+            │           ├── 2-bit routed experts loaded on demand from disk
+            │           ├── 4-bit dense layers resident in memory
+            │           └── TurboQuant KV cache compression (attention layers)
+            └── Reviews output + integrates (Claude API, small token cost)
 ```
 
-Claude Code delegates heavy coding tasks to your local model through MCP. The local model handles code generation, code review, and debug assistance. Claude handles planning, orchestration, and user interaction.
+Claude Code delegates heavy coding tasks — generation, review, debugging — to your local Nemotron-H through [MCP](https://modelcontextprotocol.io). The local model does the expensive work. Claude handles planning and orchestration. [RTK](https://github.com/rtk-ai/rtk) compacts CLI output for 60-90% token savings on top.
+
+## We want your feedback
+
+This is ready for **real code testing** on Apple Silicon laptops. We're looking for:
+
+- Bug reports (especially on 16 GB machines with the 30B model)
+- Quality comparisons: does 2-bit expert quality hold up on *your* codebase?
+- Memory/performance reports from different M-series chips
+- Workflow feedback: is the Claude Code + local model delegation useful in practice?
+
+**Fork it, try it, file issues.** The [release candidate checklist](docs/RELEASE_CANDIDATE_CHECKLIST.md) has the exact validation commands.
 
 ## Requirements
 
@@ -264,10 +281,24 @@ TurboQuantNemo/
 │   ├── checkpoint_integrity.py # Checkpoint validation
 │   └── setup-token-efficiency.sh # RTK + Superpowers installer
 └── docs/
+    ├── ORIGIN_ATTRIBUTION_AND_MATH.md
     ├── RELEASE_CANDIDATE_CHECKLIST.md
     ├── PRODUCTION_ROADMAP.md
     └── EXECUTION_BOARD.md
 ```
+
+## What's in the name
+
+**TurboQuantNemo** = **TurboQuant** + **Nemotron**. Two separate techniques bundled in one repo:
+
+| Track | What it does | Source |
+|-------|-------------|--------|
+| **MoE expert offload** (weights) | Group-affine quantization of expert weights + LRU disk-to-GPU loading + `gather_qmm` | Engineering in this repo on top of [mlx-lm](https://github.com/ml-explore/mlx-examples/tree/main/llms/mlx_lm) |
+| **TurboQuant** (KV cache) | Rotation + Lloyd-Max codebooks + QJL 1-bit residual + asymmetric score estimator | [Frantar et al., arXiv:2504.19874](https://arxiv.org/abs/2504.19874) (ICLR 2026) |
+
+The **validated 120B story** in this repo is **quantized expert offload** — standard weight quantization plus systems engineering. **TurboQuant** is the separate KV cache compression paper; `turboquant-mlx/` bundles an MLX port for attention layers. Don't conflate them.
+
+See [`docs/ORIGIN_ATTRIBUTION_AND_MATH.md`](./docs/ORIGIN_ATTRIBUTION_AND_MATH.md) for full attribution, citations, and equations.
 
 ## What this is and isn't
 
