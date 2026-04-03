@@ -4,7 +4,17 @@ import unittest
 from queue import Queue
 from types import SimpleNamespace
 
-from mlx_lm.server import APIHandler, ResponseGenerator
+from mlx_lm.server import (
+    APIHandler,
+    CompletionRequest,
+    GenerationArguments,
+    LogitsProcessorArguments,
+    ModelDescription,
+    ResponseGenerator,
+    SamplingArguments,
+    _deserialize_shared_payload,
+    _serialize_shared_payload,
+)
 
 
 class DummyThread:
@@ -69,6 +79,52 @@ def make_handler(
 
 
 class TestServerHardening(unittest.TestCase):
+    def test_distributed_payload_roundtrip_uses_explicit_schema(self):
+        payload = (
+            CompletionRequest(
+                request_type="chat",
+                prompt="ignored",
+                messages=[
+                    {"role": "system", "content": "hi"},
+                    {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                ],
+                tools=[{"type": "function", "function": {"name": "lookup"}}],
+                role_mapping={"user": "human"},
+            ),
+            GenerationArguments(
+                model=ModelDescription(
+                    model="default_model",
+                    draft="default_model",
+                    adapter=None,
+                ),
+                sampling=SamplingArguments(
+                    temperature=0.1,
+                    top_p=0.9,
+                    top_k=20,
+                    min_p=0.05,
+                    xtc_probability=0.0,
+                    xtc_threshold=0.0,
+                ),
+                logits=LogitsProcessorArguments(
+                    logit_bias={12: -1.5, 99: 2.0},
+                    repetition_penalty=1.1,
+                    repetition_context_size=32,
+                ),
+                stop_words=["</s>", "DONE"],
+                max_tokens=64,
+                num_draft_tokens=4,
+                logprobs=True,
+                top_logprobs=3,
+                seed=7,
+                chat_template_kwargs={"mode": "strict", "nested": {"x": [1, 2, 3]}},
+            ),
+        )
+
+        encoded = _serialize_shared_payload(payload)
+        decoded = _deserialize_shared_payload(encoded)
+
+        self.assertEqual(decoded, payload)
+
     def test_generate_rejects_full_queue_immediately(self):
         response_generator = object.__new__(ResponseGenerator)
         response_generator._worker_error = None

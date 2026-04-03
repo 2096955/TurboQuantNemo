@@ -587,6 +587,145 @@ class CompletionRequest:
     role_mapping: Optional[Dict[str, Any]]
 
 
+def _encode_shared_value(value: Any) -> Any:
+    if isinstance(value, CompletionRequest):
+        return {
+            "__shared_type__": "CompletionRequest",
+            "request_type": value.request_type,
+            "prompt": value.prompt,
+            "messages": _encode_shared_value(value.messages),
+            "tools": _encode_shared_value(value.tools),
+            "role_mapping": _encode_shared_value(value.role_mapping),
+        }
+    if isinstance(value, GenerationArguments):
+        return {
+            "__shared_type__": "GenerationArguments",
+            "model": _encode_shared_value(value.model),
+            "sampling": _encode_shared_value(value.sampling),
+            "logits": _encode_shared_value(value.logits),
+            "stop_words": _encode_shared_value(value.stop_words),
+            "max_tokens": value.max_tokens,
+            "num_draft_tokens": value.num_draft_tokens,
+            "logprobs": value.logprobs,
+            "top_logprobs": value.top_logprobs,
+            "seed": value.seed,
+            "chat_template_kwargs": _encode_shared_value(value.chat_template_kwargs),
+        }
+    if isinstance(value, ModelDescription):
+        return {
+            "__shared_type__": "ModelDescription",
+            "model": value.model,
+            "draft": value.draft,
+            "adapter": value.adapter,
+        }
+    if isinstance(value, SamplingArguments):
+        return {
+            "__shared_type__": "SamplingArguments",
+            "temperature": value.temperature,
+            "top_p": value.top_p,
+            "top_k": value.top_k,
+            "min_p": value.min_p,
+            "xtc_probability": value.xtc_probability,
+            "xtc_threshold": value.xtc_threshold,
+        }
+    if isinstance(value, LogitsProcessorArguments):
+        return {
+            "__shared_type__": "LogitsProcessorArguments",
+            "logit_bias": _encode_shared_value(value.logit_bias),
+            "repetition_penalty": value.repetition_penalty,
+            "repetition_context_size": value.repetition_context_size,
+        }
+    if isinstance(value, tuple):
+        return {
+            "__shared_type__": "tuple",
+            "items": [_encode_shared_value(item) for item in value],
+        }
+    if isinstance(value, list):
+        return [_encode_shared_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            "__shared_type__": "dict",
+            "items": [
+                [_encode_shared_value(key), _encode_shared_value(item)]
+                for key, item in value.items()
+            ],
+        }
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    raise TypeError(f"Unsupported distributed payload type: {type(value).__name__}")
+
+
+def _decode_shared_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_decode_shared_value(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    kind = value.get("__shared_type__")
+    if kind is None:
+        raise ValueError("Invalid distributed payload: missing __shared_type__")
+    if kind == "dict":
+        return {
+            _decode_shared_value(key): _decode_shared_value(item)
+            for key, item in value["items"]
+        }
+    if kind == "tuple":
+        return tuple(_decode_shared_value(item) for item in value["items"])
+    if kind == "CompletionRequest":
+        return CompletionRequest(
+            request_type=value["request_type"],
+            prompt=value["prompt"],
+            messages=_decode_shared_value(value["messages"]),
+            tools=_decode_shared_value(value["tools"]),
+            role_mapping=_decode_shared_value(value["role_mapping"]),
+        )
+    if kind == "GenerationArguments":
+        return GenerationArguments(
+            model=_decode_shared_value(value["model"]),
+            sampling=_decode_shared_value(value["sampling"]),
+            logits=_decode_shared_value(value["logits"]),
+            stop_words=_decode_shared_value(value["stop_words"]),
+            max_tokens=value["max_tokens"],
+            num_draft_tokens=value["num_draft_tokens"],
+            logprobs=value["logprobs"],
+            top_logprobs=value["top_logprobs"],
+            seed=value["seed"],
+            chat_template_kwargs=_decode_shared_value(value["chat_template_kwargs"]),
+        )
+    if kind == "ModelDescription":
+        return ModelDescription(
+            model=value["model"],
+            draft=value["draft"],
+            adapter=value["adapter"],
+        )
+    if kind == "SamplingArguments":
+        return SamplingArguments(
+            temperature=value["temperature"],
+            top_p=value["top_p"],
+            top_k=value["top_k"],
+            min_p=value["min_p"],
+            xtc_probability=value["xtc_probability"],
+            xtc_threshold=value["xtc_threshold"],
+        )
+    if kind == "LogitsProcessorArguments":
+        return LogitsProcessorArguments(
+            logit_bias=_decode_shared_value(value["logit_bias"]),
+            repetition_penalty=value["repetition_penalty"],
+            repetition_context_size=value["repetition_context_size"],
+        )
+    raise ValueError(f"Unsupported distributed payload kind: {kind}")
+
+
+def _serialize_shared_payload(obj: Any) -> bytes:
+    return json.dumps(
+        _encode_shared_value(obj), separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+
+
+def _deserialize_shared_payload(payload: bytes) -> Any:
+    return _decode_shared_value(json.loads(payload.decode("utf-8")))
+
+
 @dataclass
 class GenerationContext:
     has_tool_calling: bool
@@ -916,16 +1055,16 @@ class ResponseGenerator:
         if not self._is_distributed:
             return obj
 
-        import io
-        import pickle
-
         with mx.stream(generation_stream):
             if self._rank == 0:
                 if obj is None:
                     mx.eval(mx.distributed.all_sum(0))
                     return None
                 else:
-                    data = mx.array(pickle.dumps(obj))
+                    data = mx.array(
+                        list(_serialize_shared_payload(obj)),
+                        dtype=mx.uint8,
+                    )
                     mx.eval(mx.distributed.all_sum(data.size))
                     mx.eval(mx.distributed.all_sum(data))
                     return obj
@@ -936,24 +1075,7 @@ class ResponseGenerator:
                 else:
                     data = mx.zeros(size, dtype=mx.uint8)
                     data = mx.distributed.all_sum(data)
-                    # C3 fix: restrict unpickling to known-safe module types
-                    # to prevent arbitrary code execution from compromised peers.
-                    _ALLOWED_MODULES = {
-                        "builtins",
-                        "collections",
-                        "mlx_lm.server",
-                        "mlx_lm.sample_utils",
-                    }
-
-                    class _RestrictedUnpickler(pickle.Unpickler):
-                        def find_class(self, module, name):
-                            if module not in _ALLOWED_MODULES:
-                                raise pickle.UnpicklingError(
-                                    f"Disallowed class: {module}.{name}"
-                                )
-                            return super().find_class(module, name)
-
-                    return _RestrictedUnpickler(io.BytesIO(bytes(data.tolist()))).load()
+                    return _deserialize_shared_payload(bytes(data.tolist()))
 
     def _share_request(self, request):
         if not self._is_distributed:
