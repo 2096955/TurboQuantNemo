@@ -24,21 +24,21 @@ concurrency:
 jobs:
   pytest-offload:
     runs-on: macos-14
-    defaults:
-      run:
-        working-directory: mlx-lm
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        id: setup-python
         with:
           python-version: "3.11"
       - name: Install mlx-lm with test extras
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -e ".[test]"
+          "${{ steps.setup-python.outputs.python-path }}" -m pip install --upgrade pip
+          "${{ steps.setup-python.outputs.python-path }}" -m pip install -e "./mlx-lm[test]"
       - name: Run offload-focused tests
+        working-directory: mlx-lm
         run: |
-          python3 -m pytest tests/test_expert_offload.py \
+          "${{ steps.setup-python.outputs.python-path }}" -m pytest \
+            tests/test_expert_offload.py \
             tests/test_quantized_offload.py \
             tests/test_nemotron_quantized_offload_config.py \
             tests/test_server_hardening.py \
