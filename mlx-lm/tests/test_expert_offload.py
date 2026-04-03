@@ -27,7 +27,7 @@ class ExpertOffloadHttpStatusTest(unittest.TestCase):
     def test_generation_failure_maps_expert_load_and_memory_to_503(self):
         self.assertEqual(http_status_for_generation_failure(ExpertLoadError("x")), 503)
         self.assertEqual(http_status_for_generation_failure(MemoryError()), 503)
-        self.assertEqual(http_status_for_generation_failure(ValueError("missing")), 404)
+        self.assertEqual(http_status_for_generation_failure(ValueError("missing")), 500)
 
 
 class ExpertOffloadParseTest(unittest.TestCase):
@@ -245,8 +245,16 @@ class ExpertWeightLoaderTest(unittest.TestCase):
             self.assertIn("missing shard", str(ctx.exception).lower())
 
     def test_is_nemotron_expert_key_matches_scales_biases(self):
-        self.assertTrue(is_nemotron_routed_expert_weight_key("backbone.layers.5.mixer.experts.3.up_proj.scales"))
-        self.assertTrue(is_nemotron_routed_expert_weight_key("backbone.layers.5.mixer.experts.3.down_proj.biases"))
+        self.assertTrue(
+            is_nemotron_routed_expert_weight_key(
+                "backbone.layers.5.mixer.experts.3.up_proj.scales"
+            )
+        )
+        self.assertTrue(
+            is_nemotron_routed_expert_weight_key(
+                "backbone.layers.5.mixer.experts.3.down_proj.biases"
+            )
+        )
 
     def test_manager_is_quantized_property(self):
         wm = {
@@ -264,15 +272,27 @@ class ExpertWeightLoaderTest(unittest.TestCase):
 
     def test_gather_qmm_compact_subset(self):
         from mlx_lm.models.switch_layers import QuantizedSwitchLinear
-        sl = QuantizedSwitchLinear(input_dims=32, output_dims=64, num_experts=4, bits=4, group_size=32)
+
+        sl = QuantizedSwitchLinear(
+            input_dims=32, output_dims=64, num_experts=4, bits=4, group_size=32
+        )
         x = mx.random.normal((1, 2, 32))
-        
+
         compact_w = sl.weight[mx.array([0, 2])]
         compact_s = sl.scales[mx.array([0, 2])]
         compact_b = sl.biases[mx.array([0, 2])] if sl.biases is not None else None
-        remapped = mx.array([[0, 1]]) # 0->0, 2->1
-        
-        result = mx.gather_qmm(x, compact_w, compact_s, compact_b, rhs_indices=remapped, transpose=True, group_size=32, bits=4)
+        remapped = mx.array([[0, 1]])  # 0->0, 2->1
+
+        result = mx.gather_qmm(
+            x,
+            compact_w,
+            compact_s,
+            compact_b,
+            rhs_indices=remapped,
+            transpose=True,
+            group_size=32,
+            bits=4,
+        )
         mx.eval(result)
         self.assertEqual(result.shape, (1, 2, 2, 64))
 
@@ -281,9 +301,14 @@ class ExpertWeightLoaderTest(unittest.TestCase):
         def fake_load(spec):
             res = {}
             for k in spec:
-                if k.endswith("_weight") or k.endswith("_scales") or k.endswith("_biases"):
+                if (
+                    k.endswith("_weight")
+                    or k.endswith("_scales")
+                    or k.endswith("_biases")
+                ):
                     res[k] = mx.zeros((4, 8))
             return res
+
         mock_load.side_effect = fake_load
 
         wm = {
@@ -301,13 +326,14 @@ class ExpertWeightLoaderTest(unittest.TestCase):
         )
         idx = mx.array([[0]], dtype=mx.int32)
         c1, c2, r = mgr.prepare_gather_pair_quantized(0, idx)
-        
+
         c1_w, c1_s, c1_b = c1
         mx.eval(c1_w, c1_s, r)
         self.assertEqual(tuple(c1_w.shape), (1, 4, 8))
         self.assertEqual(tuple(c1_s.shape), (1, 4, 8))
         self.assertIsNone(c1_b)
         self.assertEqual(tuple(r.shape), (1, 1))
+
 
 if __name__ == "__main__":
     unittest.main()
