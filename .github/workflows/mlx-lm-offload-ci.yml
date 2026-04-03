@@ -30,10 +30,14 @@ jobs:
         id: setup-python
         with:
           python-version: "3.11"
-      - name: Install mlx-lm with test extras
+      - name: Install dependencies
         run: |
           "${{ steps.setup-python.outputs.python-path }}" -m pip install --upgrade pip
-          "${{ steps.setup-python.outputs.python-path }}" -m pip install -e "./mlx-lm[test]"
+          "${{ steps.setup-python.outputs.python-path }}" -m pip install pytest
+          "${{ steps.setup-python.outputs.python-path }}" -m pip install -e "./mlx-lm"
+      - name: Verify pytest is available
+        run: |
+          "${{ steps.setup-python.outputs.python-path }}" -m pytest --version
       - name: Run offload-focused tests
         working-directory: mlx-lm
         run: |
