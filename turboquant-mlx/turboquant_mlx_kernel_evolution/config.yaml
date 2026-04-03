@@ -1,0 +1,64 @@
+# OpenEvolve config — TurboQuant asymmetric score (Path A, Python/MLX)
+# Run from turboquant-mlx repo root with PYTHONPATH=. or pip install -e .
+
+max_iterations: 25
+checkpoint_interval: 5
+log_level: "INFO"
+
+llm:
+  # Local OpenAI-compatible server (e.g. mlx_lm.server --port 8080)
+  primary_model: "qwen"
+  primary_model_weight: 1.0
+  api_base: "http://localhost:8080/v1"
+  api_key: "dummy"
+  temperature: 0.5
+  top_p: 0.95
+  max_tokens: 8192
+  timeout: 600
+
+prompt:
+  system_message: |
+    You are an expert MLX and Apple Metal engineer optimizing TurboQuant's
+    asymmetric attention score on Apple Silicon (unified memory).
+
+    TARGET: Python function asymmetric_attention_scores(query, compressed, rotation, S, qjl_scale, scale)
+    in the EVOLVE-BLOCK — same outputs as the reference (two-term estimator: quantized key path + QJL correction).
+
+    MUST NOT:
+    - Change the function name or argument list.
+    - Break numerical fidelity: evolved code must match the reference within float noise; the evaluator
+      enforces cosine similarity >= 0.995 on flattened outputs vs mlx_turboquant.reference.
+
+    MAY:
+    - Reorder/fuse mlx.core operations, cache intermediate tensors (e.g. precompute Sq = q @ S.T once per query block),
+    - Improve memory access patterns, swapaxes usage, or batching compatible with MLX.
+
+    OPPORTUNITIES: fuse matmuls where safe, vectorize sign handling, tile-friendly reductions,
+    reuse Sq across sequence positions, keep work in float32 where the reference does.
+
+    Only edit between # EVOLVE-BLOCK-START and # EVOLVE-BLOCK-END.
+
+  num_top_programs: 3
+  num_diverse_programs: 2
+
+database:
+  db_path: "./openevolve_output_turboquant/tq_score_evolution"
+  population_size: 40
+  archive_size: 16
+  num_islands: 3
+  elite_selection_ratio: 0.25
+  exploitation_ratio: 0.65
+  exploration_ratio: 0.35
+  feature_dimensions:
+    - "throughput_eval_per_sec"
+    - "cosine_similarity"
+  feature_bins: 8
+
+evaluator:
+  timeout: 300
+  parallel_evaluations: 1
+  cascade_evaluation: false
+
+diff_based_evolution: true
+allow_full_rewrites: false
+max_code_length: 120000

@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+.venv/
+venv/
+
+# Node
+node_modules/
+.npm/
+
+# IDE / Editor
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local config
+.claude/
+.gemini/
+.genkit/
+.rtk/
+.ruff_cache/
+.benchmarks/
+
+# Logs and runtime data
+logs/
+data/
+*.log
+firebase-debug.log
+claude-progress.txt
+
+# Model checkpoints (too large for git)
+nemotron-30b-mixed/
+*.safetensors
+*.gguf
+*.npz
+
+# Codebook precomputes (regenerate locally)
+turboquant-mlx/codebooks/
+
+# Temporary and one-off scripts
+check_*.py
+patch_*.py
+test_demo*.py
+test_quant*.py
+test_rmsnorm.py
+update_plan_v2.py
+plan2.md
+acceptance_criteria.json
+feature_list.json
+
+# Docker runtime
+docker/
+
+# Third-party vendored code (users clone separately if needed)
+_third_party/
+
+# Not part of TurboQuantNemo core
+deer-flow/
+handover-compression-mcp/
+DEMO_RUNBOOK.md
+PLAN.md
+AGENTS.md
+README_TurboQuantNemo.md
+
+# OS
+.DS_Store
+Thumbs.db

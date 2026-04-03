@@ -1,0 +1,44 @@
+# Subset of mlx-lm tests: expert offload, quantized offload, Nemotron config.
+# Requires Apple Silicon + MLX (macOS runners).
+
+name: mlx-lm offload tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "mlx-lm/**"
+      - ".github/workflows/mlx-lm-offload-ci.yml"
+  pull_request:
+    paths:
+      - "mlx-lm/**"
+      - ".github/workflows/mlx-lm-offload-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest-offload:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: mlx-lm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install mlx-lm with test extras
+        run: pip install -e ".[test]"
+      - name: Run offload-focused tests
+        run: |
+          pytest tests/test_expert_offload.py \
+            tests/test_quantized_offload.py \
+            tests/test_nemotron_quantized_offload_config.py \
+            tests/test_server_hardening.py \
+            tests/test_repack_experts.py \
+            -q --tb=short

@@ -1,0 +1,5 @@
+<frozen runpy>:128: RuntimeWarning: 'mlx_lm.convert' found in sys.modules after import of package 'mlx_lm', but prior to execution of 'mlx_lm.convert'; this may result in unpredictable behaviour
+Calling `python -m mlx_lm.convert ...` directly is deprecated. Use `mlx_lm.convert ...` or `python -m mlx_lm convert ...` instead.
+[INFO] Loading
+[INFO] Quantizing
+[INFO] Quantized model with 3.574 bits per weight.

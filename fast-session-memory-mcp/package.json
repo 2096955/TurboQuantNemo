@@ -1,0 +1,27 @@
+{
+  "name": "fast-session-memory-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for hot/cold session memory - <10ms hot path, no vectors",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "fast-session-memory-mcp": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "better-sqlite3": "^11.6.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

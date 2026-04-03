@@ -1,0 +1,7 @@
+# Phase 6 — install alongside turboquant-mlx deps (mlx, scipy for codebooks).
+mlx>=0.30.0
+mlx-lm>=0.30.0
+numpy>=1.24
+openevolve>=0.2.0
+PyYAML>=6.0
+tqdm>=4.65

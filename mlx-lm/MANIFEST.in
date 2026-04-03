@@ -1,0 +1,3 @@
+include requirements.txt
+recursive-include mlx_lm/ *.py
+recursive-include mlx_lm/models/turboquant_codebooks *.npz

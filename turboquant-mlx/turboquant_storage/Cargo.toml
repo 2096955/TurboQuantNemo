@@ -1,0 +1,12 @@
+[package]
+name = "turboquant_storage"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "turboquant_storage"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.20", features = ["extension-module"] }
+numpy = "0.20"

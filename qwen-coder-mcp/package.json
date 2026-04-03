@@ -1,0 +1,28 @@
+{
+  "name": "qwen-coder-mcp",
+  "version": "1.0.0",
+  "description": "MCP server exposing Qwen3-Coder-Next as code_generation, code_review, debug_assistance tools",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "qwen-coder-mcp": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').writeFileSync('build/index.js', '#!/usr/bin/env node\\n' + require('fs').readFileSync('build/index.js', 'utf8'))\"",
+    "dev": "tsc --watch",
+    "prepare": "npm run build",
+    "test": "node --test test/",
+    "test:real": "QWEN_MODEL=gemma3:latest node --test test/",
+    "test:qwen": "QWEN_BASE_URL=http://localhost:8080 QWEN_MODEL=Qwen3-Coder-Next-Q5_K_M-00001-of-00002.gguf QWEN_API=openai node --test test/"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

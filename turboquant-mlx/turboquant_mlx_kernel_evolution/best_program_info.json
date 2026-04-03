@@ -1,0 +1,8 @@
+{
+  "note": "Template — fill after an evolution run with combined_score, throughput_eval_per_sec, cosine_similarity, iteration, and program path.",
+  "combined_score": null,
+  "throughput_eval_per_sec": null,
+  "cosine_similarity": null,
+  "iteration": null,
+  "program_path": null
+}
