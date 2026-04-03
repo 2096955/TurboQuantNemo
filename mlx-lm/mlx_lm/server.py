@@ -694,15 +694,29 @@ class ModelProvider:
     def load(self, model_path, adapter_path=None, draft_model_path=None):
         model_path = self.default_model_map.get(model_path, model_path)
 
-        # C2 fix: reject dynamic model loading from request bodies unless
-        # explicitly opted in. Prevents arbitrary HF downloads and RCE via
-        # --trust-remote-code.
+        # C2 fix: reject dynamic model/adapter/draft loading from request bodies
+        # unless explicitly opted in. Prevents arbitrary HF downloads and RCE
+        # via --trust-remote-code.
         if not getattr(self.cli_args, "allow_dynamic_models", False):
             if model_path != "default_model" and model_path != self.cli_args.model:
                 raise ValueError(
                     f"Dynamic model loading is disabled. Requested model "
                     f"{model_path!r} does not match the startup model. "
                     f"Use --allow-dynamic-models to enable runtime model switching."
+                )
+            if adapter_path is not None and adapter_path != self.cli_args.adapter_path:
+                raise ValueError(
+                    "Dynamic adapter loading is disabled. "
+                    "Use --allow-dynamic-models to enable runtime adapter switching."
+                )
+            if (
+                draft_model_path is not None
+                and draft_model_path != "default_model"
+                and draft_model_path != getattr(self.cli_args, "draft_model", None)
+            ):
+                raise ValueError(
+                    "Dynamic draft model loading is disabled. "
+                    "Use --allow-dynamic-models to enable runtime draft model switching."
                 )
 
         if self.model_key == (model_path, adapter_path, draft_model_path):
@@ -902,18 +916,16 @@ class ResponseGenerator:
         if not self._is_distributed:
             return obj
 
+        import io
+        import pickle
+
         with mx.stream(generation_stream):
             if self._rank == 0:
                 if obj is None:
                     mx.eval(mx.distributed.all_sum(0))
                     return None
                 else:
-                    # C3 fix: use JSON instead of pickle to prevent
-                    # arbitrary code execution from compromised peers.
-                    data = mx.array(
-                        list(json.dumps(obj, default=str).encode("utf-8")),
-                        dtype=mx.uint8,
-                    )
+                    data = mx.array(pickle.dumps(obj))
                     mx.eval(mx.distributed.all_sum(data.size))
                     mx.eval(mx.distributed.all_sum(data))
                     return obj
@@ -924,7 +936,24 @@ class ResponseGenerator:
                 else:
                     data = mx.zeros(size, dtype=mx.uint8)
                     data = mx.distributed.all_sum(data)
-                    return json.loads(bytes(data.tolist()).decode("utf-8"))
+                    # C3 fix: restrict unpickling to known-safe module types
+                    # to prevent arbitrary code execution from compromised peers.
+                    _ALLOWED_MODULES = {
+                        "builtins",
+                        "collections",
+                        "mlx_lm.server",
+                        "mlx_lm.sample_utils",
+                    }
+
+                    class _RestrictedUnpickler(pickle.Unpickler):
+                        def find_class(self, module, name):
+                            if module not in _ALLOWED_MODULES:
+                                raise pickle.UnpicklingError(
+                                    f"Disallowed class: {module}.{name}"
+                                )
+                            return super().find_class(module, name)
+
+                    return _RestrictedUnpickler(io.BytesIO(bytes(data.tolist()))).load()
 
     def _share_request(self, request):
         if not self._is_distributed:

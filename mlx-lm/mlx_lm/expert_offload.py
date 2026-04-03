@@ -351,71 +351,25 @@ class ExpertOffloadManager:
         *,
         mode: str = "gather",
     ) -> tuple[mx.array, mx.array]:
-        """Return (compact_weight, remapped_indices) for SwitchLinear-style gather_mm.
-
-        proj: 'fc1' or 'fc2' (maps to up_proj / down_proj tensors).
-        """
-        # loop mode uses the same gather path (debug / parity bisect)
+        """Return (compact_weight, remapped_indices) for SwitchLinear-style gather_mm."""
         if mode not in ("gather", "loop"):
             mode = "gather"
 
-        with self._lock:
-            self._record_gather_call()
+        flat_mx, unique_eids, to_load, _ = self._plan_expert_loads(layer_idx, indices)
 
-        # Materialize indices once — needed for cache lookup
-        mx.eval(indices)
-        flat_mx = indices.reshape(-1)
-        flat_list = flat_mx.tolist()
-        unique_eids = sorted(set(flat_list))
-        pinned = {(layer_idx, int(e)) for e in unique_eids}
-
-        to_load: list[tuple[tuple[int, int], dict[str, str]]] = []
-
-        with self._lock:
-            for eid in unique_eids:
-                key = (layer_idx, int(eid))
-                if key in self._cache:
-                    self._record_cache_access(hit=True)
-                    self._touch(key)
-                else:
-                    self._record_cache_access(hit=False)
-                    evicted_any = False
-                    while len(self._cache) >= self.max_resident_experts and self._lru:
-                        if not self._evict_one_unpinned(pinned):
-                            raise MemoryError(
-                                f"expert offload: cannot evict enough experts to satisfy --max-resident-experts={self.max_resident_experts} (pinned={len(pinned)} unique experts this layer)"
-                            )
-                        evicted_any = True
-                    if evicted_any:
-                        mx.eval()
-                    spec = self.expert_key_table.get(key)
-                    if not spec or "fc1_weight" not in spec or "fc2_weight" not in spec:
-                        raise ExpertLoadError(
-                            f"No expert weight keys indexed for layer={layer_idx} expert={eid}",
-                            layer_idx=layer_idx,
-                        )
-                    to_load.append((key, spec))
-
-        # Disk I/O outside self._lock (avoids blocking stats_summary / health; fixes deadlock)
         for key, spec in to_load:
-            tensors = self._load_expert_pair_tensors(spec)
-            with self._lock:
-                if key not in self._cache:
-                    # Re-check capacity after re-acquiring lock (C1 race fix)
-                    while len(self._cache) >= self.max_resident_experts and self._lru:
-                        self._evict_one_unpinned(pinned)
-                    self._cache[key] = tensors
-                    self._touch(key)
+            tensors = None
+            try:
+                tensors = self._load_expert_pair_tensors(spec)
+            finally:
+                self._complete_reserved_load(key, tensors)
 
         with self._lock:
-            stacks = []
-            for e in unique_eids:
-                k = (layer_idx, int(e))
-                w = self._cache[k][f"{proj}_weight"]
-                stacks.append(w)
+            stacks = [
+                self._cache[(layer_idx, int(e))][f"{proj}_weight"] for e in unique_eids
+            ]
             compact = mx.stack(stacks, axis=0)
 
-            # GPU-side index remapping via lookup table
             max_eid = max(unique_eids) + 1
             lut = mx.zeros((max_eid,), dtype=mx.int32)
             unique_arr = mx.array(unique_eids, dtype=mx.int32)
@@ -435,54 +389,16 @@ class ExpertOffloadManager:
         if mode not in ("gather", "loop"):
             mode = "gather"
 
-        with self._lock:
-            self._record_gather_call()
-
-        mx.eval(indices)
-        flat_mx = indices.reshape(-1)
-        flat_list = flat_mx.tolist()
-        unique_eids = sorted(set(flat_list))
-        pinned = {(layer_idx, int(e)) for e in unique_eids}
-
-        to_load: list[tuple[tuple[int, int], dict[str, str]]] = []
-
-        with self._lock:
-            for eid in unique_eids:
-                key = (layer_idx, int(eid))
-                if key in self._cache:
-                    self._record_cache_access(hit=True)
-                    self._touch(key)
-                else:
-                    self._record_cache_access(hit=False)
-                    evicted_any = False
-                    while len(self._cache) >= self.max_resident_experts and self._lru:
-                        if not self._evict_one_unpinned(pinned):
-                            raise MemoryError(
-                                f"expert offload: cannot evict enough experts to satisfy --max-resident-experts={self.max_resident_experts} (pinned={len(pinned)} unique experts this layer)"
-                            )
-                        evicted_any = True
-                    if evicted_any:
-                        mx.eval()
-                    spec = self.expert_key_table.get(key)
-                    if not spec or "fc1_weight" not in spec or "fc2_weight" not in spec:
-                        raise ExpertLoadError(
-                            f"No expert weight keys indexed for layer={layer_idx} expert={eid}",
-                            layer_idx=layer_idx,
-                        )
-                    to_load.append((key, spec))
+        flat_mx, unique_eids, to_load, _ = self._plan_expert_loads(layer_idx, indices)
 
         for key, spec in to_load:
-            tensors = self._load_expert_pair_tensors(spec)
-            with self._lock:
-                if key not in self._cache:
-                    # Re-check capacity after re-acquiring lock (C1 race fix)
-                    while len(self._cache) >= self.max_resident_experts and self._lru:
-                        self._evict_one_unpinned(pinned)
-                    self._cache[key] = tensors
-                    self._touch(key)
+            tensors = None
+            try:
+                tensors = self._load_expert_pair_tensors(spec)
+            finally:
+                self._complete_reserved_load(key, tensors)
 
         with self._lock:
-            eid_frozenset = frozenset(unique_eids)
             compacts = {}
             for proj in ("fc1", "fc2"):
                 stacks = [
@@ -514,54 +430,16 @@ class ExpertOffloadManager:
         if mode not in ("gather", "loop"):
             mode = "gather"
 
-        with self._lock:
-            self._record_gather_call()
-
-        mx.eval(indices)
-        flat_mx = indices.reshape(-1)
-        flat_list = flat_mx.tolist()
-        unique_eids = sorted(set(flat_list))
-        pinned = {(layer_idx, int(e)) for e in unique_eids}
-
-        to_load: list[tuple[tuple[int, int], dict[str, str]]] = []
-
-        with self._lock:
-            for eid in unique_eids:
-                key = (layer_idx, int(eid))
-                if key in self._cache:
-                    self._record_cache_access(hit=True)
-                    self._touch(key)
-                else:
-                    self._record_cache_access(hit=False)
-                    evicted_any = False
-                    while len(self._cache) >= self.max_resident_experts and self._lru:
-                        if not self._evict_one_unpinned(pinned):
-                            raise MemoryError(
-                                f"expert offload: cannot evict enough experts to satisfy --max-resident-experts={self.max_resident_experts} (pinned={len(pinned)} unique experts this layer)"
-                            )
-                        evicted_any = True
-                    if evicted_any:
-                        mx.eval()
-                    spec = self.expert_key_table.get(key)
-                    if not spec or "fc1_weight" not in spec or "fc2_weight" not in spec:
-                        raise ExpertLoadError(
-                            f"No expert weight keys indexed for layer={layer_idx} expert={eid}",
-                            layer_idx=layer_idx,
-                        )
-                    to_load.append((key, spec))
+        flat_mx, unique_eids, to_load, _ = self._plan_expert_loads(layer_idx, indices)
 
         for key, spec in to_load:
-            tensors = self._load_expert_pair_tensors(spec)
-            with self._lock:
-                if key not in self._cache:
-                    # Re-check capacity after re-acquiring lock (C1 race fix)
-                    while len(self._cache) >= self.max_resident_experts and self._lru:
-                        self._evict_one_unpinned(pinned)
-                    self._cache[key] = tensors
-                    self._touch(key)
+            tensors = None
+            try:
+                tensors = self._load_expert_pair_tensors(spec)
+            finally:
+                self._complete_reserved_load(key, tensors)
 
         with self._lock:
-            eid_frozenset = frozenset(unique_eids)
             compacts = {}
             for proj in ("fc1", "fc2"):
                 ws, ss, bs = [], [], []
