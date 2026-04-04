@@ -72,6 +72,55 @@ def build_nemotron_expert_key_table(
     return table
 
 
+class AttnResExpertPredictor:
+    """Predicts required experts from AttnRes block attention weights."""
+    def __init__(self, num_blocks: int, num_experts: int, num_layers: int):
+        self.block_expert_affinity = mx.zeros((num_layers, num_blocks, num_experts))
+        self.observation_count = mx.zeros((num_layers, num_blocks))
+
+    def record_activation(self, layer_idx: int, block_attention_weights: mx.array, expert_ids: mx.array):
+        """
+        Record the actual expert activations given the block attention weights.
+        block_attention_weights: [num_blocks, B, T]
+        expert_ids: [..., top_k]
+        """
+        # Aggregate alpha over batch and sequence
+        alpha = block_attention_weights.mean(axis=(1, 2))  # [num_blocks]
+        
+        # Flatten expert_ids and get unique
+        mx.eval(expert_ids)
+        flat_eids_list = list(set(expert_ids.flatten().tolist()))
+        flat_eids = mx.array(flat_eids_list, dtype=mx.int32)
+        
+        affinity = self.block_expert_affinity[layer_idx]
+        affinity[:, flat_eids] = affinity[:, flat_eids] + alpha[:, None]
+        self.block_expert_affinity[layer_idx] = affinity
+        
+        self.observation_count[layer_idx] = self.observation_count[layer_idx] + 1
+
+    def predict_experts(self, layer_idx: int, block_attention_weights: mx.array, top_k: int = 16) -> list[int]:
+        """
+        Predict the top_k experts likely needed.
+        """
+        alpha = block_attention_weights.mean(axis=(1, 2))  # [num_blocks]
+        
+        affinity = self.block_expert_affinity[layer_idx]  # [num_blocks, num_experts]
+        
+        # scores = alpha @ affinity
+        scores = mx.matmul(alpha, affinity)
+        
+        counts = self.observation_count[layer_idx]  # [num_blocks]
+        # Avoid division by zero
+        total_counts = mx.matmul(alpha, counts)
+        
+        # If total_counts > 0, normalize
+        scores = mx.where(total_counts > 0, scores / total_counts, scores)
+        
+        predicted = mx.argsort(scores)[-top_k:]
+        mx.eval(predicted)
+        return predicted.tolist()
+
+
 class ExpertOffloadManager:
     """LRU-backed resident set for routed expert weights; thread-safe bookkeeping."""
 
