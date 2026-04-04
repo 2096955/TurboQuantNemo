@@ -14,6 +14,7 @@ from .base import (
     scaled_dot_product_attention,
 )
 from .cache import ArraysCache, KVCache
+from ..expert_offload import AttnResExpertPredictor
 from .gated_delta import gated_delta_update
 from .mla import MultiLinear
 from .switch_layers import SwitchGLU
