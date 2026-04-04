@@ -146,6 +146,7 @@ class ExpertOffloadManager:
         self._lru: OrderedDict[tuple[int, int], None] = OrderedDict()
         self._cache: dict[tuple[int, int], dict[str, mx.array]] = {}
         self._loading: set[tuple[int, int]] = set()
+        self._expert_importance: dict[tuple[int, int], float] = {}
 
         # Persistent shard file handles — avoid repeated open/close
         self._shard_handles: OrderedDict[str, Any] = OrderedDict()
@@ -325,16 +326,30 @@ class ExpertOffloadManager:
             else:
                 self.decode_misses += 1
 
+    def update_expert_importance(self, importance_scores: dict[tuple[int, int], float]) -> None:
+        """Update the importance scores used for eviction decisions."""
+        with self._lock:
+            for k, v in importance_scores.items():
+                self._expert_importance[k] = v
+
     def _evict_one_unpinned(self, pinned: set[tuple[int, int]]) -> bool:
-        """Evict LRU entry not in pinned. Returns True if something was evicted."""
-        for k in list(self._lru.keys()):
-            if k in pinned:
-                continue
-            self._lru.pop(k, None)
-            self._cache.pop(k, None)
-            self.evictions += 1
-            return True
-        return False
+        """Evict entry not in pinned, prioritizing experts with lowest importance. Returns True if something was evicted."""
+        candidates = [k for k in self._lru.keys() if k not in pinned]
+        if not candidates:
+            return False
+
+        if self._expert_importance:
+            # Score combines recency (implicit in candidate list order) and importance.
+            # But the simplest is strictly lowest importance first.
+            worst_key = min(candidates, key=lambda k: self._expert_importance.get(k, 0.0))
+        else:
+            worst_key = candidates[0]
+
+        self._lru.pop(worst_key, None)
+        self._cache.pop(worst_key, None)
+        self._expert_importance.pop(worst_key, None)
+        self.evictions += 1
+        return True
 
     def _plan_expert_loads(
         self, layer_idx: int, indices: mx.array
