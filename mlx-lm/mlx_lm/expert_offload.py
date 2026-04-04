@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+import concurrent.futures
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
@@ -137,6 +138,8 @@ class ExpertOffloadManager:
         self.expert_key_table = expert_key_table
         self.max_resident_experts = max(1, int(max_resident_experts))
         self.max_cached_shards = max(1, int(max_cached_shards))
+
+        self._prefetch_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
@@ -379,6 +382,36 @@ class ExpertOffloadManager:
                 to_load.append((key, spec))
 
         return flat_mx, unique_eids, to_load, evicted_any
+
+    def prefetch(self, layer_idx: int, expert_ids: list[int]):
+        """Asynchronously load experts into cache."""
+        for eid in expert_ids:
+            key = (layer_idx, int(eid))
+            with self._cond:
+                if key in self._cache or key in self._loading:
+                    continue
+                
+                # Check eviction if we're hitting capacity (best effort for prefetch)
+                if len(self._cache) + len(self._loading) >= self.max_resident_experts and self._lru:
+                    self._evict_one_unpinned(set())
+
+                self._loading.add(key)
+            self._prefetch_pool.submit(self._prefetch_task, key)
+
+    def _prefetch_task(self, key: tuple[int, int]):
+        spec = self.expert_key_table.get(key)
+        if not spec:
+            with self._cond:
+                self._loading.discard(key)
+                self._cond.notify_all()
+            return
+        try:
+            tensors = self._load_expert_pair_tensors(spec)
+            self._complete_reserved_load(key, tensors)
+        except Exception as e:
+            with self._cond:
+                self._loading.discard(key)
+                self._cond.notify_all()
 
     def _complete_reserved_load(
         self, key: tuple[int, int], tensors: dict[str, mx.array] | None
