@@ -26,15 +26,15 @@ See also: [`PRODUCTION_ROADMAP.md`](./PRODUCTION_ROADMAP.md) (full checklist), [
 
 ## Agent Builds, Human Runs
 
-- [ ] Prepare a fixed-seed quality matrix runner for `2-bit`, `3-bit`, and `4-bit`, plus optional `layer-aware` — **script:** `scripts/run_quality_matrix.sh` (set `MODEL_2BIT` / `MODEL_3BIT` / `MODEL_4BIT` and optionally `MODEL_LAYER_AWARE`).
-- [ ] Prepare cold-cache and warm-cache benchmark wrappers for the real 32 GB machine — use `benchmark_moe_offload.py --warm-second-pass --split-decode-timing --json-output`.
-- [ ] Prepare 30-60+ minute soak automation wrappers from `docs/SOAK_TESTING.md`.
-- [ ] Prepare real-repo coding eval harnesses for:
+- [x] Prepare a fixed-seed quality matrix runner for `2-bit`, `3-bit`, and `4-bit`, plus optional `layer-aware` — **script:** `scripts/run_quality_matrix.sh` (set `MODEL_2BIT` / `MODEL_3BIT` / `MODEL_4BIT` and optionally `MODEL_LAYER_AWARE`).
+- [x] Prepare cold-cache and warm-cache benchmark wrappers for the real 32 GB machine — use `benchmark_moe_offload.py --warm-second-pass --split-decode-timing --json-output`.
+- [x] Prepare 30-60+ minute soak automation wrappers from `docs/SOAK_TESTING.md`.
+- [x] Prepare real-repo coding eval harnesses for:
   - bug fixing
   - traceback debugging
   - multi-file edits
   - refactors
-- [ ] Prepare artifact capture for:
+- [x] Prepare artifact capture for:
   - peak RSS
   - swap activity
   - prefill latency
