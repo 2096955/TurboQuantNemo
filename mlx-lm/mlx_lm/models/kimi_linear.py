@@ -14,6 +14,7 @@ from .base import (
     scaled_dot_product_attention,
 )
 from .cache import ArraysCache, KVCache
+from ..expert_offload import AttnResExpertPredictor
 from .gated_delta import gated_delta_update
 from .mla import MultiLinear
 from .switch_layers import SwitchGLU
@@ -52,6 +53,22 @@ class ModelArgs(BaseModelArgs):
     use_grouped_topk: bool = True
     num_expert_group: int = 1
     topk_group: int = 1
+    block_size: int = 16
+
+
+class BlockAttnRes(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-5):
+        super().__init__()
+        self.weight = mx.zeros((dim,))
+        self.norm = nn.RMSNorm(dim, eps=eps)
+
+    def __call__(self, blocks: List[mx.array], partial_block: mx.array) -> Tuple[mx.array, mx.array]:
+        V = mx.stack(blocks + [partial_block], axis=0)
+        K = self.norm(V)
+        logits = (self.weight * K).sum(axis=-1)
+        alpha = mx.softmax(logits, axis=0)
+        h = (alpha[..., None] * V).sum(axis=0)
+        return h, alpha
 
 
 class KimiMLP(nn.Module):
@@ -148,6 +165,7 @@ class KimiSparseMoE(nn.Module):
             self.args.moe_renormalize,
             self.args.moe_router_activation_func,
         )
+        self.last_expert_ids = inds
         out = self.switch_mlp(x, inds)
         out = (out * weights[..., None]).sum(axis=-2)
         if self.shared_experts is not None:
@@ -388,6 +406,8 @@ class KimiDeltaAttention(nn.Module):
 class KimiDecoderLayer(nn.Module):
     def __init__(self, args: ModelArgs, layer_idx: int):
         super().__init__()
+        self.layer_idx = layer_idx
+        self.block_size = args.block_size
         kda_layers = args.linear_attn_config["kda_layers"]
         self.is_linear = (layer_idx + 1) in kda_layers
 
@@ -409,18 +429,43 @@ class KimiDecoderLayer(nn.Module):
         self.post_attention_layernorm = nn.RMSNorm(
             args.hidden_size, eps=args.rms_norm_eps
         )
+        self.attn_res = BlockAttnRes(args.hidden_size, eps=args.rms_norm_eps)
+        self.mlp_res = BlockAttnRes(args.hidden_size, eps=args.rms_norm_eps)
 
     def __call__(
         self,
+        blocks: List[mx.array],
         x: mx.array,
         mask: Optional[mx.array] = None,
         cache: Optional[Any] = None,
-    ) -> mx.array:
+    ) -> Tuple[List[mx.array], mx.array]:
+        partial_block = x
+        
+        h, alpha_attn = self.attn_res(blocks, partial_block)
+
+        if self.layer_idx % max(1, self.block_size // 2) == 0 and self.layer_idx > 0:
+            blocks.append(partial_block)
+            partial_block = None
+
         attn_cache = None if cache is None else cache
-        y = self.self_attn(self.input_layernorm(x), mask, attn_cache)
-        h = x + y
+        y = self.self_attn(self.input_layernorm(h), mask, attn_cache)
+        
+        partial_block = y if partial_block is None else partial_block + y
+
+        h, alpha_mlp = self.mlp_res(blocks, partial_block)
+        
+        if hasattr(self, 'expert_manager') and hasattr(self, 'predictor'):
+            predicted_experts = self.predictor.predict_experts(self.layer_idx, alpha_mlp, top_k=16)
+            self.expert_manager.prefetch(self.layer_idx, predicted_experts)
+
         z = self.mlp(self.post_attention_layernorm(h))
-        return h + z
+        
+        if hasattr(self, 'predictor') and hasattr(self.mlp, 'last_expert_ids'):
+            # The MLP needs to expose last_expert_ids for recording.
+            self.predictor.record_activation(self.layer_idx, alpha_mlp, self.mlp.last_expert_ids)
+
+        partial_block = partial_block + z
+        return blocks, partial_block
 
 
 class KimiLinearModel(nn.Module):
@@ -448,9 +493,10 @@ class KimiLinearModel(nn.Module):
         ssm_mask = create_ssm_mask(h, cache[self.ssm_idx])
         attn_mask = create_attention_mask(h, cache[self.attn_idx], return_array=True)
 
+        blocks = []
         for layer, layer_cache in zip(self.layers, cache):
             mask = ssm_mask if layer.is_linear else attn_mask
-            h = layer(h, mask=mask, cache=layer_cache)
+            blocks, h = layer(blocks, h, mask=mask, cache=layer_cache)
 
         return self.norm(h)
 

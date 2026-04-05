@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+import concurrent.futures
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,55 @@ def build_nemotron_expert_key_table(
     return table
 
 
+class AttnResExpertPredictor:
+    """Predicts required experts from AttnRes block attention weights."""
+    def __init__(self, num_blocks: int, num_experts: int, num_layers: int):
+        self.block_expert_affinity = mx.zeros((num_layers, num_blocks, num_experts))
+        self.observation_count = mx.zeros((num_layers, num_blocks))
+
+    def record_activation(self, layer_idx: int, block_attention_weights: mx.array, expert_ids: mx.array):
+        """
+        Record the actual expert activations given the block attention weights.
+        block_attention_weights: [num_blocks, B, T]
+        expert_ids: [..., top_k]
+        """
+        # Aggregate alpha over batch and sequence
+        alpha = block_attention_weights.mean(axis=(1, 2))  # [num_blocks]
+        
+        # Flatten expert_ids and get unique
+        mx.eval(expert_ids)
+        flat_eids_list = list(set(expert_ids.flatten().tolist()))
+        flat_eids = mx.array(flat_eids_list, dtype=mx.int32)
+        
+        affinity = self.block_expert_affinity[layer_idx]
+        affinity[:, flat_eids] = affinity[:, flat_eids] + alpha[:, None]
+        self.block_expert_affinity[layer_idx] = affinity
+        
+        self.observation_count[layer_idx] = self.observation_count[layer_idx] + 1
+
+    def predict_experts(self, layer_idx: int, block_attention_weights: mx.array, top_k: int = 16) -> list[int]:
+        """
+        Predict the top_k experts likely needed.
+        """
+        alpha = block_attention_weights.mean(axis=(1, 2))  # [num_blocks]
+        
+        affinity = self.block_expert_affinity[layer_idx]  # [num_blocks, num_experts]
+        
+        # scores = alpha @ affinity
+        scores = mx.matmul(alpha, affinity)
+        
+        counts = self.observation_count[layer_idx]  # [num_blocks]
+        # Avoid division by zero
+        total_counts = mx.matmul(alpha, counts)
+        
+        # If total_counts > 0, normalize
+        scores = mx.where(total_counts > 0, scores / total_counts, scores)
+        
+        predicted = mx.argsort(scores)[-top_k:]
+        mx.eval(predicted)
+        return predicted.tolist()
+
+
 class ExpertOffloadManager:
     """LRU-backed resident set for routed expert weights; thread-safe bookkeeping."""
 
@@ -89,11 +139,14 @@ class ExpertOffloadManager:
         self.max_resident_experts = max(1, int(max_resident_experts))
         self.max_cached_shards = max(1, int(max_cached_shards))
 
+        self._prefetch_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
         self._lru: OrderedDict[tuple[int, int], None] = OrderedDict()
         self._cache: dict[tuple[int, int], dict[str, mx.array]] = {}
         self._loading: set[tuple[int, int]] = set()
+        self._expert_importance: dict[tuple[int, int], float] = {}
 
         # Persistent shard file handles — avoid repeated open/close
         self._shard_handles: OrderedDict[str, Any] = OrderedDict()
@@ -273,16 +326,30 @@ class ExpertOffloadManager:
             else:
                 self.decode_misses += 1
 
+    def update_expert_importance(self, importance_scores: dict[tuple[int, int], float]) -> None:
+        """Update the importance scores used for eviction decisions."""
+        with self._lock:
+            for k, v in importance_scores.items():
+                self._expert_importance[k] = v
+
     def _evict_one_unpinned(self, pinned: set[tuple[int, int]]) -> bool:
-        """Evict LRU entry not in pinned. Returns True if something was evicted."""
-        for k in list(self._lru.keys()):
-            if k in pinned:
-                continue
-            self._lru.pop(k, None)
-            self._cache.pop(k, None)
-            self.evictions += 1
-            return True
-        return False
+        """Evict entry not in pinned, prioritizing experts with lowest importance. Returns True if something was evicted."""
+        candidates = [k for k in self._lru.keys() if k not in pinned]
+        if not candidates:
+            return False
+
+        if self._expert_importance:
+            # Score combines recency (implicit in candidate list order) and importance.
+            # But the simplest is strictly lowest importance first.
+            worst_key = min(candidates, key=lambda k: self._expert_importance.get(k, 0.0))
+        else:
+            worst_key = candidates[0]
+
+        self._lru.pop(worst_key, None)
+        self._cache.pop(worst_key, None)
+        self._expert_importance.pop(worst_key, None)
+        self.evictions += 1
+        return True
 
     def _plan_expert_loads(
         self, layer_idx: int, indices: mx.array
@@ -330,6 +397,36 @@ class ExpertOffloadManager:
                 to_load.append((key, spec))
 
         return flat_mx, unique_eids, to_load, evicted_any
+
+    def prefetch(self, layer_idx: int, expert_ids: list[int]):
+        """Asynchronously load experts into cache."""
+        for eid in expert_ids:
+            key = (layer_idx, int(eid))
+            with self._cond:
+                if key in self._cache or key in self._loading:
+                    continue
+                
+                # Check eviction if we're hitting capacity (best effort for prefetch)
+                if len(self._cache) + len(self._loading) >= self.max_resident_experts and self._lru:
+                    self._evict_one_unpinned(set())
+
+                self._loading.add(key)
+            self._prefetch_pool.submit(self._prefetch_task, key)
+
+    def _prefetch_task(self, key: tuple[int, int]):
+        spec = self.expert_key_table.get(key)
+        if not spec:
+            with self._cond:
+                self._loading.discard(key)
+                self._cond.notify_all()
+            return
+        try:
+            tensors = self._load_expert_pair_tensors(spec)
+            self._complete_reserved_load(key, tensors)
+        except Exception as e:
+            with self._cond:
+                self._loading.discard(key)
+                self._cond.notify_all()
 
     def _complete_reserved_load(
         self, key: tuple[int, int], tensors: dict[str, mx.array] | None
