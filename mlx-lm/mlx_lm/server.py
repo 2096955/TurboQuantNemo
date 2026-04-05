@@ -799,11 +799,16 @@ class TimeBudget:
 def _model_config_from_cli(cli_args: argparse.Namespace) -> Optional[Dict[str, Any]]:
     if not getattr(cli_args, "expert_offload", False):
         return None
-    return {
+    result = {
         "expert_offload": True,
-        "max_resident_experts": getattr(cli_args, "max_resident_experts", 16),
         "expert_offload_dir": getattr(cli_args, "expert_offload_dir", None),
     }
+    # Only inject max_resident_experts if user explicitly set it on CLI;
+    # otherwise let utils.load_model compute from architecture (layers × top_k)
+    mrs = getattr(cli_args, "max_resident_experts", None)
+    if mrs is not None:
+        result["max_resident_experts"] = mrs
+    return result
 
 
 class ModelProvider:
@@ -2148,11 +2153,18 @@ class APIHandler(BaseHTTPRequestHandler):
             chat_template_kwargs=self.chat_template_kwargs,
         )
 
+        start_time = time.time()
+        
         # Create keepalive callback to send SSE comments during long prompt processing
         def keepalive_callback(processed_tokens, total_tokens):
             logging.info(
                 f"Prompt processing progress: {processed_tokens}/{total_tokens}"
             )
+            if self.timeout is not None and time.time() - start_time > self.timeout:
+                # If timeout is reached during prefill, raise an error to break out
+                if "ctx" in locals() or "ctx" in globals() or hasattr(self, "_temp_ctx"):
+                    pass # Just a safety check
+                raise TimeoutError("Generation timeout exceeded")
             if self.stream:
                 try:
                     # Send SSE comment for keepalive - invisible to clients but keeps connection alive
@@ -2161,8 +2173,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     )
                     self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError, OSError):
-                    # Client disconnected, ignore
-                    pass
+                    logging.info("Client disconnected during prompt processing")
+                    raise RuntimeError("Client disconnected")
 
         # Create the token generator
         try:
@@ -2262,6 +2274,13 @@ class APIHandler(BaseHTTPRequestHandler):
             # Process the generated tokens
             for gen in response:
                 logging.debug(gen.text)
+                
+                # Check for per-request generation timeout
+                if self.timeout is not None and time.time() - start_time > self.timeout:
+                    logging.info(f"Request exceeded timeout of {self.timeout}s")
+                    finish_reason = "timeout"
+                    ctx.stop()
+                    break
 
                 # Gather the text in tool calling or text variables
                 if in_reasoning:
@@ -2385,6 +2404,27 @@ class APIHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             logging.info("Client disconnected during response stream")
             ctx.stop()
+        except RuntimeError as e:
+            if "Client disconnected" in str(e):
+                ctx.stop()
+            else:
+                raise
+        except TimeoutError:
+            logging.warning(f"Request exceeded timeout of {self.timeout}s")
+            ctx.stop()
+        finally:
+            if "ctx" in locals() and hasattr(ctx, "prompt") and "tokens" in locals():
+                rg = self.response_generator
+                if not hasattr(rg, "metric_requests_total"):
+                    rg.metric_requests_total = 0
+                    rg.metric_prompt_tokens_total = 0
+                    rg.metric_completion_tokens_total = 0
+                    rg.metric_duration_seconds_total = 0.0
+                
+                rg.metric_requests_total += 1
+                rg.metric_prompt_tokens_total += len(ctx.prompt)
+                rg.metric_completion_tokens_total += len(tokens)
+                rg.metric_duration_seconds_total += time.time() - start_time
 
     def completion_usage_response(
         self,
@@ -2822,6 +2862,12 @@ def main():
         type=float,
         default=0.0,
         help="Seconds to wait for a free queue slot before rejecting; 0 rejects immediately (default).",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Max generation time per request in seconds (default: None).",
     )
     parser.add_argument(
         "--max-request-body-bytes",

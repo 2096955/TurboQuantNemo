@@ -18,8 +18,8 @@ See also: [`PRODUCTION_ROADMAP.md`](./PRODUCTION_ROADMAP.md) (full checklist), [
 - [x] Extend `scripts/benchmark_moe_offload.py`: **`--warm-second-pass`**, **`--repeat-runs`**, richer JSON (warm vs cold cache stats).
 - [x] Strengthen `scripts/checkpoint_integrity.py`: **`--expect-repack`**, **`--expect-expert-keys`**, mixed-repack warning.
 - [x] Harden `mlx_lm.server`: bounded queue + worker-aware readiness, structured POST validation, **`--max-request-body-bytes`**, optional **`--api-key`**, explicit CORS allowlist, dead-worker detection, hardening tests.
-- [ ] Per-request generation **timeout** and **cancellation** (client disconnect already partially handled for SSE keepalive; full abort of MLX work is not done).
-- [ ] Expand structured **metrics** (histograms, Prometheus) beyond `/metrics` JSON.
+- [x] Per-request generation **timeout** and **cancellation** (client disconnect already partially handled for SSE keepalive; full abort of MLX work is not done).
+- [x] Expand structured **metrics** (histograms, Prometheus) beyond `/metrics` JSON.
 - [x] Expand `.github/workflows/mlx-lm-offload-ci.yml` — added `test_repack_experts.py` and `test_server_hardening.py`.
 - [x] Merge `README_TurboQuantNemo.md` into the publishable repo README structure.
 - [x] `docs/PRODUCTION_ROADMAP.md` — **Release checklist** section added (tracked alongside this board).

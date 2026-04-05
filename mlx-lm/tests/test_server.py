@@ -46,6 +46,10 @@ class DummyModelProvider:
                 "prompt_cache_size": 10,
                 "prompt_cache_bytes": 1 << 63,
                 "prompt_cache_total_bytes": None,
+                "kv_cache_type": "default",
+                "expert_offload": False,
+                "queue_put_timeout_s": 0.0,
+                "max_request_body_bytes": 64 * 1024 * 1024,
             },
         )
 
@@ -428,7 +432,7 @@ class TestLRUPromptCache(unittest.TestCase):
         model = ("test", None, None)
         tokens = [10] * 24
 
-        c, t = cache.fetch_nearest_cache(model, tokens)
+        c, t, _ = cache.fetch_nearest_cache(model, tokens)
         self.assertTrue(c is None)
         self.assertEqual(t, tokens)
 
@@ -437,7 +441,7 @@ class TestLRUPromptCache(unittest.TestCase):
         cache.insert_cache(model, t, c)
 
         tokens = tokens + [20] * 5
-        c, t = cache.fetch_nearest_cache(model, tokens)
+        c, t, _ = cache.fetch_nearest_cache(model, tokens)
         k, v = c[0].state
         self.assertTrue((k == v).all().item())
         self.assertTrue((k.flatten() == mx.arange(24)).all().item())
@@ -449,7 +453,7 @@ class TestLRUPromptCache(unittest.TestCase):
         cache.insert_cache(model, tokens, c)
 
         tokens = tokens[:26] + [40] * 8
-        c, t = cache.fetch_nearest_cache(model, tokens)
+        c, t, _ = cache.fetch_nearest_cache(model, tokens)
         k, v = c[0].state
         self.assertTrue((k == v).all().item())
         self.assertTrue(
@@ -464,13 +468,13 @@ class TestLRUPromptCache(unittest.TestCase):
         cache.insert_cache(model, [1, 2], [MockCache("test1")])
         cache.insert_cache(model, [1, 2], [MockCache("test1")])
 
-        c, t = cache.fetch_nearest_cache(model, [1, 2])
+        c, t, _ = cache.fetch_nearest_cache(model, [1, 2])
         self.assertEqual(c, [MockCache("test1")])
         self.assertEqual(t, [])
-        c, t = cache.fetch_nearest_cache(model, [1, 2])
+        c, t, _ = cache.fetch_nearest_cache(model, [1, 2])
         self.assertEqual(c, [MockCache("test1")])
         self.assertEqual(t, [])
-        c, t = cache.fetch_nearest_cache(model, [1, 2])
+        c, t, _ = cache.fetch_nearest_cache(model, [1, 2])
         self.assertEqual(c, None)
         self.assertEqual(t, [1, 2])
 
@@ -478,13 +482,13 @@ class TestLRUPromptCache(unittest.TestCase):
         cache.insert_cache(model, [2, 3], [MockCache("test2")])
         cache.insert_cache(model, [3, 4], [MockCache("test3")])
 
-        c, t = cache.fetch_nearest_cache(model, [1, 2])
+        c, t, _ = cache.fetch_nearest_cache(model, [1, 2])
         self.assertEqual(c, None)
         self.assertEqual(t, [1, 2])
-        c, t = cache.fetch_nearest_cache(model, [2, 3])
+        c, t, _ = cache.fetch_nearest_cache(model, [2, 3])
         self.assertEqual(c, [MockCache("test2")])
         self.assertEqual(t, [])
-        c, t = cache.fetch_nearest_cache(model, [3, 4])
+        c, t, _ = cache.fetch_nearest_cache(model, [3, 4])
         self.assertEqual(c, [MockCache("test3")])
         self.assertEqual(t, [])
 
@@ -504,10 +508,10 @@ class TestLRUPromptCache(unittest.TestCase):
         self.assertEqual(len(cache), 2)
         self.assertEqual(cache.nbytes, 6)
 
-        c, t = cache.fetch_nearest_cache(model, [1, 2])
+        c, t, _ = cache.fetch_nearest_cache(model, [1, 2])
         self.assertEqual(c, None)
         self.assertEqual(t, [1, 2])
-        c, t = cache.fetch_nearest_cache(model, [3, 4])
+        c, t, _ = cache.fetch_nearest_cache(model, [3, 4])
         self.assertEqual(c, None)
         self.assertEqual(t, [3, 4])
 
