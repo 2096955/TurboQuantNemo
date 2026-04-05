@@ -1,8 +1,10 @@
 # Copyright © 2024 Apple Inc.
 
+import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -14,7 +16,6 @@ HF_MODEL_PATH = "mlx-community/Qwen1.5-0.5B-Chat-4bit"
 
 
 class TestUtils(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         cls.test_dir_fid = tempfile.TemporaryDirectory()
@@ -122,6 +123,95 @@ class TestUtils(unittest.TestCase):
         self.assertTrue(hasattr(model, "custom_attribute"))
         self.assertEqual(model.custom_attribute, "This is a custom model")
         self.assertTrue(hasattr(model, "qwenWeights"))
+
+    def test_load_model_rejects_unsupported_expert_offload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = os.path.join(tmp, "unsupported_stub")
+            os.mkdir(model_path)
+            with open(os.path.join(model_path, "config.json"), "w") as f:
+                json.dump(
+                    {"model_type": "llama", "expert_offload": True},
+                    f,
+                )
+
+            with self.assertRaises(NotImplementedError) as ctx:
+                utils.load_model(Path(model_path))
+
+            self.assertIn("expert_offload is not implemented", str(ctx.exception))
+
+    def test_load_model_gemma4_offload_reaches_checkpoint_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = os.path.join(tmp, "gemma4_stub")
+            os.mkdir(model_path)
+            with open(os.path.join(model_path, "config.json"), "w") as f:
+                json.dump(
+                    {"model_type": "gemma4_text", "expert_offload": True},
+                    f,
+                )
+
+            with self.assertRaises(FileNotFoundError) as ctx:
+                utils.load_model(Path(model_path))
+
+            self.assertIn("No model*.safetensors", str(ctx.exception))
+
+    def test_load_model_gemma4_multimodal_offload_reaches_checkpoint_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = os.path.join(tmp, "gemma4_mm_stub")
+            os.mkdir(model_path)
+            with open(os.path.join(model_path, "config.json"), "w") as f:
+                json.dump(
+                    {"model_type": "gemma4", "expert_offload": True},
+                    f,
+                )
+
+            with self.assertRaises(FileNotFoundError) as ctx:
+                utils.load_model(Path(model_path))
+
+            self.assertIn("No model*.safetensors", str(ctx.exception))
+
+    def test_load_model_gemma4_offload_requires_repack(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = Path(tmp) / "gemma4_stacked"
+            model_path.mkdir()
+            with open(model_path / "config.json", "w") as f:
+                json.dump({"model_type": "gemma4_text", "expert_offload": True}, f)
+            with open(model_path / "model.safetensors.index.json", "w") as f:
+                json.dump(
+                    {
+                        "weight_map": {
+                            "model.layers.0.experts.switch_glu.gate_proj.weight": "model-00001-of-00001.safetensors"
+                        }
+                    },
+                    f,
+                )
+            (model_path / "model-00001-of-00001.safetensors").touch()
+
+            with self.assertRaises(ValueError) as ctx:
+                utils.load_model(model_path)
+
+            self.assertIn("run `python -m mlx_lm.repack_experts`", str(ctx.exception))
+
+    def test_load_model_gemma4_multimodal_offload_requires_repack(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = Path(tmp) / "gemma4_mm_stacked"
+            model_path.mkdir()
+            with open(model_path / "config.json", "w") as f:
+                json.dump({"model_type": "gemma4", "expert_offload": True}, f)
+            with open(model_path / "model.safetensors.index.json", "w") as f:
+                json.dump(
+                    {
+                        "weight_map": {
+                            "language_model.model.layers.0.experts.switch_glu.gate_proj.weight": "model-00001-of-00001.safetensors"
+                        }
+                    },
+                    f,
+                )
+            (model_path / "model-00001-of-00001.safetensors").touch()
+
+            with self.assertRaises(ValueError) as ctx:
+                utils.load_model(model_path)
+
+            self.assertIn("run `python -m mlx_lm.repack_experts`", str(ctx.exception))
 
 
 if __name__ == "__main__":

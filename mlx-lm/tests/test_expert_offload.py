@@ -12,9 +12,12 @@ import mlx.core as mx
 from mlx_lm.expert_offload import (
     ExpertLoadError,
     ExpertOffloadManager,
+    build_gemma4_expert_key_table,
     build_nemotron_expert_key_table,
     http_status_for_generation_failure,
+    is_expert_weight_key,
     is_nemotron_routed_expert_weight_key,
+    parse_expert_key,
     parse_nemotron_expert_key,
 )
 from mlx_lm.expert_weight_loader import (
@@ -50,9 +53,46 @@ class ExpertOffloadParseTest(unittest.TestCase):
         )
         self.assertFalse(is_nemotron_routed_expert_weight_key("lm_head.weight"))
 
+    def test_parse_gemma_key(self):
+        self.assertEqual(
+            parse_expert_key(
+                "model.layers.2.experts.5.gate_proj.weight", model_type="gemma4_text"
+            ),
+            (2, 5, "gate_proj", "weight"),
+        )
+        self.assertTrue(
+            is_expert_weight_key(
+                "model.layers.0.experts.0.up_proj.weight", model_type="gemma4_text"
+            )
+        )
+        self.assertFalse(
+            is_expert_weight_key(
+                "model.layers.0.router.weight", model_type="gemma4_text"
+            )
+        )
+
 
 def _fake_expert_tensors():
     return {"fc1_weight": mx.zeros((4, 8)), "fc2_weight": mx.zeros((4, 8))}
+
+
+def _fake_gemma_expert_tensors():
+    return {
+        "gate_weight": mx.zeros((4, 8)),
+        "up_weight": mx.zeros((4, 8)),
+        "down_weight": mx.zeros((8, 4)),
+    }
+
+
+def _fake_gemma_quantized_expert_tensors():
+    return {
+        "gate_weight": mx.zeros((2, 8), dtype=mx.uint32),
+        "gate_scales": mx.zeros((2, 8), dtype=mx.float16),
+        "up_weight": mx.zeros((2, 8), dtype=mx.uint32),
+        "up_scales": mx.zeros((2, 8), dtype=mx.float16),
+        "down_weight": mx.zeros((4, 8), dtype=mx.uint32),
+        "down_scales": mx.zeros((4, 8), dtype=mx.float16),
+    }
 
 
 class ExpertOffloadManagerTest(unittest.TestCase):
@@ -66,6 +106,22 @@ class ExpertOffloadManagerTest(unittest.TestCase):
         tbl = build_nemotron_expert_key_table(wm)
         self.assertIn((0, 0), tbl)
         self.assertEqual(set(tbl[(0, 0)].keys()), {"fc1_weight", "fc2_weight"})
+
+    def test_gemma_key_table(self):
+        wm = {
+            "model.layers.0.experts.0.gate_proj.weight": "m.safetensors",
+            "model.layers.0.experts.0.up_proj.weight": "m.safetensors",
+            "model.layers.0.experts.0.down_proj.weight": "m.safetensors",
+            "model.layers.0.experts.1.gate_proj.weight": "m.safetensors",
+            "model.layers.0.experts.1.up_proj.weight": "m.safetensors",
+            "model.layers.0.experts.1.down_proj.weight": "m.safetensors",
+        }
+        tbl = build_gemma4_expert_key_table(wm)
+        self.assertIn((0, 0), tbl)
+        self.assertEqual(
+            set(tbl[(0, 0)].keys()),
+            {"gate_weight", "up_weight", "down_weight"},
+        )
 
     @patch.object(ExpertOffloadManager, "_load_expert_pair_tensors")
     def test_prepare_gather_stacks(self, mock_load):
@@ -130,6 +186,68 @@ class ExpertOffloadManagerTest(unittest.TestCase):
         mx.eval(c1, c2, r)
         self.assertEqual(tuple(c1.shape), (2, 4, 8))
         self.assertEqual(tuple(c2.shape), (2, 4, 8))
+        self.assertEqual(tuple(r.shape), (1, 2))
+
+    @patch.object(ExpertOffloadManager, "_load_expert_pair_tensors")
+    def test_prepare_gather_triple_returns_gate_up_down_remapped(self, mock_load):
+        mock_load.return_value = _fake_gemma_expert_tensors()
+        wm = {
+            "model.layers.0.experts.0.gate_proj.weight": "m.safetensors",
+            "model.layers.0.experts.0.up_proj.weight": "m.safetensors",
+            "model.layers.0.experts.0.down_proj.weight": "m.safetensors",
+            "model.layers.0.experts.1.gate_proj.weight": "m.safetensors",
+            "model.layers.0.experts.1.up_proj.weight": "m.safetensors",
+            "model.layers.0.experts.1.down_proj.weight": "m.safetensors",
+        }
+        tbl = build_gemma4_expert_key_table(wm)
+        mgr = ExpertOffloadManager(
+            base_path=Path("/tmp"),
+            weight_map=wm,
+            expert_key_table=tbl,
+            max_resident_experts=4,
+            projections=("gate", "up", "down"),
+        )
+        idx = mx.array([[0, 1]], dtype=mx.int32)
+        gate, up, down, r = mgr.prepare_gather_triple(0, idx)
+        mx.eval(gate, up, down, r)
+        self.assertEqual(tuple(gate.shape), (2, 4, 8))
+        self.assertEqual(tuple(up.shape), (2, 4, 8))
+        self.assertEqual(tuple(down.shape), (2, 8, 4))
+        self.assertEqual(tuple(r.shape), (1, 2))
+
+    @patch.object(ExpertOffloadManager, "_load_expert_pair_tensors")
+    def test_prepare_gather_triple_quantized_returns_tensors(self, mock_load):
+        mock_load.return_value = _fake_gemma_quantized_expert_tensors()
+        wm = {
+            "model.layers.0.experts.0.gate_proj.weight": "m.safetensors",
+            "model.layers.0.experts.0.gate_proj.scales": "m.safetensors",
+            "model.layers.0.experts.0.up_proj.weight": "m.safetensors",
+            "model.layers.0.experts.0.up_proj.scales": "m.safetensors",
+            "model.layers.0.experts.0.down_proj.weight": "m.safetensors",
+            "model.layers.0.experts.0.down_proj.scales": "m.safetensors",
+            "model.layers.0.experts.1.gate_proj.weight": "m.safetensors",
+            "model.layers.0.experts.1.gate_proj.scales": "m.safetensors",
+            "model.layers.0.experts.1.up_proj.weight": "m.safetensors",
+            "model.layers.0.experts.1.up_proj.scales": "m.safetensors",
+            "model.layers.0.experts.1.down_proj.weight": "m.safetensors",
+            "model.layers.0.experts.1.down_proj.scales": "m.safetensors",
+        }
+        tbl = build_gemma4_expert_key_table(wm)
+        mgr = ExpertOffloadManager(
+            base_path=Path("/tmp"),
+            weight_map=wm,
+            expert_key_table=tbl,
+            max_resident_experts=4,
+            projections=("gate", "up", "down"),
+        )
+        idx = mx.array([[0, 1]], dtype=mx.int32)
+        gate, up, down, r = mgr.prepare_gather_triple_quantized(0, idx)
+        mx.eval(gate[0], gate[1], up[0], down[0], r)
+        self.assertEqual(tuple(gate[0].shape), (2, 2, 8))
+        self.assertEqual(tuple(gate[1].shape), (2, 2, 8))
+        self.assertIsNone(gate[2])
+        self.assertEqual(tuple(up[0].shape), (2, 2, 8))
+        self.assertEqual(tuple(down[0].shape), (2, 4, 8))
         self.assertEqual(tuple(r.shape), (1, 2))
 
     @patch.object(ExpertOffloadManager, "_load_expert_pair_tensors")

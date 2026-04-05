@@ -202,6 +202,106 @@ class SwitchGLU(nn.Module):
         return x.squeeze(-2)
 
 
+class OffloadSwitchGLU(nn.Module):
+    """MoE SwitchGLU with routed experts loaded via ExpertOffloadManager."""
+
+    def __init__(
+        self,
+        input_dims: int,
+        hidden_dims: int,
+        num_experts: int,
+        activation=SwiGLU(),
+        bias: bool = False,
+    ):
+        super().__init__()
+
+        self.gate_proj = OffloadSwitchLinear(
+            input_dims,
+            hidden_dims,
+            num_experts,
+            bias=bias,
+            proj_name="gate",
+        )
+        self.up_proj = OffloadSwitchLinear(
+            input_dims,
+            hidden_dims,
+            num_experts,
+            bias=bias,
+            proj_name="up",
+        )
+        self.down_proj = OffloadSwitchLinear(
+            hidden_dims,
+            input_dims,
+            num_experts,
+            bias=bias,
+            proj_name="down",
+        )
+        self.activation = activation
+
+    def set_expert_manager(
+        self, manager: "ExpertOffloadManager", layer_idx: int
+    ) -> None:
+        self.gate_proj.manager = manager
+        self.gate_proj.layer_idx = layer_idx
+        self.up_proj.manager = manager
+        self.up_proj.layer_idx = layer_idx
+        self.down_proj.manager = manager
+        self.down_proj.layer_idx = layer_idx
+
+    def __call__(self, x, indices) -> mx.array:
+        mgr = self.gate_proj.manager
+        if mgr is None:
+            raise RuntimeError("OffloadSwitchGLU: ExpertOffloadManager not attached")
+
+        x = mx.expand_dims(x, (-2, -3))
+
+        do_sort = indices.size >= 64
+        idx = indices
+        inv_order = None
+        if do_sort:
+            x, idx, inv_order = _gather_sort(x, indices)
+        if self.training:
+            idx = mx.stop_gradient(idx)
+
+        gate_w, up_w, down_w, remapped = mgr.prepare_gather_triple(
+            self.gate_proj.layer_idx, idx, mode="gather"
+        )
+
+        x_up = mx.gather_mm(
+            x,
+            up_w.swapaxes(-1, -2),
+            rhs_indices=remapped,
+            sorted_indices=do_sort,
+        )
+        if "bias" in self.up_proj:
+            x_up = x_up + mx.expand_dims(self.up_proj["bias"][idx], -2)
+
+        x_gate = mx.gather_mm(
+            x,
+            gate_w.swapaxes(-1, -2),
+            rhs_indices=remapped,
+            sorted_indices=do_sort,
+        )
+        if "bias" in self.gate_proj:
+            x_gate = x_gate + mx.expand_dims(self.gate_proj["bias"][idx], -2)
+
+        x = mx.gather_mm(
+            self.activation(x_up, x_gate),
+            down_w.swapaxes(-1, -2),
+            rhs_indices=remapped,
+            sorted_indices=do_sort,
+        )
+        if "bias" in self.down_proj:
+            x = x + mx.expand_dims(self.down_proj["bias"][idx], -2)
+
+        if do_sort:
+            x = _scatter_unsort(x, inv_order, indices.shape)
+
+        out = x.squeeze(-2)
+        mx.eval(out)
+        return out
+
+
 class OffloadSwitchLinear(nn.Module):
     """Routed expert linear backed by ExpertOffloadManager (compact gather_mm)."""
 
@@ -524,6 +624,143 @@ class OffloadQuantizedSwitchMLP(nn.Module):
         )
         if "bias" in self.fc2:
             x = x + mx.expand_dims(self.fc2["bias"][idx], -2)
+
+        if do_sort:
+            x = _scatter_unsort(x, inv_order, indices.shape)
+
+        out = x.squeeze(-2)
+        mx.eval(out)
+        return out
+
+
+class OffloadQuantizedSwitchGLU(nn.Module):
+    """Quantized MoE SwitchGLU with routed experts loaded via ExpertOffloadManager."""
+
+    def __init__(
+        self,
+        input_dims: int,
+        hidden_dims: int,
+        num_experts: int,
+        group_size: int = 64,
+        bits: int = 4,
+        mode: str = "affine",
+        activation=SwiGLU(),
+        bias: bool = False,
+    ):
+        super().__init__()
+        self.gate_proj = OffloadQuantizedSwitchLinear(
+            input_dims,
+            hidden_dims,
+            num_experts,
+            bias=bias,
+            group_size=group_size,
+            bits=bits,
+            mode=mode,
+            proj_name="gate",
+        )
+        self.up_proj = OffloadQuantizedSwitchLinear(
+            input_dims,
+            hidden_dims,
+            num_experts,
+            bias=bias,
+            group_size=group_size,
+            bits=bits,
+            mode=mode,
+            proj_name="up",
+        )
+        self.down_proj = OffloadQuantizedSwitchLinear(
+            hidden_dims,
+            input_dims,
+            num_experts,
+            bias=bias,
+            group_size=group_size,
+            bits=bits,
+            mode=mode,
+            proj_name="down",
+        )
+        self.activation = activation
+
+    def set_expert_manager(
+        self, manager: "ExpertOffloadManager", layer_idx: int
+    ) -> None:
+        self.gate_proj.manager = manager
+        self.gate_proj.layer_idx = layer_idx
+        self.up_proj.manager = manager
+        self.up_proj.layer_idx = layer_idx
+        self.down_proj.manager = manager
+        self.down_proj.layer_idx = layer_idx
+
+    def __call__(self, x, indices) -> mx.array:
+        mgr = self.gate_proj.manager
+        if mgr is None:
+            raise RuntimeError(
+                "OffloadQuantizedSwitchGLU: ExpertOffloadManager not attached"
+            )
+
+        x = mx.expand_dims(x, (-2, -3))
+
+        do_sort = indices.size >= 64
+        idx = indices
+        inv_order = None
+        if do_sort:
+            x, idx, inv_order = _gather_sort(x, indices)
+        if self.training:
+            idx = mx.stop_gradient(idx)
+
+        gate_tensors, up_tensors, down_tensors, remapped = (
+            mgr.prepare_gather_triple_quantized(
+                self.gate_proj.layer_idx, idx, mode="gather"
+            )
+        )
+
+        gate_w, gate_s, gate_b = gate_tensors
+        up_w, up_s, up_b = up_tensors
+        down_w, down_s, down_b = down_tensors
+
+        x_up = mx.gather_qmm(
+            x,
+            up_w,
+            up_s,
+            up_b,
+            rhs_indices=remapped,
+            transpose=True,
+            group_size=self.up_proj.group_size,
+            bits=self.up_proj.bits,
+            mode=self.up_proj.mode,
+            sorted_indices=do_sort,
+        )
+        if "bias" in self.up_proj:
+            x_up = x_up + mx.expand_dims(self.up_proj["bias"][idx], -2)
+
+        x_gate = mx.gather_qmm(
+            x,
+            gate_w,
+            gate_s,
+            gate_b,
+            rhs_indices=remapped,
+            transpose=True,
+            group_size=self.gate_proj.group_size,
+            bits=self.gate_proj.bits,
+            mode=self.gate_proj.mode,
+            sorted_indices=do_sort,
+        )
+        if "bias" in self.gate_proj:
+            x_gate = x_gate + mx.expand_dims(self.gate_proj["bias"][idx], -2)
+
+        x = mx.gather_qmm(
+            self.activation(x_up, x_gate),
+            down_w,
+            down_s,
+            down_b,
+            rhs_indices=remapped,
+            transpose=True,
+            group_size=self.down_proj.group_size,
+            bits=self.down_proj.bits,
+            mode=self.down_proj.mode,
+            sorted_indices=do_sort,
+        )
+        if "bias" in self.down_proj:
+            x = x + mx.expand_dims(self.down_proj["bias"][idx], -2)
 
         if do_sort:
             x = _scatter_unsort(x, inv_order, indices.shape)

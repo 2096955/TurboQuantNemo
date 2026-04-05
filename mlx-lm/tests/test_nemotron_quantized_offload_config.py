@@ -1,6 +1,7 @@
 import unittest
 from mlx_lm.models.nemotron_h import ModelArgs, NemotronHMoE
 
+
 class TestNemotronQuantizedOffloadConfig(unittest.TestCase):
     def setUp(self):
         self.base_config = {
@@ -38,10 +39,18 @@ class TestNemotronQuantizedOffloadConfig(unittest.TestCase):
     def test_matching_fc1_fc2_quant_config(self):
         config = self.base_config.copy()
         config["quantization"] = {
-            "backbone.layers.1.mixer.switch_mlp.fc1": {"bits": 2, "group_size": 32, "mode": "affine"},
-            "backbone.layers.1.mixer.switch_mlp.fc2": {"bits": 2, "group_size": 32, "mode": "affine"},
+            "backbone.layers.1.mixer.switch_mlp.fc1": {
+                "bits": 2,
+                "group_size": 32,
+                "mode": "affine",
+            },
+            "backbone.layers.1.mixer.switch_mlp.fc2": {
+                "bits": 2,
+                "group_size": 32,
+                "mode": "affine",
+            },
             "bits": 4,
-            "group_size": 64
+            "group_size": 64,
         }
         args = ModelArgs.from_dict(config)
         # Should not raise
@@ -54,10 +63,18 @@ class TestNemotronQuantizedOffloadConfig(unittest.TestCase):
     def test_mismatching_bits_raises_value_error(self):
         config = self.base_config.copy()
         config["quantization"] = {
-            "backbone.layers.1.mixer.switch_mlp.fc1": {"bits": 2, "group_size": 32, "mode": "affine"},
-            "backbone.layers.1.mixer.switch_mlp.fc2": {"bits": 3, "group_size": 32, "mode": "affine"},
+            "backbone.layers.1.mixer.switch_mlp.fc1": {
+                "bits": 2,
+                "group_size": 32,
+                "mode": "affine",
+            },
+            "backbone.layers.1.mixer.switch_mlp.fc2": {
+                "bits": 3,
+                "group_size": 32,
+                "mode": "affine",
+            },
             "bits": 4,
-            "group_size": 64
+            "group_size": 64,
         }
         args = ModelArgs.from_dict(config)
         with self.assertRaises(ValueError) as ctx:
@@ -67,10 +84,18 @@ class TestNemotronQuantizedOffloadConfig(unittest.TestCase):
     def test_mismatching_group_size_raises_value_error(self):
         config = self.base_config.copy()
         config["quantization"] = {
-            "backbone.layers.1.mixer.switch_mlp.fc1": {"bits": 2, "group_size": 32, "mode": "affine"},
-            "backbone.layers.1.mixer.switch_mlp.fc2": {"bits": 2, "group_size": 64, "mode": "affine"},
+            "backbone.layers.1.mixer.switch_mlp.fc1": {
+                "bits": 2,
+                "group_size": 32,
+                "mode": "affine",
+            },
+            "backbone.layers.1.mixer.switch_mlp.fc2": {
+                "bits": 2,
+                "group_size": 64,
+                "mode": "affine",
+            },
             "bits": 4,
-            "group_size": 64
+            "group_size": 64,
         }
         args = ModelArgs.from_dict(config)
         with self.assertRaises(ValueError) as ctx:
@@ -79,10 +104,7 @@ class TestNemotronQuantizedOffloadConfig(unittest.TestCase):
 
     def test_fallback_to_global_config_if_missing(self):
         config = self.base_config.copy()
-        config["quantization"] = {
-            "bits": 4,
-            "group_size": 64
-        }
+        config["quantization"] = {"bits": 4, "group_size": 64}
         args = ModelArgs.from_dict(config)
         # Should not raise, falls back to global
         moe = NemotronHMoE(args, layer_idx=1)
@@ -90,6 +112,42 @@ class TestNemotronQuantizedOffloadConfig(unittest.TestCase):
         self.assertEqual(moe.switch_mlp.fc2.bits, 4)
         self.assertEqual(moe.switch_mlp.fc1.group_size, 64)
         self.assertEqual(moe.switch_mlp.fc2.group_size, 64)
+
+    def test_layerwise_distinct_routed_bits_per_moe_layer(self):
+        """Layer-aware schedules: different MoE layers may use different fc1/fc2 widths."""
+        config = self.base_config.copy()
+        config["num_hidden_layers"] = 3
+        config["hybrid_override_pattern"] = ["M", "E", "E"]
+        config["quantization"] = {
+            "backbone.layers.1.mixer.switch_mlp.fc1": {
+                "bits": 4,
+                "group_size": 64,
+                "mode": "affine",
+            },
+            "backbone.layers.1.mixer.switch_mlp.fc2": {
+                "bits": 4,
+                "group_size": 64,
+                "mode": "affine",
+            },
+            "backbone.layers.2.mixer.switch_mlp.fc1": {
+                "bits": 2,
+                "group_size": 64,
+                "mode": "affine",
+            },
+            "backbone.layers.2.mixer.switch_mlp.fc2": {
+                "bits": 2,
+                "group_size": 64,
+                "mode": "affine",
+            },
+            "bits": 4,
+            "group_size": 64,
+        }
+        args = ModelArgs.from_dict(config)
+        moe1 = NemotronHMoE(args, layer_idx=1)
+        moe2 = NemotronHMoE(args, layer_idx=2)
+        self.assertEqual(moe1.switch_mlp.fc1.bits, 4)
+        self.assertEqual(moe2.switch_mlp.fc1.bits, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -42,6 +42,45 @@ def _build_repacked_weights_for_shard(
     return new_weights
 
 
+def _build_repacked_weights_for_gemma4_shard(
+    *,
+    shard: str,
+    keys: list[str],
+    weights: dict[str, mx.array],
+    num_experts: int,
+) -> dict[str, mx.array]:
+    """Split stacked SwitchGLU tensors into individual per-expert tensors for Gemma 4.
+
+    Handles both key prefixes:
+      - model.layers.{L}.experts.switch_glu.{proj}.{suffix}        (gemma4_text)
+      - language_model.model.layers.{L}.experts.switch_glu.{proj}.{suffix}  (gemma4)
+    """
+    new_weights: dict[str, mx.array] = {}
+    for k in keys:
+        if ".switch_glu." not in k:
+            new_weights[k] = weights.pop(k)
+            continue
+
+        # Split on ".experts.switch_glu." to get prefix and projection+suffix
+        # This handles both "model.layers.10" and "language_model.model.layers.10" prefixes
+        pre, post = k.split(".experts.switch_glu.")
+        proj_suffix = post.split(".")  # e.g. ["gate_proj", "weight"]
+        proj = proj_suffix[0]  # gate_proj, up_proj, or down_proj
+        suffix = proj_suffix[1]  # weight, scales, biases
+
+        stacked_tensor = weights.pop(k)
+        n = stacked_tensor.shape[0]
+        if n != num_experts:
+            raise ValueError(
+                f"Tensor {k} has {n} experts, expected {num_experts} from config."
+            )
+
+        for e in range(num_experts):
+            expert_key = f"{pre}.experts.{e}.{proj}.{suffix}"
+            new_weights[expert_key] = stacked_tensor[e]
+    return new_weights
+
+
 def repack_checkpoint(model_path: Path) -> None:
     model_path = Path(model_path)
     if not model_path.is_dir():
@@ -54,14 +93,33 @@ def repack_checkpoint(model_path: Path) -> None:
     with open(config_path, "r") as f:
         config = json.load(f)
 
-    if config.get("model_type") != "nemotron_h":
+    model_type = config.get("model_type")
+    _repack_supported_types = {"nemotron_h", "gemma4_text", "gemma4"}
+    if model_type not in _repack_supported_types:
         raise ValueError(
-            f"Expected model_type 'nemotron_h', got '{config.get('model_type')}'."
+            f"Expert repacking supports model types {sorted(_repack_supported_types)}, "
+            f"got '{model_type}'."
         )
 
-    n_routed_experts = config.get("n_routed_experts")
+    is_gemma4 = model_type in ("gemma4_text", "gemma4")
+
+    if is_gemma4:
+        # gemma4 (multimodal) stores MoE config in text_config; gemma4_text at top level
+        text_cfg = config.get("text_config", config)
+        n_routed_experts = text_cfg.get("num_experts") or text_cfg.get(
+            "num_local_experts"
+        )
+        stacked_marker = ".switch_glu."
+    else:
+        n_routed_experts = config.get("n_routed_experts")
+        stacked_marker = ".switch_mlp."
+
     if n_routed_experts is None:
-        raise ValueError("Missing 'n_routed_experts' in config.json")
+        raise ValueError(
+            "Missing expert count in config.json "
+            "(need 'num_experts'/'num_local_experts' for gemma4/gemma4_text "
+            "or 'n_routed_experts' for nemotron_h)"
+        )
 
     index_path = model_path / "model.safetensors.index.json"
     if not index_path.exists():
@@ -81,7 +139,7 @@ def repack_checkpoint(model_path: Path) -> None:
     new_shards: set[str] = set()
 
     for shard, keys in shards_to_keys.items():
-        has_switch = any(".switch_mlp." in k for k in keys)
+        has_switch = any(stacked_marker in k for k in keys)
         shard_file = model_path / shard
 
         if not has_switch:
@@ -92,12 +150,20 @@ def repack_checkpoint(model_path: Path) -> None:
 
         print(f"Repacking {shard}...")
         weights = dict(mx.load(str(shard_file)).items())
-        repacked = _build_repacked_weights_for_shard(
-            shard=shard,
-            keys=keys,
-            weights=weights,
-            n_routed_experts=n_routed_experts,
-        )
+        if is_gemma4:
+            repacked = _build_repacked_weights_for_gemma4_shard(
+                shard=shard,
+                keys=keys,
+                weights=weights,
+                num_experts=n_routed_experts,
+            )
+        else:
+            repacked = _build_repacked_weights_for_shard(
+                shard=shard,
+                keys=keys,
+                weights=weights,
+                n_routed_experts=n_routed_experts,
+            )
 
         # Write to a new shard file name so index swap is an all-or-nothing checkpoint flip.
         repacked_shard = f"repacked-{shard}"
@@ -107,7 +173,7 @@ def repack_checkpoint(model_path: Path) -> None:
 
         for name, _ in tree_flatten(repacked):
             new_weight_map[name] = repacked_shard
-                
+
         new_shards.add(repacked_shard)
 
     # Atomic commit: replace only the index last.

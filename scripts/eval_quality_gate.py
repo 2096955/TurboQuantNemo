@@ -31,9 +31,11 @@ def _runtime():
     if _RUNTIME is None:
         import mlx.core as mx
         from mlx_lm import generate, load
+        from mlx_lm.sample_utils import make_sampler
 
-        _RUNTIME = (mx, generate, load)
+        _RUNTIME = (mx, generate, load, make_sampler)
     return _RUNTIME
+
 
 PROMPTS = [
     {
@@ -223,7 +225,8 @@ def generate_response(
     max_tokens: int,
     temp: float,
 ) -> tuple[str, float]:
-    _, generate, _ = _runtime()
+    _, generate, _, make_sampler = _runtime()
+    sampler = make_sampler(temp)
     prompt = render_prompt(tokenizer, prompt_text, system_prompt)
     t0 = time.perf_counter()
     response = generate(
@@ -231,7 +234,7 @@ def generate_response(
         tokenizer,
         prompt,
         max_tokens=max_tokens,
-        temp=temp,
+        sampler=sampler,
         verbose=False,
     )
     return response.strip(), time.perf_counter() - t0
@@ -295,7 +298,7 @@ def run_gate(
     suite_name: str,
     strict: bool,
 ) -> tuple[bool, dict[str, Any]]:
-    mx, _, load = _runtime()
+    mx, _, load, _ = _runtime()
     mx.random.seed(seed)
     repeat_ratio = 0.22 if strict else 0.35
     print(

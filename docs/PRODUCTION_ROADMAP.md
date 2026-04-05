@@ -118,7 +118,7 @@ Use this as a **go/no-go** list before tagging a release or inviting third-party
 **Executable RC gate (recommended):** follow [`RELEASE_CANDIDATE_CHECKLIST.md`](./RELEASE_CANDIDATE_CHECKLIST.md) end-to-end on target hardware. Owner split and backlog: [`EXECUTION_BOARD.md`](./EXECUTION_BOARD.md). High-level commands also appear in [`README.md`](../README.md).
 
 - [ ] All **Agent Can Do Now** items on the execution board are done or explicitly waived.
-- [ ] **Hardware matrix**: fixed-seed eval for 2-bit / 3-bit / 4-bit on the **32 GB** machine (`scripts/run_quality_matrix.sh`).
+- [ ] **Hardware matrix**: fixed-seed eval for 2-bit / 3-bit / 4-bit on the **32 GB** machine, plus optional layer-aware if it is part of the release profile (`scripts/run_quality_matrix.sh`).
 - [ ] **Benchmark**: cold + warm metrics captured (`benchmark_moe_offload.py --warm-second-pass --json-output`).
 - [ ] **Checkpoint**: `checkpoint_integrity.py` passes with flags appropriate to your layout (`--expect-repack` if using repacked shards).
 - [ ] **Serving** (if applicable): `/health`, `/ready`, `/metrics` verified; queue limits documented.

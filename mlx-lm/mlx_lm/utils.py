@@ -302,9 +302,17 @@ def load_model(
         config.update(model_config)
 
     model_path = Path(model_path)
-    expert_offload = (
-        bool(config.get("expert_offload")) and config.get("model_type") == "nemotron_h"
-    )
+    _offload_supported_types = {"nemotron_h", "gemma4_text", "gemma4"}
+    requested_expert_offload = bool(config.get("expert_offload"))
+    if (
+        requested_expert_offload
+        and config.get("model_type") not in _offload_supported_types
+    ):
+        raise NotImplementedError(
+            f"expert_offload is not implemented for model_type={config.get('model_type')!r}. "
+            f"Supported types: {sorted(_offload_supported_types)}"
+        )
+    expert_offload = requested_expert_offload
     wm: Optional[Dict[str, str]] = None
     ckpt_root = model_path
 
@@ -326,19 +334,33 @@ def load_model(
                 )
         ckpt_root = Path(offload_dir) if offload_dir else model_path
         wm = resolve_weight_map(ckpt_root)
+        _mt = config.get("model_type", "nemotron_h")
+
+        if _mt in ("gemma4_text", "gemma4"):
+            from .expert_offload import is_expert_weight_key
+
+            has_repacked_experts = any(
+                is_expert_weight_key(k, model_type=_mt) for k in wm
+            )
+            if not has_repacked_experts:
+                raise ValueError(
+                    "expert_offload for gemma4_text requires repacked per-expert "
+                    "weights. You must run `python -m mlx_lm.repack_experts` on "
+                    "this checkpoint first to split stacked SwitchGLU tensors."
+                )
 
         # Conditional guard: if the config has quantization but the weight map doesn't contain
         # the repacked per-expert .scales keys, it hasn't been repacked yet.
         if config.get("quantization") or config.get("quantization_config"):
-            from .expert_offload import is_nemotron_routed_expert_weight_key
+            from .expert_offload import is_expert_weight_key
 
             has_repacked_scales = any(
-                k.endswith(".scales") and is_nemotron_routed_expert_weight_key(k)
+                k.endswith(".scales") and is_expert_weight_key(k, model_type=_mt)
                 for k in wm
             )
             if not has_repacked_scales:
                 raise ValueError(
-                    "expert_offload for Nemotron-H is not yet compatible with stacked "
+                    f"expert_offload for {_mt} is not yet compatible with stacked "
                     "quantized weights. You must run `python -m mlx_lm.repack_experts` "
                     "on this checkpoint first to unpack the experts for offloading."
                 )
@@ -347,7 +369,7 @@ def load_model(
         if not weights:
             raise ValueError(
                 "expert_offload: loaded zero non-expert tensors. Check --expert-offload-dir "
-                f"and that {ckpt_root} contains a Nemotron-H MLX checkpoint with "
+                f"and that {ckpt_root} contains an MLX checkpoint with "
                 "model.safetensors.index.json or model*.safetensors."
             )
     else:
@@ -453,29 +475,38 @@ def load_model(
         model.update_modules(leaves)
 
     model.eval()
-    # Expert offload: use the same strictness as the non-offload path. Routed expert
-    # tensors are not module parameters (loaded on demand), so strict loading still
-    # requires every backbone / non-expert checkpoint key to be present — avoiding
-    # silent init-default weights from a stale index or wrong --expert-offload-dir.
-    load_strict = strict
+    # Expert offload: for models with stacked expert parameters (e.g. Gemma 4
+    # SwitchGLU), the model defines switch_glu.{proj}.weight as parameters but
+    # these are not in the non-expert weights (loaded on demand from repacked
+    # per-expert shards). Use strict=False so missing expert params don't error.
+    # Non-expert backbone keys are still validated by load_non_expert_weights.
+    load_strict = False if expert_offload else strict
     model.load_weights(list(weights.items()), strict=load_strict)
 
     if expert_offload:
         from .expert_offload import (
             ExpertOffloadManager,
             attach_expert_offload_manager,
+            build_gemma4_expert_key_table,
             build_nemotron_expert_key_table,
         )
 
         assert wm is not None
-        expert_table = build_nemotron_expert_key_table(wm)
+        _model_type = config.get("model_type", "nemotron_h")
+        if _model_type in ("gemma4_text", "gemma4"):
+            expert_table = build_gemma4_expert_key_table(wm)
+            projections = ("gate", "up", "down")
+        else:
+            expert_table = build_nemotron_expert_key_table(wm)
+            projections = ("fc1", "fc2")
         manager = ExpertOffloadManager(
             base_path=ckpt_root,
             weight_map=wm,
             expert_key_table=expert_table,
             max_resident_experts=int(config.get("max_resident_experts", 16)),
+            projections=projections,
         )
-        attach_expert_offload_manager(model, manager)
+        attach_expert_offload_manager(model, manager, model_type=_model_type)
 
     if not lazy:
         mx.eval(model.parameters())

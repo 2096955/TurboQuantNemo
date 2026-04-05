@@ -1,8 +1,9 @@
 # Copyright © 2023-2024 Apple Inc.
 
 import argparse
+import json
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -83,6 +84,21 @@ QUANT_RECIPES = ["mixed_2_6", "mixed_3_4", "mixed_3_6", "mixed_4_6"]
 MODEL_CONVERSION_DTYPES = ["float16", "bfloat16", "float32"]
 
 
+def _resolve_quant_defaults(
+    mode: str,
+    group_size: Optional[int],
+    bits: Optional[int],
+) -> tuple[int, int]:
+    mode_defaults = {
+        "affine": (64, 4),
+        "mxfp4": (32, 4),
+        "nvfp4": (16, 4),
+        "mxfp8": (32, 8),
+    }
+    default_group_size, default_bits = mode_defaults[mode]
+    return group_size or default_group_size, bits or default_bits
+
+
 def _build_mixed_expert_quant_predicate(
     *,
     mixed_expert_bits: int,
@@ -110,6 +126,160 @@ def _build_mixed_expert_quant_predicate(
     return _predicate
 
 
+def _coerce_expert_recipe_arg(recipe: str) -> dict[str, Any]:
+    """Resolve --expert-recipe string to a recipe dict (bundled name, path, or 'apex')."""
+    if recipe == "apex":
+        return {
+            "edge_bits": 4,
+            "middle_bits": 2,
+            "shared_expert": {"bits": 6, "group_size": 64},
+            "edge_layer_pct": 0.15,
+        }
+    path = Path(recipe)
+    if path.is_file():
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    bundled = Path(__file__).resolve().parent / "recipes" / f"{recipe}.json"
+    if bundled.is_file():
+        with open(bundled, "r", encoding="utf-8") as f:
+            return json.load(f)
+    raise ValueError(
+        f"Unknown --expert-recipe {recipe!r}: not 'apex', not a file path, "
+        f"and not mlx_lm/recipes/{recipe}.json"
+    )
+
+
+def _compile_routed_band_schedule(
+    bands: List[dict[str, Any]],
+    num_layers: int,
+    default_group_size: int,
+) -> Dict[int, Tuple[int, int]]:
+    """Map backbone layer index -> (routed_bits, group_size). Bands are inclusive on start/end."""
+    schedule: Dict[int, Tuple[int, int]] = {}
+    for b in bands:
+        start = int(b["start"])
+        end = int(b["end"])
+        bits = int(b["routed_bits"])
+        gs = int(b.get("routed_group_size", default_group_size))
+        if start > end:
+            raise ValueError(f"Invalid band start>end: {b}")
+        if bits < 1 or bits > 8:
+            raise ValueError(f"Invalid routed_bits (expected 1..8): {b}")
+        if gs < 1:
+            raise ValueError(f"Invalid routed_group_size (expected > 0): {b}")
+        for li in range(start, end + 1):
+            if li in schedule:
+                raise ValueError(f"Overlapping expert bands at layer {li}")
+            schedule[li] = (bits, gs)
+    missing = [i for i in range(num_layers) if i not in schedule]
+    if missing:
+        raise ValueError(
+            f"Expert recipe bands must cover all layers 0..{num_layers - 1}. "
+            f"Missing {len(missing)} layer(s), e.g. {missing[:12]}"
+        )
+    extra = [i for i in schedule if i < 0 or i >= num_layers]
+    if extra:
+        raise ValueError(f"Band covers out-of-range layer indices: {extra[:12]}")
+    return schedule
+
+
+def _validate_expert_recipe(
+    recipe: dict[str, Any],
+    *,
+    model_type: str,
+    num_layers: int,
+) -> None:
+    if not isinstance(recipe, dict):
+        raise ValueError("--expert-recipe must resolve to a JSON object.")
+
+    schema_version = recipe.get("schema_version")
+    if schema_version is not None and int(schema_version) != 1:
+        raise ValueError(
+            f"Unsupported expert recipe schema_version={schema_version!r}; expected 1."
+        )
+
+    recipe_model_family = recipe.get("model_family")
+    if recipe_model_family is not None and recipe_model_family != model_type:
+        raise ValueError(
+            f"Expert recipe model_family={recipe_model_family!r} does not match "
+            f"loaded model_type={model_type!r}."
+        )
+
+    recipe_layer_count = recipe.get("layer_count")
+    if recipe_layer_count is not None and int(recipe_layer_count) != num_layers:
+        raise ValueError(
+            f"Expert recipe layer_count={recipe_layer_count!r} does not match "
+            f"loaded model layers={num_layers}."
+        )
+
+
+def _build_apex_expert_quant_predicate(
+    *,
+    recipe: dict[str, Any],
+    default_bits: int,
+    default_group_size: int,
+    mode: str,
+    num_layers: int,
+) -> Callable[[str, nn.Module], Union[bool, dict]]:
+    recipe_mode = recipe.get("mode", mode)
+
+    shared_cfg = recipe.get("shared_expert")
+    if isinstance(shared_cfg, dict):
+        shared_bits = int(shared_cfg["bits"])
+        shared_gs = int(shared_cfg.get("group_size", default_group_size))
+    else:
+        shared_bits = int(recipe.get("shared_bits", 6))
+        shared_gs = default_group_size
+
+    routed_schedule: Optional[Dict[int, Tuple[int, int]]] = None
+    edge_bits = int(recipe.get("edge_bits", 4))
+    middle_bits = int(recipe.get("middle_bits", 2))
+    edge_layer_pct = float(recipe.get("edge_layer_pct", 0.15))
+    edge_count = int(num_layers * edge_layer_pct)
+
+    if "bands" in recipe:
+        routed_schedule = _compile_routed_band_schedule(
+            recipe["bands"], num_layers, default_group_size
+        )
+
+    def _predicate(path: str, module: nn.Module) -> Union[bool, dict]:
+        parts = path.split(".")
+        layer_idx = -1
+        for p in parts:
+            if p.isdigit():
+                layer_idx = int(p)
+                break
+
+        is_routed = isinstance(module, SwitchLinear) and (
+            ".mixer.switch_mlp.fc1" in path or ".mixer.switch_mlp.fc2" in path
+        )
+
+        is_shared = ".mixer.shared_experts." in path and isinstance(module, nn.Linear)
+
+        if is_routed:
+            if routed_schedule is not None:
+                bits, gs = routed_schedule[layer_idx]
+            else:
+                bits = (
+                    edge_bits
+                    if layer_idx < edge_count or layer_idx >= (num_layers - edge_count)
+                    else middle_bits
+                )
+                gs = default_group_size
+            return {"bits": bits, "group_size": gs, "mode": recipe_mode}
+
+        if is_shared:
+            return {"bits": shared_bits, "group_size": shared_gs, "mode": recipe_mode}
+
+        return {
+            "bits": default_bits,
+            "group_size": default_group_size,
+            "mode": recipe_mode,
+        }
+
+    return _predicate
+
+
 def convert(
     hf_path: str,
     mlx_path: str = "mlx_model",
@@ -125,6 +295,7 @@ def convert(
         Union[Callable[[str, nn.Module, dict], Union[bool, dict]], str]
     ] = None,
     mixed_expert_bits: Optional[int] = None,
+    expert_recipe: Optional[str] = None,
     trust_remote_code: bool = False,
 ):
     # Check the save path is empty
@@ -135,7 +306,7 @@ def convert(
         raise ValueError(
             f"Cannot save to the path {mlx_path} as it already exists."
             " Please delete the file/directory or specify a new path to save to."
-        )
+    )
 
     print("[INFO] Loading")
     model, tokenizer, config = load(
@@ -146,18 +317,42 @@ def convert(
         lazy=True,
     )
 
+    if expert_recipe is not None and not quantize:
+        raise ValueError("--expert-recipe requires --quantize.")
+
+    resolved_q_group_size, resolved_q_bits = _resolve_quant_defaults(
+        q_mode, q_group_size, q_bits
+    )
+
+    if expert_recipe is not None:
+        if quant_predicate is not None or mixed_expert_bits is not None:
+            raise ValueError(
+                "Cannot specify --expert-recipe along with --quant-predicate or --mixed-expert-bits"
+            )
+        recipe_dict = _coerce_expert_recipe_arg(expert_recipe)
+        _validate_expert_recipe(
+            recipe_dict,
+            model_type=config.get("model_type", getattr(model, "model_type", "")),
+            num_layers=len(model.layers),
+        )
+        quant_predicate = _build_apex_expert_quant_predicate(
+            recipe=recipe_dict,
+            default_bits=resolved_q_bits,
+            default_group_size=resolved_q_group_size,
+            mode=q_mode,
+            num_layers=len(model.layers),
+        )
+
     if mixed_expert_bits is not None:
         if quant_predicate is not None:
             raise ValueError(
                 "Cannot specify both --quant-predicate and --mixed-expert-bits."
             )
 
-        default_bits = q_bits if q_bits is not None else 4
-        default_group_size = q_group_size if q_group_size is not None else 64
         quant_predicate = _build_mixed_expert_quant_predicate(
             mixed_expert_bits=mixed_expert_bits,
-            default_bits=default_bits,
-            default_group_size=default_group_size,
+            default_bits=resolved_q_bits,
+            default_group_size=resolved_q_group_size,
             mode=q_mode,
         )
 
@@ -167,7 +362,7 @@ def convert(
         quant_predicate = mixed_quant_predicate_builder(
             quant_predicate,
             model,
-            q_group_size,
+            resolved_q_group_size,
         )
 
     if dtype is None:
@@ -195,8 +390,8 @@ def convert(
         model, config = quantize_model(
             model,
             config,
-            q_group_size,
-            q_bits,
+            resolved_q_group_size,
+            resolved_q_bits,
             mode=q_mode,
             quant_predicate=quant_predicate,
         )
@@ -272,6 +467,16 @@ def configure_parser() -> argparse.ArgumentParser:
         "--mixed-expert-bits",
         help="Mixed-precision quantization for routed experts. If set, experts get this bit width (e.g. 2) and everything else gets the default q-bits.",
         type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "--expert-recipe",
+        help=(
+            "Layer-aware expert quantization: 'apex' (default edge/middle/shared schedule), "
+            "path to a JSON recipe, or a bundled name such as 'nemotron_layer_bands_v1' "
+            "(see mlx_lm/recipes/)."
+        ),
+        type=str,
         default=None,
     )
     parser.add_argument(

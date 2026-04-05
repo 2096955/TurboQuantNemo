@@ -10,7 +10,7 @@ from pathlib import Path
 
 import mlx.core as mx
 
-from .expert_offload import is_nemotron_routed_expert_weight_key
+from .expert_offload import is_expert_weight_key
 
 
 def load_weight_map(model_path: Path) -> dict[str, str] | None:
@@ -52,11 +52,14 @@ def build_weight_map_multi_glob(model_path: Path) -> dict[str, str]:
 def load_non_expert_weights(
     model_path: Path, weight_map: dict[str, str]
 ) -> dict[str, mx.array]:
-    """Load only tensors whose keys are not Nemotron routed expert weights."""
+    """Load only tensors whose keys are not routed expert weights (Nemotron-H or Gemma 4)."""
     # Group keys by shard for batched open
     shard_to_keys: dict[str, list] = defaultdict(list)
     for key, shard in weight_map.items():
-        if not is_nemotron_routed_expert_weight_key(key) and not key.startswith("mtp."):
+        is_expert = is_expert_weight_key(key, model_type="nemotron_h") or is_expert_weight_key(
+            key, model_type="gemma4_text"
+        )
+        if not is_expert and not key.startswith("mtp."):
             shard_to_keys[shard].append(key)
 
     if not weight_map:

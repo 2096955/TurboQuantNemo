@@ -1,6 +1,26 @@
 # Copyright © 2026 Apple Inc.
 
-"""Expert weight offloading for large MoE models (LRU + per-key safetensors loads)."""
+"""Expert weight offloading for large MoE models (LRU + per-key safetensors loads).
+
+Architecture Support
+--------------------
+Supports **Nemotron-H** and **Gemma 4** expert offloading:
+
+**Nemotron-H** (nemotron_h):
+  - Experts stored as individual per-expert tensors after repacking
+    (``backbone.layers.{L}.mixer.experts.{E}.{up_proj|down_proj}.{weight|scales|biases}``)
+  - Two projections per expert: fc1 (up_proj) and fc2 (down_proj)
+  - Activation: ReLU²
+
+**Gemma 4** (gemma4_text):
+  - Experts stored as individual per-expert tensors after repacking via repack_experts.py
+    (``model.layers.{L}.experts.{E}.{gate_proj|up_proj|down_proj}.{weight|scales|biases}``)
+  - Three projections per expert: gate, up, down (GeGLU activation)
+  - Original checkpoint uses stacked SwitchGLU format; repack_experts.py splits to individual
+
+Both architectures use the same ExpertOffloadManager with LRU caching.
+The ``projections`` constructor parameter controls whether 2 or 3 projections are loaded.
+"""
 
 from __future__ import annotations
 
@@ -14,9 +34,36 @@ from typing import Any
 
 import mlx.core as mx
 
-_EXPERT_KEY_RE = re.compile(
+# ---------------------------------------------------------------------------
+# Expert key patterns — one per supported architecture
+# ---------------------------------------------------------------------------
+
+# Nemotron-H: individual per-expert tensors (after repack_experts.py)
+_NEMOTRON_EXPERT_KEY_RE = re.compile(
     r"^backbone\.layers\.(\d+)\.mixer\.experts\.(\d+)\.(up_proj|down_proj)\.(weight|scales|biases)$"
 )
+
+# Gemma 4: stacked SwitchGLU tensors (pre-repack format)
+# Handles both bare (gemma4_text) and wrapped (gemma4 multimodal) key prefixes:
+#   model.layers.{L}.experts.switch_glu.{proj}.{suffix}
+#   language_model.model.layers.{L}.experts.switch_glu.{proj}.{suffix}
+_GEMMA4_STACKED_KEY_RE = re.compile(
+    r"^(?:language_model\.)?model\.layers\.(\d+)\.experts\.switch_glu\.(gate_proj|up_proj|down_proj)\.(weight|scales|biases)$"
+)
+
+# Gemma 4: individual per-expert tensors (after repack_experts.py)
+_GEMMA4_EXPERT_KEY_RE = re.compile(
+    r"^(?:language_model\.)?model\.layers\.(\d+)\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|scales|biases)$"
+)
+
+# Supported model types for expert offloading
+EXPERT_OFFLOAD_MODEL_TYPES = frozenset({"nemotron_h", "gemma4_text", "gemma4"})
+
+# Model types with known MoE architectures (for future extensibility)
+MOE_MODEL_TYPES = frozenset({"nemotron_h", "gemma4_text", "gemma4"})
+
+# Legacy alias — kept for backward compatibility
+_EXPERT_KEY_RE = _NEMOTRON_EXPERT_KEY_RE
 
 
 class ExpertLoadError(RuntimeError):
@@ -42,8 +89,11 @@ def http_status_for_generation_failure(exc: BaseException) -> int:
 
 
 def parse_nemotron_expert_key(key: str) -> tuple[int, int, str, str] | None:
-    """Return (layer_idx, expert_id, 'up_proj'|'down_proj', suffix) or None if not a routed expert weight."""
-    m = _EXPERT_KEY_RE.match(key)
+    """Return (layer_idx, expert_id, 'up_proj'|'down_proj', suffix) or None if not a routed expert weight.
+
+    Only matches Nemotron-H individual per-expert tensor keys (post-repack format).
+    """
+    m = _NEMOTRON_EXPERT_KEY_RE.match(key)
     if m is None:
         return None
     proj = m.group(3)
@@ -51,8 +101,38 @@ def parse_nemotron_expert_key(key: str) -> tuple[int, int, str, str] | None:
     return int(m.group(1)), int(m.group(2)), proj, suffix
 
 
+def parse_expert_key(
+    key: str, model_type: str = "nemotron_h"
+) -> tuple[int, int, str, str] | None:
+    """Architecture-aware expert key parser.
+
+    Returns (layer_idx, expert_id, proj_name, tensor_type) or None.
+
+    For Nemotron-H (individual per-expert tensors):
+        - expert_id is the explicit expert index from the key
+        - proj_name is 'up_proj' or 'down_proj'
+
+    For Gemma 4 (individual per-expert tensors after repack):
+        - expert_id is the explicit expert index from the key
+        - proj_name is 'gate_proj', 'up_proj', or 'down_proj'
+    """
+    if model_type == "nemotron_h":
+        return parse_nemotron_expert_key(key)
+    elif model_type in ("gemma4_text", "gemma4"):
+        m = _GEMMA4_EXPERT_KEY_RE.match(key)
+        if m is None:
+            return None
+        return int(m.group(1)), int(m.group(2)), m.group(3), m.group(4)
+    return None
+
+
 def is_nemotron_routed_expert_weight_key(key: str) -> bool:
     return parse_nemotron_expert_key(key) is not None
+
+
+def is_expert_weight_key(key: str, model_type: str = "nemotron_h") -> bool:
+    """Architecture-aware check for expert weight keys."""
+    return parse_expert_key(key, model_type=model_type) is not None
 
 
 def build_nemotron_expert_key_table(
@@ -74,52 +154,67 @@ def build_nemotron_expert_key_table(
 
 
 class AttnResExpertPredictor:
-    """Predicts required experts from AttnRes block attention weights."""
+    """Predicts required experts from AttnRes block attention weights.
+
+    Online affinity matrix (num_layers, num_blocks, num_experts) accumulated
+    from observed alpha x expert activations. Phase 2c deliverable — see plan
+    Appendix F for the unified framework.
+    """
+
     def __init__(self, num_blocks: int, num_experts: int, num_layers: int):
         self.block_expert_affinity = mx.zeros((num_layers, num_blocks, num_experts))
         self.observation_count = mx.zeros((num_layers, num_blocks))
 
-    def record_activation(self, layer_idx: int, block_attention_weights: mx.array, expert_ids: mx.array):
-        """
-        Record the actual expert activations given the block attention weights.
-        block_attention_weights: [num_blocks, B, T]
-        expert_ids: [..., top_k]
-        """
-        # Aggregate alpha over batch and sequence
-        alpha = block_attention_weights.mean(axis=(1, 2))  # [num_blocks]
-        
-        # Flatten expert_ids and get unique
+    def record_activation(
+        self,
+        layer_idx: int,
+        block_attention_weights: mx.array,
+        expert_ids: mx.array,
+    ) -> None:
+        alpha = block_attention_weights.mean(axis=(1, 2))
         mx.eval(expert_ids)
-        flat_eids_list = list(set(expert_ids.flatten().tolist()))
-        flat_eids = mx.array(flat_eids_list, dtype=mx.int32)
-        
+        flat_eids = mx.array(list(set(expert_ids.flatten().tolist())), dtype=mx.int32)
         affinity = self.block_expert_affinity[layer_idx]
         affinity[:, flat_eids] = affinity[:, flat_eids] + alpha[:, None]
         self.block_expert_affinity[layer_idx] = affinity
-        
         self.observation_count[layer_idx] = self.observation_count[layer_idx] + 1
 
-    def predict_experts(self, layer_idx: int, block_attention_weights: mx.array, top_k: int = 16) -> list[int]:
-        """
-        Predict the top_k experts likely needed.
-        """
-        alpha = block_attention_weights.mean(axis=(1, 2))  # [num_blocks]
-        
-        affinity = self.block_expert_affinity[layer_idx]  # [num_blocks, num_experts]
-        
-        # scores = alpha @ affinity
+    def predict_experts(
+        self,
+        layer_idx: int,
+        block_attention_weights: mx.array,
+        top_k: int = 16,
+    ) -> list[int]:
+        alpha = block_attention_weights.mean(axis=(1, 2))
+        affinity = self.block_expert_affinity[layer_idx]
         scores = mx.matmul(alpha, affinity)
-        
-        counts = self.observation_count[layer_idx]  # [num_blocks]
-        # Avoid division by zero
-        total_counts = mx.matmul(alpha, counts)
-        
-        # If total_counts > 0, normalize
+        total_counts = mx.matmul(alpha, self.observation_count[layer_idx])
         scores = mx.where(total_counts > 0, scores / total_counts, scores)
-        
         predicted = mx.argsort(scores)[-top_k:]
         mx.eval(predicted)
         return predicted.tolist()
+
+
+def build_gemma4_expert_key_table(
+    weight_map: dict[str, str],
+) -> dict[tuple[int, int], dict[str, str]]:
+    """Map (layer_idx, expert_id) -> {'gate_weight': key, 'up_weight': ..., 'down_weight': ...}.
+
+    Expects repacked individual per-expert keys (post repack_experts.py):
+      model.layers.{L}.experts.{E}.{gate_proj|up_proj|down_proj}.{weight|scales|biases}
+    """
+    table: dict[tuple[int, int], dict[str, str]] = {}
+    for key in weight_map.keys():
+        m = _GEMMA4_EXPERT_KEY_RE.match(key)
+        if m is None:
+            continue
+        layer_idx, expert_id = int(m.group(1)), int(m.group(2))
+        proj = m.group(3)
+        suffix = m.group(4)
+        short = proj.replace("_proj", "")
+        slot = table.setdefault((layer_idx, expert_id), {})
+        slot[f"{short}_{suffix}"] = key
+    return table
 
 
 class ExpertOffloadManager:
@@ -132,12 +227,14 @@ class ExpertOffloadManager:
         expert_key_table: dict[tuple[int, int], dict[str, str]],
         max_resident_experts: int = 16,
         max_cached_shards: int = 4,
+        projections: tuple[str, ...] = ("fc1", "fc2"),
     ):
         self.base_path = Path(base_path)
         self.weight_map = weight_map
         self.expert_key_table = expert_key_table
         self.max_resident_experts = max(1, int(max_resident_experts))
         self.max_cached_shards = max(1, int(max_cached_shards))
+        self._projections = projections
 
         self._prefetch_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
@@ -231,11 +328,16 @@ class ExpertOffloadManager:
             return data
 
     def _load_expert_pair_tensors(self, spec: dict[str, str]) -> dict[str, mx.array]:
-        """Load fc1/fc2 for one expert using persistent shard handles. Quantized = 6 tensors, dense = 2."""
+        """Load projection tensors for one expert using persistent shard handles.
+
+        Uses self._projections to determine which projections to load:
+          - Nemotron-H: ("fc1", "fc2") — 2 projections
+          - Gemma 4: ("gate", "up", "down") — 3 projections
+        """
         result = {}
         t0 = time.perf_counter()
         try:
-            for proj in ("fc1", "fc2"):
+            for proj in self._projections:
                 base_key = spec[f"{proj}_weight"]
                 scales_key = spec.get(f"{proj}_scales")
                 biases_key = spec.get(f"{proj}_biases")
@@ -326,7 +428,9 @@ class ExpertOffloadManager:
             else:
                 self.decode_misses += 1
 
-    def update_expert_importance(self, importance_scores: dict[tuple[int, int], float]) -> None:
+    def update_expert_importance(
+        self, importance_scores: dict[tuple[int, int], float]
+    ) -> None:
         """Update the importance scores used for eviction decisions."""
         with self._lock:
             for k, v in importance_scores.items():
@@ -341,7 +445,9 @@ class ExpertOffloadManager:
         if self._expert_importance:
             # Score combines recency (implicit in candidate list order) and importance.
             # But the simplest is strictly lowest importance first.
-            worst_key = min(candidates, key=lambda k: self._expert_importance.get(k, 0.0))
+            worst_key = min(
+                candidates, key=lambda k: self._expert_importance.get(k, 0.0)
+            )
         else:
             worst_key = candidates[0]
 
@@ -388,7 +494,8 @@ class ExpertOffloadManager:
                         )
                     evicted_any = True
                 spec = self.expert_key_table.get(key)
-                if not spec or "fc1_weight" not in spec or "fc2_weight" not in spec:
+                required_keys = [f"{p}_weight" for p in self._projections]
+                if not spec or any(rk not in spec for rk in required_keys):
                     raise ExpertLoadError(
                         f"No expert weight keys indexed for layer={layer_idx} expert={eid}",
                         layer_idx=layer_idx,
@@ -405,9 +512,12 @@ class ExpertOffloadManager:
             with self._cond:
                 if key in self._cache or key in self._loading:
                     continue
-                
+
                 # Check eviction if we're hitting capacity (best effort for prefetch)
-                if len(self._cache) + len(self._loading) >= self.max_resident_experts and self._lru:
+                if (
+                    len(self._cache) + len(self._loading) >= self.max_resident_experts
+                    and self._lru
+                ):
                     self._evict_one_unpinned(set())
 
                 self._loading.add(key)
@@ -423,7 +533,7 @@ class ExpertOffloadManager:
         try:
             tensors = self._load_expert_pair_tensors(spec)
             self._complete_reserved_load(key, tensors)
-        except Exception as e:
+        except Exception:
             with self._cond:
                 self._loading.discard(key)
                 self._cond.notify_all()
@@ -566,6 +676,98 @@ class ExpertOffloadManager:
 
         return compacts["fc1"], compacts["fc2"], remapped
 
+    def prepare_gather_triple(
+        self,
+        layer_idx: int,
+        indices: mx.array,
+        *,
+        mode: str = "gather",
+    ) -> tuple[mx.array, mx.array, mx.array, mx.array]:
+        """Return (compact_gate, compact_up, compact_down, remapped_indices) for SwitchGLU."""
+        if mode not in ("gather", "loop"):
+            mode = "gather"
+
+        flat_mx, unique_eids, to_load, _ = self._plan_expert_loads(layer_idx, indices)
+
+        for key, spec in to_load:
+            tensors = None
+            try:
+                tensors = self._load_expert_pair_tensors(spec)
+            finally:
+                self._complete_reserved_load(key, tensors)
+
+        with self._lock:
+            compacts = {}
+            for proj in ("gate", "up", "down"):
+                stacks = [
+                    self._cache[(layer_idx, int(e))][f"{proj}_weight"]
+                    for e in unique_eids
+                ]
+                compacts[proj] = mx.stack(stacks, axis=0)
+
+            max_eid = max(unique_eids) + 1
+            lut = mx.zeros((max_eid,), dtype=mx.int32)
+            unique_arr = mx.array(unique_eids, dtype=mx.int32)
+            lut[unique_arr] = mx.arange(len(unique_eids), dtype=mx.int32)
+            remapped = lut[flat_mx].reshape(indices.shape)
+
+        return compacts["gate"], compacts["up"], compacts["down"], remapped
+
+    def prepare_gather_triple_quantized(
+        self,
+        layer_idx: int,
+        indices: mx.array,
+        *,
+        mode: str = "gather",
+    ) -> tuple[
+        tuple[mx.array, mx.array, mx.array | None],
+        tuple[mx.array, mx.array, mx.array | None],
+        tuple[mx.array, mx.array, mx.array | None],
+        mx.array,
+    ]:
+        """Return ((gate_w, gate_s, gate_b), (up_w, up_s, up_b), (down_w, down_s, down_b), remapped) for quantized SwitchGLU."""
+        if mode not in ("gather", "loop"):
+            mode = "gather"
+
+        flat_mx, unique_eids, to_load, _ = self._plan_expert_loads(layer_idx, indices)
+
+        for key, spec in to_load:
+            tensors = None
+            try:
+                tensors = self._load_expert_pair_tensors(spec)
+            finally:
+                self._complete_reserved_load(key, tensors)
+
+        with self._lock:
+            compacts = {}
+            for proj in ("gate", "up", "down"):
+                ws, ss, bs = [], [], []
+                for e in unique_eids:
+                    entry = self._cache[(layer_idx, int(e))]
+                    ws.append(entry[f"{proj}_weight"])
+                    ss.append(entry[f"{proj}_scales"])
+                    bs.append(entry.get(f"{proj}_biases"))
+
+                compact_w = mx.stack(ws, axis=0)
+                compact_s = mx.stack(ss, axis=0)
+                if all(b is not None for b in bs):
+                    compact_b = mx.stack(bs, axis=0)
+                elif any(b is not None for b in bs):
+                    raise RuntimeError(
+                        f"Mixed presence of biases across experts in layer {layer_idx} proj {proj} is not supported."
+                    )
+                else:
+                    compact_b = None
+                compacts[proj] = (compact_w, compact_s, compact_b)
+
+            max_eid = max(unique_eids) + 1
+            lut = mx.zeros((max_eid,), dtype=mx.int32)
+            unique_arr = mx.array(unique_eids, dtype=mx.int32)
+            lut[unique_arr] = mx.arange(len(unique_eids), dtype=mx.int32)
+            remapped = lut[flat_mx].reshape(indices.shape)
+
+        return compacts["gate"], compacts["up"], compacts["down"], remapped
+
     def prepare_gather_quantized(
         self,
         layer_idx: int,
@@ -586,7 +788,8 @@ class ExpertOffloadManager:
     def is_quantized(self) -> bool:
         """True if the weight map contains .scales keys for experts."""
         return any(
-            k.endswith(".scales") and is_nemotron_routed_expert_weight_key(k)
+            k.endswith(".scales")
+            and (_NEMOTRON_EXPERT_KEY_RE.match(k) or _GEMMA4_EXPERT_KEY_RE.match(k))
             for k in self.weight_map
         )
 
@@ -605,9 +808,35 @@ class ExpertOffloadManager:
             self.load_count = 0
 
 
-def attach_expert_offload_manager(model: Any, manager: ExpertOffloadManager) -> None:
-    """Wire manager into Nemotron-H OffloadSwitchMLP modules."""
+def attach_expert_offload_manager(
+    model: Any, manager: ExpertOffloadManager, *, model_type: str = "nemotron_h"
+) -> None:
+    """Wire manager into model's expert modules (OffloadSwitchMLP or OffloadSwitchGLU).
+
+    Args:
+        model: The loaded model instance.
+        manager: The ExpertOffloadManager to attach.
+        model_type: Architecture identifier ('nemotron_h' or 'gemma4_text').
+
+    Raises:
+        NotImplementedError: If model_type is not yet supported for offloading.
+    """
+    if model_type not in EXPERT_OFFLOAD_MODEL_TYPES:
+        raise NotImplementedError(
+            f"Expert offloading is not yet implemented for model_type={model_type!r}. "
+            f"Supported types: {sorted(EXPERT_OFFLOAD_MODEL_TYPES)}"
+        )
+
     model.expert_offload_manager = manager
+
+    if model_type == "nemotron_h":
+        _attach_nemotron_h(model, manager)
+    elif model_type in ("gemma4_text", "gemma4"):
+        _attach_gemma4(model, manager)
+
+
+def _attach_nemotron_h(model: Any, manager: ExpertOffloadManager) -> None:
+    """Wire manager into Nemotron-H OffloadSwitchMLP modules."""
     backbone = getattr(model, "backbone", None)
     if backbone is None:
         return
@@ -621,3 +850,40 @@ def attach_expert_offload_manager(model: Any, manager: ExpertOffloadManager) -> 
         smlp = getattr(mixer, "switch_mlp", None)
         if smlp is not None and hasattr(smlp, "set_expert_manager"):
             smlp.set_expert_manager(manager, getattr(layer, "layer_idx", -1))
+
+
+def _attach_gemma4(model: Any, manager: ExpertOffloadManager) -> None:
+    """Wire manager into Gemma 4 SwitchGLU modules.
+
+    Handles both:
+      - gemma4 (multimodal): model.language_model.model.layers[L].experts.switch_glu
+      - gemma4_text (text-only): model.model.layers[L].experts.switch_glu
+    Only layers with enable_moe=True have experts.
+    """
+    # Navigate to the text model's layers
+    lang_model = getattr(model, "language_model", None)
+    if lang_model is not None:
+        # gemma4 multimodal wrapper
+        model_root = getattr(lang_model, "model", lang_model)
+    else:
+        # gemma4_text direct
+        model_root = getattr(model, "model", model)
+    layers = getattr(model_root, "layers", None)
+    if not layers:
+        return
+    attached = 0
+    for i, layer in enumerate(layers):
+        if not getattr(layer, "enable_moe", False):
+            continue
+        experts = getattr(layer, "experts", None)
+        if experts is None:
+            continue
+        switch_glu = getattr(experts, "switch_glu", None)
+        if switch_glu is not None and hasattr(switch_glu, "set_expert_manager"):
+            switch_glu.set_expert_manager(manager, i)
+            attached += 1
+    if attached == 0:
+        print(
+            "[WARN] _attach_gemma4: no SwitchGLU modules with set_expert_manager found. "
+            "Expert offloading requires OffloadSwitchGLU modules."
+        )

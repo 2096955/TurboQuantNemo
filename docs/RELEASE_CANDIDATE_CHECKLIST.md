@@ -20,6 +20,7 @@ Ship for serious single-user local testing only if all of the following are true
 
 - Checkpoint integrity passes for all intended checkpoints
 - Fixed-seed quality matrix passes at 2-bit, 3-bit, and 4-bit
+- If a layer-aware checkpoint is part of the release profile, that run passes too
 - Benchmark stays comfortably within the 32 GB memory budget
 - 30–60+ minute soak is clean
 - Real coding prompts remain coherent
@@ -52,6 +53,7 @@ Run on the target machine:
 MODEL_2BIT=/path/to/nemotron-120b-mixed \
 MODEL_3BIT=/path/to/nemotron-120b-mixed-3bit \
 MODEL_4BIT=/path/to/nemotron-120b-4bit \
+MODEL_LAYER_AWARE=/path/to/nemotron-120b-layer-aware \
 SEED=42 \
 SUITE=all \
 ./scripts/run_quality_matrix.sh
@@ -61,7 +63,8 @@ Artifacts are written under `./artifacts/quality-matrix` unless `OUT_DIR` is set
 
 Pass if:
 
-- all three runs complete successfully
+- the required uniform runs complete successfully
+- if `MODEL_LAYER_AWARE` is set, that run completes successfully too
 - all JSON artifacts report full pass under `--strict`
 - there are no repetition failures
 - outputs remain coherent across coding and reasoning prompts
