@@ -195,6 +195,68 @@ class AttnResExpertPredictor:
         return predicted.tolist()
 
 
+class SimulatedAttnResPredictor(AttnResExpertPredictor):
+    """Generates a proxy block-attention signal for models without native AttnRes."""
+
+    def __init__(
+        self, num_blocks: int, num_experts: int, num_layers: int, hidden_dim: int
+    ):
+        super().__init__(num_blocks, num_experts, num_layers)
+        self.hidden_dim = hidden_dim
+        self.block_size = max(1, num_layers // num_blocks)
+        self.block_representations = mx.zeros((num_blocks, hidden_dim))
+
+    def compute_proxy_alpha(self, layer_idx: int, hidden_state: mx.array) -> mx.array:
+        """Compute cosine similarity-based proxy alpha and update block representations."""
+        block_idx = layer_idx // self.block_size
+        if block_idx >= self.observation_count.shape[1]:
+            block_idx = self.observation_count.shape[1] - 1
+
+        # x is typically [batch*seq_len, hidden_dim] or [batch, seq_len, hidden_dim]
+        # We want to average over all dimensions except the last one (hidden_dim)
+        axes = tuple(range(hidden_state.ndim - 1))
+        mean_h = hidden_state.mean(axis=axes)
+
+        # update block representation online
+        self.block_representations[block_idx] = (
+            0.9 * self.block_representations[block_idx] + 0.1 * mean_h
+        )
+
+        norm_h = mean_h / (mx.linalg.norm(mean_h) + 1e-6)
+        norm_blocks = self.block_representations / (
+            mx.linalg.norm(self.block_representations, axis=-1, keepdims=True) + 1e-6
+        )
+
+        logits = mx.matmul(norm_blocks, norm_h)
+        alpha = mx.softmax(logits * 5.0, axis=0)  # Temp to sharpen
+
+        # Match shape expected by base class: [num_blocks, 1, 1]
+        return alpha[:, None, None]
+
+
+def build_expert_importance_from_router(
+    layer_idx: int,
+    top_k_indices: mx.array,
+    top_k_weights: mx.array,
+) -> dict[tuple[int, int], float]:
+    """Aggregate mean router weight per expert id for eviction hints (dynamic offload).
+
+    Shapes: top_k_indices and top_k_weights (..., K) e.g. (B, S, K).
+    """
+    mx.eval(top_k_indices, top_k_weights)
+    flat_i = top_k_indices.reshape(-1)
+    flat_w = top_k_weights.reshape(-1)
+    idx_list = flat_i.tolist()
+    w_list = flat_w.tolist()
+    acc: dict[tuple[int, int], float] = {}
+    cnt: dict[tuple[int, int], int] = {}
+    for eid, wt in zip(idx_list, w_list):
+        key = (layer_idx, int(eid))
+        acc[key] = acc.get(key, 0.0) + float(wt)
+        cnt[key] = cnt.get(key, 0) + 1
+    return {k: acc[k] / cnt[k] for k in acc}
+
+
 def build_gemma4_expert_key_table(
     weight_map: dict[str, str],
 ) -> dict[tuple[int, int], dict[str, str]]:
@@ -245,6 +307,8 @@ class ExpertOffloadManager:
         self._loading: set[tuple[int, int]] = set()
         self._expert_importance: dict[tuple[int, int], float] = {}
 
+        self.predictor = None
+
         # Persistent shard file handles — avoid repeated open/close
         self._shard_handles: OrderedDict[str, Any] = OrderedDict()
 
@@ -259,6 +323,8 @@ class ExpertOffloadManager:
         self.decode_misses = 0
         self.load_time_ms_total = 0.0
         self.load_count = 0
+        self.prefetch_requests = 0
+        self.prefetch_already_cached = 0
 
         self._phase: str = "decode"
 
@@ -294,6 +360,8 @@ class ExpertOffloadManager:
                 "resident_slots": len(self._lru),
                 "prefill_gather_calls": self.prefill_evals,
                 "decode_gather_calls": self.decode_evals,
+                "prefetch_requests": self.prefetch_requests,
+                "prefetch_already_cached": self.prefetch_already_cached,
             }
 
     def _record_load_metrics(self, dt_ms: float) -> None:
@@ -509,8 +577,10 @@ class ExpertOffloadManager:
         """Asynchronously load experts into cache."""
         for eid in expert_ids:
             key = (layer_idx, int(eid))
+            self.prefetch_requests += 1
             with self._cond:
                 if key in self._cache or key in self._loading:
+                    self.prefetch_already_cached += 1
                     continue
 
                 # Check eviction if we're hitting capacity (best effort for prefetch)
