@@ -307,7 +307,7 @@ class LRUPromptCache:
         # Check for caches that are longer
         longer = None
         common_prefix = index
-        if index > 0 and last_cache_index <= 0:
+        if index > 0:
             best = None
             stack = [(current, [])]
             while stack:
@@ -318,8 +318,13 @@ class LRUPromptCache:
                 else:
                     for tok in current:
                         stack.append((current[tok], extra + [tok]))
-            longer = tokens[:index] + best
-        return self.SearchResult(model, None, shorter, longer, common_prefix)
+            if best is not None:
+                longer = tokens[:index] + best
+        
+        # Return longer if its common prefix is longer than shorter cache
+        if longer is not None and (shorter is None or common_prefix > len(shorter)):
+            return self.SearchResult(model, None, None, longer, common_prefix)
+        return self.SearchResult(model, None, shorter, None, common_prefix)
 
     def _get(self, model, tokens):
         current = self._cache[model]
@@ -1368,6 +1373,12 @@ class ResponseGenerator:
                         gen_suffix_len = len(prompt) - len(cache_key_prompt)
                         if gen_suffix_len > 0:
                             rest = list(rest) + list(prompt[-gen_suffix_len:])
+                        elif len(rest) == 0:
+                            # We need to process at least one token to generate the next one
+                            rest = [prompt[-1]]
+                            if cache is not None and can_trim_prompt_cache(cache):
+                                trim_prompt_cache(cache, 1)
+                            ctx.prompt_cache_count -= 1
 
                         if cache is None:
                             cache = make_prompt_cache(
@@ -1588,6 +1599,12 @@ class ResponseGenerator:
             if gen_suffix_len > 0:
                 # If we have a cache hit, we need to include the gen suffix in the rest
                 rest = list(rest) + list(prompt[-gen_suffix_len:])
+            elif len(rest) == 0:
+                # We need to process at least one token to generate the next one
+                rest = [prompt[-1]]
+                if cache is not None and can_trim_prompt_cache(cache):
+                    trim_prompt_cache(cache, 1)
+                ctx.prompt_cache_count -= 1
 
             if cache is None:
                 cache = make_prompt_cache(
@@ -1743,6 +1760,7 @@ class APIHandler(BaseHTTPRequestHandler):
         self.created = int(time.time())
         self.response_generator = response_generator
         self.system_fingerprint = system_fingerprint or get_system_fingerprint()
+        self.timeout = getattr(response_generator.cli_args, "timeout", None)
         super().__init__(*args, **kwargs)
 
     def _cors_origin(self) -> Optional[str]:
@@ -1783,6 +1801,11 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
+        self._set_cors_headers()
+
+    def _set_text_headers(self, status_code: int = 200):
+        self.send_response(status_code)
+        self.send_header("Content-type", "text/plain; version=0.0.4; charset=utf-8")
         self._set_cors_headers()
 
     def _write_json_error(self, status_code: int, message: str):
@@ -1916,6 +1939,9 @@ class APIHandler(BaseHTTPRequestHandler):
         self.logprobs = self.body.get("logprobs", False)
         self.top_logprobs = self.body.get("top_logprobs", -1)
         self.seed = self.body.get("seed", None)
+        self.timeout = self.body.get(
+            "timeout", getattr(self.response_generator.cli_args, "timeout", None)
+        )
         self.chat_template_kwargs = self.body.get("chat_template_kwargs")
         try:
             self.validate_model_parameters()
@@ -2007,6 +2033,12 @@ class APIHandler(BaseHTTPRequestHandler):
             raise ValueError("adapter must be a string")
         if self.seed is not None and not isinstance(self.seed, int):
             raise ValueError("seed must be an integer")
+        if self.timeout is not None:
+            if not isinstance(self.timeout, (float, int)):
+                raise ValueError("timeout must be a non-negative number")
+            if float(self.timeout) < 0:
+                raise ValueError("timeout must be a non-negative number")
+            self.timeout = float(self.timeout)
 
     def generate_response(
         self,
@@ -2558,21 +2590,142 @@ class APIHandler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def handle_metrics_request(self):
-        """Lightweight JSON metrics for queue depth and expert offload (if any)."""
+        """Metrics endpoint with JSON and Prometheus exposition formats."""
         rg = self.response_generator
         mp = rg.model_provider
         q = rg.requests
         mgr = getattr(mp.model, "expert_offload_manager", None) if mp.model else None
         expert_stats = mgr.stats_summary() if mgr is not None else {}
+        counters = {
+            "requests_total": getattr(rg, "metric_requests_total", 0),
+            "prompt_tokens_total": getattr(rg, "metric_prompt_tokens_total", 0),
+            "completion_tokens_total": getattr(
+                rg, "metric_completion_tokens_total", 0
+            ),
+            "generation_duration_seconds_total": getattr(
+                rg, "metric_duration_seconds_total", 0.0
+            ),
+        }
         body = {
             "queue_depth": q.qsize(),
             "queue_maxsize": q.maxsize,
             "expert_offload": getattr(mp.cli_args, "expert_offload", False),
+            "counters": counters,
             "expert_cache": expert_stats,
         }
-        self._set_completion_headers(200)
+        accept = (self.headers.get("Accept") or "").lower()
+        wants_json = "application/json" in accept
+        if wants_json:
+            self._set_completion_headers(200)
+            self.end_headers()
+            self.wfile.write(json.dumps(body).encode())
+            self.wfile.flush()
+            return
+
+        def metric_lines(name: str, metric_type: str, value: Any, help_text: str):
+            return [
+                f"# HELP {name} {help_text}",
+                f"# TYPE {name} {metric_type}",
+                f"{name} {value}",
+            ]
+
+        lines: list[str] = []
+        lines.extend(
+            metric_lines(
+                "mlx_lm_requests_total",
+                "counter",
+                counters["requests_total"],
+                "Total completed generation requests.",
+            )
+        )
+        lines.extend(
+            metric_lines(
+                "mlx_lm_prompt_tokens_total",
+                "counter",
+                counters["prompt_tokens_total"],
+                "Total prompt tokens processed.",
+            )
+        )
+        lines.extend(
+            metric_lines(
+                "mlx_lm_completion_tokens_total",
+                "counter",
+                counters["completion_tokens_total"],
+                "Total completion tokens generated.",
+            )
+        )
+        lines.extend(
+            metric_lines(
+                "mlx_lm_generation_duration_seconds_total",
+                "counter",
+                counters["generation_duration_seconds_total"],
+                "Total generation wall time in seconds.",
+            )
+        )
+        lines.extend(
+            metric_lines(
+                "mlx_lm_queue_depth",
+                "gauge",
+                q.qsize(),
+                "Current number of queued generation requests.",
+            )
+        )
+        lines.extend(
+            metric_lines(
+                "mlx_lm_queue_maxsize",
+                "gauge",
+                q.maxsize,
+                "Maximum configured generation queue size.",
+            )
+        )
+        lines.extend(
+            metric_lines(
+                "mlx_lm_expert_offload_enabled",
+                "gauge",
+                1 if getattr(mp.cli_args, "expert_offload", False) else 0,
+                "Whether expert offload is enabled for the server.",
+            )
+        )
+
+        expert_metric_map = {
+            "hits": ("mlx_lm_expert_cache_hits_total", "counter"),
+            "misses": ("mlx_lm_expert_cache_misses_total", "counter"),
+            "evictions": ("mlx_lm_expert_cache_evictions_total", "counter"),
+            "prefill_hits": ("mlx_lm_expert_cache_prefill_hits_total", "counter"),
+            "prefill_misses": ("mlx_lm_expert_cache_prefill_misses_total", "counter"),
+            "decode_hits": ("mlx_lm_expert_cache_decode_hits_total", "counter"),
+            "decode_misses": ("mlx_lm_expert_cache_decode_misses_total", "counter"),
+            "resident_slots": ("mlx_lm_expert_cache_resident_slots", "gauge"),
+            "hit_rate": ("mlx_lm_expert_cache_hit_rate", "gauge"),
+            "prefill_hit_rate": ("mlx_lm_expert_cache_prefill_hit_rate", "gauge"),
+            "decode_hit_rate": ("mlx_lm_expert_cache_decode_hit_rate", "gauge"),
+            "avg_load_ms": ("mlx_lm_expert_cache_avg_load_ms", "gauge"),
+            "prefetch_requests": (
+                "mlx_lm_expert_cache_prefetch_requests_total",
+                "counter",
+            ),
+            "prefetch_already_cached": (
+                "mlx_lm_expert_cache_prefetch_already_cached_total",
+                "counter",
+            ),
+        }
+        for key, value in expert_stats.items():
+            spec = expert_metric_map.get(key)
+            if spec is None:
+                continue
+            metric_name, metric_type = spec
+            lines.extend(
+                metric_lines(
+                    metric_name,
+                    metric_type,
+                    value,
+                    f"Expert offload metric: {key}.",
+                )
+            )
+
+        self._set_text_headers(200)
         self.end_headers()
-        self.wfile.write(json.dumps(body).encode())
+        self.wfile.write(("\n".join(lines) + "\n").encode())
         self.wfile.flush()
 
     def handle_models_request(self):
