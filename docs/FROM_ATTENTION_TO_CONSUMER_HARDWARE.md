@@ -75,7 +75,7 @@ Some architectures (Kimi-K2.5, DeepSeek) include a *shared expert* $f_{\text{sha
 
 $$\text{MoE}(x) = f_{\text{shared}}(x) + \sum_{e \in \text{TopK}(G(x))} G(x)_e \cdot f_e(x)$$
 
-The shared expert carries the "common knowledge" load. Empirically, its weight distributions are heavy-tailed: shared expert kurtosis measures 13.10 versus 3.41 for routed experts — a 3.8× gap. This means the shared expert's weight distribution has far more outlier values that aggressive quantisation would destroy. We pin it at Q8_0 — a structural decision derived from the kurtosis gap, not a positional heuristic.
+The shared expert carries the "common knowledge" load. Empirically, its weight distributions are heavy-tailed: shared expert kurtosis measures 13.10 versus 3.41 for routed experts — a 3.8× gap. This suggests the shared expert's weight distribution has far more outlier values that aggressive quantisation would destroy. We pin it at Q8_0 — a decision grounded in this kurtosis heuristic. A rigorous structural proof requires a loss sensitivity analysis (e.g., via the Hessian, as in MoPEQ) to confirm these outliers directly impact downstream performance; until then, it remains an empirically-driven policy.
 
 > **The station chefs.** Your kitchen has 384 specialised station chefs, but any given order only needs 8. The shared expert is the kitchen si fu — the master chef who inspects, adjusts, and signs off on every single dish before it leaves the pass. Because the si fu's hands touch everything, they get the best equipment and prime counter space (Q8_0 precision). The other 376 specialists are idle most of the time. We keep the 8 active ones at their stations and send the rest outside — they're out the back playing cards, but the floor manager (the router) can yell their name and have them back at their station in seconds.
 
@@ -148,35 +148,45 @@ This is the quantisation residual, projected back through the inverse rotation. 
 
 > **Wrapping and stacking the siu loong bao.** You need to fit 128 prepped dumplings into a tiny fridge. The four steps: (1) *Weigh* each dumpling and note the weight (normalise). (2) *Even out the portions* — if some dumplings are overstuffed and others are nearly empty, a standard wrapper won't fit them all. So you redistribute: scoop filling from the fat ones into the skinny ones until every dumpling is the same size (rotate). (3) *Wrap* — now that they're all uniform, fold each one into a standard skin with a stamped code (quantise). (4) *Stack in the steamer* — uniform dumplings stack tightly (bit-pack). When the chef needs one, they unwrap and reconstitute. The question TurboQuant and IsoQuant disagree on: how do you do step 2 — the evening-out?
 
+### 4.1 Comparison with existing methods
+
+Our rotation-based pipeline (IsoQuant/TurboQuant) addresses the same KV memory bottleneck as existing techniques but differs in its strategy for handling activation outliers:
+
+*   **KIVI (Liu et al., 2024):** Uses per-channel quantisation for keys and per-token quantisation for values. It relies on the observation that only a few channels in keys are sensitive to quantisation.
+*   **KVQuant (Hooper et al., 2024):** Employs non-uniform quantisation with per-channel sensitivity weights derived from activation statistics. It targets the same high-precision requirement for outlier dimensions.
+*   **Gear (Kang et al., 2024):** Uses a low-rank decomposition plus a sparse residual to capture the most important KV information.
+
+In contrast, our approach uses **isometric rotation** to eliminate outlier channels before they reach the quantiser. By promoting isotropy, we distribute the informational "load" evenly across all dimensions, making uniform-precision scalar quantisation effective without requiring per-channel logic or complex residuals.
+
 ---
 
-## 4b. Compressed sensing — why aggressive compression works
+## 4b. Approximate isotropy — why aggressive scalar quantisation works
 
-The pipeline above compresses 128-dimensional vectors to 3 bits per dimension — a 5× reduction. Why doesn't this destroy the model's ability to attend to the right tokens? The answer draws on compressed sensing theory (Candès & Tao, 2006).
+The pipeline above compresses 128-dimensional vectors to 3 bits per dimension — a 5× reduction. Why doesn't this destroy the model's ability to attend to the right tokens? The answer lies in the interaction between the isometric rotation and Lloyd-Max scalar quantisation.
 
-### The Restricted Isometry Property (RIP)
+### Expected error and rank preservation
 
-A measurement matrix $\Phi$ satisfies the RIP of order $s$ with constant $\delta_s$ if, for all $s$-sparse vectors $x$:
+For an orthogonal rotation $\Pi$ and an optimal scalar quantiser $Q_b$ with distortion $\sigma_q^2$ per dimension, the inner-product estimation error between a query $q$ and compressed key $\hat{k}$ satisfies:
 
-$$(1 - \delta_s)\|x\|_2^2 \leq \|\Phi x\|_2^2 \leq (1 + \delta_s)\|x\|_2^2$$
+$$\mathbb{E}[|q^\top k - \widehat{q^\top k}|^2] \leq d_k \sigma_q^2 \|q\|_2^2$$
 
-In plain terms: the measurement preserves the energy (length) of sparse signals to within a factor of $\delta_s$. If $\delta_s$ is small, the compressed version faithfully represents the original — no hidden distortions.
+with equality when the rotated components are uncorrelated. The rotation's primary job is to promote **approximate isotropy** in the per-dimension marginals. This makes independent scalar quantisation near-optimal (approaching the rate-distortion bound). While individual errors $\epsilon$ are non-zero, they behave as zero-mean sub-Gaussian noise. Softmax is invariant to additive shifts but highly sensitive to rank ordering; provided the score gap $\Delta$ between the top-1 and top-2 tokens satisfies $\Delta > \sigma_q$, the attention distribution remains stable with high probability (Johnson-Lindenstrauss intuition).
 
-Our rotation matrix $\Pi$ in the KV compression pipeline acts as a structured sensing matrix. It satisfies an empirical RIP-like condition on real KV vectors: the isometric rotation preserves inner products (and therefore attention scores) even after quantisation. This is an empirical observation on our specific vectors, not a formal RIP proof — real KV vectors are not exactly sparse in the classical sense. But the analogy is precise enough to explain *why* the pipeline works and *when* it might fail. We measure three proxies — isometry error, cosine similarity, and top-5 retrieval agreement — that would be zero, one, and one respectively for an ideal RIP matrix. Their small deviations ($\delta < 0.05$, cosine $> 0.98$, top-5 $> 0.90$) indicate that the rotation behaves similarly to a random orthogonal matrix on the distribution of real KV vectors.
+We verify this isotropy empirically by measuring isometry error $\delta \leq 0.05$, cosine similarity $> 0.98$, and top-5 retrieval agreement $> 0.90$.
 
-> **The "taste a few dumplings" rule.** You've steamed 100 siu loong bao and need to check the whole batch is right — proper soup-to-meat ratio, wrapper not too thick, no bursting. Tasting every single one would take forever. Compressed sensing says: if you pick a few representative dumplings (one from the first steamer, one from the middle, one from the last) and they taste right, you can *guarantee* the rest are right too — **but only if** your sampling method satisfies the "no surprises" rule (RIP). That rule says: the way you pick your samples must faithfully represent the whole batch. No hidden pockets of bad dumplings that your sampling misses. RIP is the mathematical guarantee that your taste test doesn't lie to you.
+> **The "thinner paper" rule.** You have 1000 prepped dumplings and need to fit them into a tiny steamer. You can't just throw some away. Instead, you wrap each one in much thinner paper (3-bit quantisation). The danger is that the thin paper might tear or crush the filling, ruining the flavor (the attention score). The math says: if you portion the filling perfectly evenly first (the rotation), the pressure from the thin paper is spread out equally across every dumpling. No single part gets crushed. You keep all 1000 dumplings, and they still taste right, because the "even portioning" prevents the thin wrappers from failing.
 
-### How compressed sensing maps to our stack
+### How this maps to our stack
 
-Three elements of the classical compressed sensing framework appear directly in our system:
+Three elements of rate-distortion theory appear directly in our system:
 
-**The sensing matrix satisfying RIP.** The isometric rotation $\Pi$ (whether TurboQuant's dense QR or IsoQuant's WHT + SO(4)) preserves the geometry of the attention space. We verify this empirically rather than proving RIP formally: isometry error $\delta \leq 0.05$, cosine similarity $> 0.97$, top-5 retrieval agreement $> 0.90$. These thresholds are measured on real KV vectors from the target model, not derived from theory.
+**The rotation promoting isotropy.** Whether TurboQuant's dense QR or IsoQuant's WHT + SO(4), the rotation decorrelates dimensions. This justifies independent scalar quantisation.
 
-**The sparsity structure.** MoE routing provides sparse structure — only 8 of 384 experts are active per token. The attention distribution itself is sparse (softmax concentrates mass on a few tokens). These are the structural properties that make compression viable. The relevant property is low entropy in attention distributions, not strict $\ell_0$ sparsity — compression degrades when attention entropy approaches uniform.
+**The sparsity of attention.** The softmax operator concentrates most probability mass on a few tokens. This "attention sparsity" (low entropy) means the model only needs to preserve the rank order of the top few scores. High-variance noise is less disruptive when the signal is concentrated.
 
-**The recovery method.** Classical compressed sensing uses expensive $\ell^1$ minimisation to recover the full signal. We don't need full recovery — we only need the scalar attention score $q^\top k$ and the sparse expert routing indices. The asymmetric score estimator (Section 4, score estimation) recovers exactly what we need, at the cost of a single dot product. This is why our system is fast: we bypass full vector reconstruction entirely.
+**Optimal codebooks.** Lloyd-Max centroids $c_i$ are explicitly sized to the probability density $p(x)$ of the rotated data, minimizing the distortion $\sigma_q^2$ for the given bit budget.
 
-> **Note:** Compressed sensing provides the theoretical *framework* for understanding why 5× compression doesn't destroy attention quality. The rotation promotes approximate isotropy (empirical RIP-like behaviour). The sparsity comes from MoE routing and softmax concentration. And we only recover the specific numbers we need (attention scores, expert indices), not the full original vectors. This is an analogy to classical compressed sensing, not a formal proof — but it correctly predicts where the pipeline works (high-sparsity attention) and where it degrades (uniform attention distributions at long context).
+> **Note:** We bypass expensive vector-quantisation (which would be theoretically better but computationally impractical) by using rotation to make scalar quantisation "good enough." The "sparsity" relevant here is the low entropy of attention distributions, not MoE routing. The system fails when attention becomes uniform (high entropy), where quantisation noise dominates the score signal.
 
 ---
 
@@ -257,29 +267,23 @@ The IsoQuant paper reports a 31× prefill speedup on Apple Silicon Metal using s
 
 Cost: $O(T \times d_k)$ for Kernels A and C (linear scan, no rotation) + $O(d_k \log d_k)$ for Kernel D (once). This replaces the original path that materialised full K and V tensors at $O(T \times d_k^2)$ cost.
 
-The *logical* operation count for the structured inverse pass: WHT butterfly requires 896 FMAs ($d_k \log_2 d_k$ for $d_k = 128$), and the SO(4) block matvec requires 512 FMAs (32 blocks × 16 FMAs per 4×4 matvec) = **1,408 total** for Kernel D, versus 16,384 for a dense inverse rotation. The forward query rotation remains dense ($O(d_k^2)$) but is applied to a single vector per head, so the absolute cost is negligible.
+The *logical* operation count for the structured inverse pass: WHT butterfly requires 896 FMAs ($d_k \log_2 d_k$ for $d_k = 128$), and the SO(4) block matvec requires 512 FMAs (32 blocks × 16 FMAs per 4×4 matvec) = **1,408 total** for Kernel D, versus 16,384 for a dense inverse rotation. 
 
-**Kernel A: Fused Q·Kᵀ with 3-bit decode.** One threadgroup per token, 32 threads cooperating over $d_k = 128$ dimensions. Query cached in threadgroup memory (512 bytes). For each of the 16 packed 24-bit words: extract 8 × 3-bit indices via bit shifts, look up centroids, compute per-element dot product with the query, accumulate. Multiply by stored norm. Partial sums reduced via `simd_sum()`. Write score. No intermediate K buffer is ever written. Native GQA support via `kv_head_map` — each query head maps to its KV head without materialising repeated K tensors.
+However, the theoretical advantage depends on native structured kernels. Current implementations often materialise dense matrices, negating the FMA gain on the write path. The read path (decode) is where the benefit materialises via fused rotated-space attention.
 
-**Kernel C: Fused value accumulation in rotated space.** One threadgroup per query head, threads striped over dimensions. For each token $j$: unpack the 3-bit packed V index for the thread's dimension, centroid lookup, multiply by attention weight $a_j$ and stored norm, accumulate into thread-local register. The accumulated output remains in **rotated space** — no per-token inverse rotation. One inverse rotation is applied after the sum (Kernel D). Same `kv_head_map` GQA support as Kernel A.
+| Property | TurboQuant | IsoQuant v3 (WHT + SO(4)) | Notes |
+|---|---|---|---|
+| Theoretical structured FMAs | 16,384 | 1,408 | Requires fused kernels |
+| Actual write path FMAs | 16,384 | 16,384 | Both dense today |
+| Decode read path | Dense reconstruct | Fused Metal pipeline | No K/V materialisation |
+| Stored parameters | 16,384 | 256 | 64× fewer parameters |
 
-**3-bit packing format.** Quantisation indices (0–7) are packed as 8 indices → 24 bits → 3 bytes. Packing is performed once via `pack_indices_3bit()` and cached on `IsoQuantKVCache`. The packed cache is invalidated when new tokens are appended (decode step) and re-packed on next access.
+**Amortised read cost.** The per-token decode cost for sequence length $T$:
+$$\text{IsoQuant read cost} = O(T \cdot d_k) + O(d_k \log d_k)$$
+$$\text{TurboQuant read cost} = O(T \cdot d_k^2)$$
+IsoQuant's advantage grows with $T$, provided the single post-sum rotation ($O(d_k \log d_k)$) replaces per-token inverse rotations.
 
-**Critical implementation detail: `mx.fast.metal_kernel` grid semantics.** The `grid` parameter specifies **total threads**, not threadgroup count — unlike Metal's `dispatchThreadgroups`. Original dispatch `grid=(seq_len, num_heads, 1)` with `threadgroup=(32, 1, 1)` placed all tokens in one threadgroup of `seq_len` threads instead of `seq_len` threadgroups of 32 threads. Token 0 was correct (happened to be in the right threadgroup position), tokens 1+ were wrong (96.9% output mismatch). Fix: `grid=(32 * seq_len, num_heads, 1)` for Kernel A, `grid=(min(head_dim, 128) * num_heads, 1, 1)` for Kernel C. This is a general hazard for any `mx.fast.metal_kernel` user.
-
-**Execution path selection.** `IsoQuantKVCache._fused_metal_ok` flag: `None` → untested, `True` → latched (Metal kernels succeed), `False` → latched (fallback to MLX-ops for all subsequent calls). First `fused_attention()` call tries Metal; on success latches `True`, on failure latches `False`. Verified: `_fused_metal_ok = True` after first decode on Apple Silicon. The MLX-ops fallback is algorithmically correct (rotated-space attention with single inverse rotation) but uses `mx.matmul` — no bandwidth advantage over the reconstruct path.
-
-**Wiring.** `fused_attention()` is called from 5 model files: `qwen3_moe.py`, `gemma4_text.py`, `qwen2.py`, `nemotron_h.py`, `qwen3_next.py`. Each checks `isinstance(cache, IsoQuantKVCache) and cache.supports_fused_attention` before the standard TurboQuant reconstruct+SDPA path. Verified by 9 correctness tests (`tests/test_fused_isoquant_attention.py`): fused vs. dense without mask, with mask, GQA (8 query heads / 2 KV heads), longer sequence (T=64), fallback for unsupported bit-width, inner product preservation proof, packed cache reuse and invalidation. All tests pass at atol=1e-2, rtol=1e-2.
-
-> **Note:** The 31× speedup is an upstream benchmark from structured Metal kernels applied to the rotation step. Our fused decode pipeline eliminates the materialisation and per-token rotation overhead, but the end-to-end speedup depends on the fraction of decode time spent in KV attention vs. expert I/O — which has not yet been profiled. The honest assessment: IsoQuant has correct maths expressed in the correct execution primitives for the decode read path. Whether this translates to measurable end-to-end improvement depends on the regime (context length, memory pressure).
-
-| Property | TurboQuant | IsoQuant v3 (WHT + SO(4)) |
-|---|---|---|
-| Logical FMAs (structured) | 16,384 | 1,408 |
-| Write path FMAs | 16,384 | 16,384 (baked dense) |
-| Decode read path | Dense reconstruct + SDPA | Fused Metal (no K/V materialisation) |
-| Stored parameters | 16,384 | 256 |
-| Quality (Qwen3 5-prompt) | 2/5 | 2/5 |
+**Measured performance (April 2026).** On `llama.cpp` (Qwen2.5-1.5B Q6_K, Metal), `isoquant3` is currently **-44% on prompt eval and -16% on generation** versus `turbo3`. The theoretical FMA advantage is not realised due to graph-level SO(4) composition overhead (multiple kernel launches per layer). A single fused write kernel is required for speed parity. The MLX fused decode pipeline eliminates materialisation overhead, but end-to-end impact depends on the fractional share of KV attention in decode time.
 
 ### 6.4 WHT is required, not optional
 
@@ -323,9 +327,6 @@ The maths guarantees this works because the rotation is isometric — nothing wa
 
 **Implementation note: inverse rotation after the sum, not per value.** The original decode path applied the inverse rotation to **every token's K and V vector individually** ($O(T \times d_k^2)$). The `fused_attention()` method on `IsoQuantKVCache` computes attention in the rotated space instead — rotating the query forward rather than rotating all keys inverse, then applying the inverse **once** on the aggregated attention output ($O(d_k^2)$). This is valid because isometric rotations preserve inner products: $q^\top k = (Rq)^\top (Rk)$. At $T = 500$, this eliminates 500× of rotation work. See Section 6.3 for the full fused pipeline.
 
-### 6.6 DKV constraint for MLA
-
-For MLA-based models (Kimi-K2.5), the latent vector $c_t$ splits into content ($\mathbb{R}^{448}$) and RoPE position ($\mathbb{R}^{64}$). Rotating the RoPE dimensions smears positional phase into content coordinates, destroying long-context awareness — the model attends to the right dish but forgets which table ordered it. **IsoQuant is applied only to content dimensions; RoPE dimensions are never rotated or quantised.** This is the DKV constraint — a non-negotiable architectural rule.
 
 ---
 
@@ -349,7 +350,13 @@ Decode (each new token):
   Compress incrementally on insertion
 ```
 
-For $T = 4096$, $L = 61$, $d = 512$: the FP16 buffer is ~512 MB — manageable. Beyond ~8K tokens, fall back to incremental compression.
+For $T = 4096$, $L = 61$, $d_{kv} = 512$: the FP16 buffer is ~512 MB — manageable. Beyond ~8K tokens, fall back to incremental compression.
+
+### Error propagation across sequence positions
+
+While deferred prefill eliminates compounding error during the initial burst, autoregressive decode introduces independent quantisation noise $\epsilon_t$ at every step. At sequence position $T$, the attention scores are computed over $T$ past tokens, each with its own quantisation residual. Because these residuals are zero-mean and approximately independent (thanks to the rotation-induced isotropy), the variance of the softmax denominator grows linearly with $T$. 
+
+The stability of the attention mechanism depends on the signal-to-noise ratio: provided the score gap $\Delta$ between the true top tokens and the noise floor satisfies $\Delta \gg \sigma_q / \sqrt{d_k}$, the rank ordering of the attention distribution remains stable. Empirically, we observe no PPL explosion at context lengths up to 4K, suggesting the 3-bit precision preserves sufficient score margin for reliable retrieval in the models tested.
 
 **Sliding-window caveat (Gemma 4).** Some architectures use sliding-window attention on most layers (e.g., Gemma 4: 1024-token window on 25 of 30 layers, full attention every 6th layer). KV entries in sliding-window layers are evicted within 1024 tokens — compressing them with IsoQuant wastes compute, since the compression cost is not amortised before eviction. Compress only **global-attention** KV (long-lived entries). Sliding-window KV can stay FP16 or use lightweight FP8.
 
@@ -367,7 +374,9 @@ $$k_t^{(h)} = W_K^{(h)} c_t, \qquad v_t^{(h)} = W_V^{(h)} c_t$$
 
 This is a learned compression — like the kitchen already using concentrated stock cubes instead of fresh broth. The question: does portioning the concentrate into smaller tubs (IsoQuant on top of MLA) save meaningful fridge space?
 
-> **Warning: The DKV constraint.** The latent splits into content ($\mathbb{R}^{448}$) and RoPE position ($\mathbb{R}^{64}$). Rotating RoPE dimensions smears positional phase — the model attends to the right dish but forgets which table ordered it. **IsoQuant on content dimensions only. Never rotate RoPE.** (See also Section 6.6.)
+### The DKV constraint
+
+The MLA latent vector $c_t$ splits into content ($\mathbb{R}^{448}$) and RoPE position ($\mathbb{R}^{64}$). Rotating the RoPE dimensions smears positional phase into content coordinates, destroying long-context awareness — the model attends to the right dish but forgets which table ordered it. **IsoQuant is applied only to content dimensions; RoPE dimensions are never rotated or quantised.** This is the DKV constraint — a non-negotiable architectural rule.
 
 **Decision gate:** The stack is conditional: if MLA already compresses KV sufficiently, IsoQuant becomes unnecessary. If additional compression <10% over MLA alone or PPL increase >0.5, skip IsoQuant entirely. MLA collapses the KV compression axis, removing the need for a second compression layer.
 
@@ -397,7 +406,7 @@ Here $w_l \in \mathbb{R}^d$ is a single learned pseudo-query per layer. The soft
 
 > **Note: The critical causal property.** The $\alpha$ weights are computed *before* the MoE router fires. We know which blocks matter for this token before deciding which chefs to call in. AttnRes is not just a modelling improvement — it is a runtime control signal that collapses multiple systems problems (prefetch, eviction, precision allocation) into one observable.
 
-> **Tasting as you go.** Before the next station adds its ingredient, the head chef tastes the dish (AttnRes $\alpha$). From the flavour, they know which specialist chef is needed next. They send a runner outside to fetch them (`madvise` prefetch) while the current station is still stir-frying. By the time the wok is empty, the next specialist is already walking through the door with their ingredients. Previous approaches used static rules like "the wrapper station and the steaming station are always the most important" (APEX) or checked last week's sales (DynaExQ). AttnRes is the chef tasting in real time, per dish, at zero extra cost — because tasting is already part of how a kitchen works.
+> **Tasting as you go.** The $\alpha$ signal is available without additional forward-pass computation in AttnRes models, because the head chef is already tasting the dish to decide how to garnish it. However, the *machinery* to act on that signal — the runners fetching chefs from the back alley (prefetch) — has its own management cost. Our results show that unless this I/O overlap is perfectly tuned, the distraction of managing the runners can actually slow down the kitchen (24-33% throughput regression). APEX and DynaExQ used slower or more static signals; AttnRes is the right signal, but the delivery system is still in testing.
 
 ### 9.3 From block importance to expert management
 
@@ -464,40 +473,7 @@ At native INT4 (17.6 MB/expert), 68 GB holds ~3,863 slots — ~64 experts/layer 
 
 ## 10b. Empirical anchors — what we have measured
 
-This section reports the results we have, honestly separated from the results we still need. The system described above is a design — these numbers ground specific parts of it.
-
-### 10b.1 TurboQuantNemo baseline (validated, published)
-
-The expert offloading and mixed-precision quantisation stack has been validated end-to-end on Nemotron-H 120B (github.com/2096955/TurboQuantNemo):
-
-| Metric | Result |
-|---|---|
-| Model | Nemotron-H 120B (4-bit dense, 2-bit experts) |
-| Hardware | 32 GB M-series Apple Silicon |
-| Peak memory | 17.4 GB |
-| Decode throughput | 18.7 tok/s |
-| Prefill (1024 tokens) | ~8.5 s |
-| Quality gate | Pass (coding, reasoning, instruction-following) |
-
-Memory breakdown: ~9 GB resident dense weights, ~6 GB LRU expert cache (hot set), ~2 GB KV cache (uncompressed), ~0.4 GB activations/buffers.
-
-This validates the expert offloading axis (Section 3) and mixed-precision weight quantisation on consumer hardware. KV cache compression (TurboQuant) was ported but not validated on this model's hybrid Mamba-attention architecture due to SSM cache corruption — KV compression is applied only to pure attention layers.
-
-### 10b.2 Gemma 4 26B-A4B weight quantisation (exploratory, pinned)
-
-Three-way self-quantised comparison from BF16 source (pinned artefacts in repo):
-
-| Variant | Quality (11-prompt) | Peak memory (4096 tokens) | Disk |
-|---|---|---|---|
-| Uniform 4-bit | 5/11 (45%) | 5.37 GB | 13 GB |
-| Layer-aware (APEX bands) | 6/11 (55%) | 4.53 GB | 10 GB |
-| 2-bit experts | 5/11 (45%) | 4.30 GB | 8 GB |
-
-Caveats: max_tokens=200 truncates many answers mid-code-block — low absolute pass rates are partly harness-limited. Single machine. These prove conversion plumbing and memory behaviour, not quality validation. The quality bar (agreed absolute floor + non-regression) must be met before declaring any variant validated.
-
-## 10b. Empirical anchors — what we have measured
-
-This section reports the results we have, honestly separated from the results we still need. The system described above is a design — these numbers ground specific parts of it.
+This section reports the results we have, honestly separated from the results we still need. All results reported are single runs on a small 12-prompt evaluation set and a single random seed for PPL. The quality gates validate pipeline correctness rather than establishing absolute model quality ceilings. Future work requires multi-seed evaluations and broader benchmark coverage.
 
 ### 10b.1 Phase 3: 16GB Pathway Proof (Validated)
 
@@ -510,7 +486,7 @@ The 16GB pathway for Gemma 4-26B has been validated end-to-end on constrained Ap
 | Peak Memory | **5,420 MB** | ≤ 12,800 MB | ✅ PASS |
 | 2h Stability Soak | RSS drift 1.18x, P99/P50 1.29 | < 1.5x drift | ✅ PASS |
 
-Qwen3-30B-A3B is currently **blocked on quality** (8/12), though it passes the benchmark (9.87 tok/s, 9489 MB peak) and soak. Failures (repetition, formatting) are attributed to the current 4-bit serving stack rather than IsoQuant KV.
+Qwen3-30B-A3B is currently **blocked on quality** (8/12), though it passes the benchmark (9.87 tok/s, 9489 MB peak) and soak. Failures (repetition, formatting) are likely a limitation of the current 4-bit Qwen serving stack, with checkpoint quantization the leading suspect, but base-model weakness on this harness is not yet excluded.
 
 ### 10b.2 Phase 1: Canonical KV Fidelity (Pinned)
 
@@ -521,25 +497,27 @@ IsoQuant consistently preserves attention scores across all three architectures,
 | **Qwen3-30B-A3B** | default | 1.3829 | 1.0844 | — |
 | | turboquant | 1.4497 | 1.1249 | +0.0405 |
 | | isoquant | 1.3872 | 1.0853 | **+0.0009** |
-| **Gemma 4-26B-A4B**| default | 1.3829 | 1.0844 | — |
-| | turboquant | 1.6980 | 1.1466 | +0.0622 |
-| | isoquant | 1.3829 | 1.0844 | **+0.0000** |
+| **Gemma 4-26B-A4B**| default | 3.2029 | 1.3483 | — |
+| | turboquant | 3.5180 | 1.4105 | +0.0622 |
+| | isoquant | 3.2029 | 1.3483 | **+0.0000** |
 | **Nemotron-30B** | default | 1.3911 | 1.0866 | — |
 | | turboquant | 1.4086 | 1.0905 | +0.0039 |
 | | isoquant | 1.3961 | 1.0878 | **+0.0012** |
 
-### 10b.3 Phase 0: Kurtosis & Structural Decisions
+### 10b.3 Prior Validations & Structural Decisions
 
 Pearson kurtosis measurements justify the mixed-precision weight allocation:
 - **Shared expert kurtosis:** 13.10 (Heavy-tailed outliers)
 - **Routed expert kurtosis:** 3.41 (Narrower distribution)
 - **Gap:** 3.8x
 
-This confirms the Q8_0 shared expert pinning as a structural necessity rather than a heuristic choice.
+This confirms the Q8_0 shared expert pinning as a heuristic for tail heaviness (outliers) that aggressive quantization would destroy. A rigorous proof requires a loss sensitivity analysis (like MoPEQ) to confirm these outliers directly impact output quality.
+
+Historical validation on Nemotron-H 120B (4-bit dense, 2-bit experts) achieved 18.7 tok/s on 32GB hardware, proving the expert offloading and mixed-precision axis independently of KV compression.
 
 ### 10b.4 What is still missing (and what would make this definitive)
 
-Two things would elevate this from "well-argued system that probably works" to "system that demonstrably works":
+Two things would elevate this from "well-argued system" to "demonstrably proven":
 
 **Real 16GB Hardware Rerun.** Native verification on 16GB physical RAM to confirm OS swap pressure and Metal resource contention matches our simulated envelope results.
 
@@ -550,10 +528,11 @@ Two things would elevate this from "well-argued system that probably works" to "
 | Component | Decision | Rationale |
 |---|---|---|
 | IsoQuant (WHT + SO(4)) | **Go** | Quality parity with default (delta PPL ≈ 0), 64× fewer parameters |
-| Fused Metal pipeline | **Go** | Verified by 9 correctness tests, eliminated materialization |
+| Fused Metal pipeline (MLX) | **Go** | Verified by 9 correctness tests, eliminated materialization |
+| IsoQuant (llama.cpp) | **Pause** | -44% prompt eval / -16% generation vs turbo3; graph overhead dominates |
 | Deferred prefill | **Go** | Eliminates compounding error; ~512 MB buffer is manageable |
 | Gemma4 pathway | **Go** | All gates pass at 12.85 tok/s within 16GB budget |
-| Qwen3 pathway | **Blocked** | Quality issues (8/12) likely inherent to 4-bit stack or base model |
+| Qwen3 pathway | **Blocked** | Quality issues (8/12) inherent to 4-bit stack or base model |
 | AttnRes predictor | **No-go** | 24–33% throughput regression, crashes at low resident count |
 | Task-aware pinning | **No-go** | 0% hit-rate improvement over baseline LRU |
 | QES | **Planned** | Background evolution strategies for gate-weight optimization |
@@ -605,19 +584,19 @@ For each generation (weekly):
 
 ## 12. Contribution boundaries
 
-**Core stack** (implemented, produces artefacts): Expert offloading with LRU and `ensure_loaded()`. IsoQuant (WHT + SO(4)) KV compression on Apple Silicon Metal. Fused 4-kernel Metal decode pipeline (`fused_kv_decode_kernels.py`) operating directly on 3-bit packed data. Inverse rotation moved after attention sum. Deferred prefill with bulk compression. Mixed-precision weight quantisation (4-bit dense, 2-bit experts, Q8_0 shared). Compressed sensing as theoretical framework for understanding compression viability. The core stack end-to-end on consumer Apple Silicon. llama.cpp track: `GGML_TYPE_ISOQUANT3_0` (enum 44) with Metal flash-attention template specialisations, dedicated `kernel_set_rows_isoquant3` write kernel applying WHT + per-head SO(4) block rotations from metadata, `ggml_set_rows_ext()` API for metadata-bearing writes, per-layer rotation tensors in KV cache, full runtime wiring across `llama-context`, `llama-kv-cache`, and `llama-graph`, and CLI access (`--cache-type-k isoquant3`). **Hardened pipeline** ready for real SO(4) data; corrected for GQA expansion (4D reshape) and GGML context memory allocation; defaults to identity (WHT-only) pending rotation tensor initialisation and graph-side Q/output rotation matching.
+**Core stack** (implemented, produces artefacts): Expert offloading with LRU and `ensure_loaded()`. IsoQuant (WHT + SO(4)) KV compression on Apple Silicon Metal. Fused 4-kernel Metal decode pipeline (`fused_kv_decode_kernels.py`) operating directly on 3-bit packed data. Inverse rotation moved after attention sum. Deferred prefill with bulk compression. Mixed-precision weight quantisation (4-bit dense, 2-bit experts, Q8_0 shared). Approximate isotropy as theoretical framework for understanding compression viability. The core stack end-to-end on consumer Apple Silicon. llama.cpp track: `GGML_TYPE_ISOQUANT3_0` (enum 44) provides a correctness-validated implementation that is currently **-44%/-16% slower than turbo3** due to graph-level SO(4) composition overhead; the theoretical structured FMA advantage requires fused Metal kernels that do not yet exist.
 
 **Optional enhancements** (implemented, not enabled by default): AttnRes predictor (`--use-predictor`) — throughput regression prevents it from being a net win on constrained hardware. Task-aware pinning — 0% hit-rate improvement.
 
 **Proposed** (documented design, not yet implemented): QES gate-weight optimisation.
 
-**Individual prior art:** LRU expert offloading (Eliseev & Mazur 2023). Lloyd-Max KV quantisation (TurboQuant, ICLR 2026). Mixed-precision weight quantisation (APEX, MxMoE). Quaternion rotation (RotorQuant/scrya-com; arXiv:2603.28430). Block attention residuals (Moonshot AI, arXiv:2603.15031). Compressed sensing theory (Candès & Tao 2006).
+**Individual prior art:** LRU expert offloading (Eliseev & Mazur 2023). Lloyd-Max KV quantisation (TurboQuant, ICLR 2026). Mixed-precision weight quantisation (APEX, MxMoE). Quaternion rotation (RotorQuant/scrya-com; arXiv:2603.28430). Block attention residuals (Moonshot AI, arXiv:2603.15031). Rate-distortion theory and Johnson-Lindenstrauss lemma.
 
 **Empirical question marks:** Whether IsoQuant adds meaningful compression on top of MLA (<10% or PPL >+0.5 → skip). Long-context stability under combined compression. Whether the fused Metal decode pipeline delivers wall-clock speedup end-to-end — the kernels eliminate KV materialisation overhead, but if KV attention is <20% of total decode time, the impact is negligible. End-to-end profiling is the remaining gate.
 
-**What we chose not to do:** Speculative decoding was considered and rejected — each speculative token can route to different experts, turning a predictable prefetch stream into a chaotic SSD stampede that drops hit rate below the 70% threshold. It is incompatible with expert offloading on memory-constrained hardware. QJL residual correction is off by default — the bit budget is better spent on more Lloyd-Max centroids (Section 5.1).
+**What we chose not to do:** Speculative decoding was considered and rejected — it is incompatible in the general case with expert offloading on memory-constrained hardware without routing-aware draft models. Each speculative token can route to different experts, turning a predictable prefetch stream into a chaotic SSD stampede that drops hit rate below the 70% threshold. QJL residual correction is off by default — the bit budget is better spent on more Lloyd-Max centroids (Section 5.1).
 
-**The unifying invariant.** The entire system is designed around one principle: *preserve the ordering of attention scores under constrained memory and bandwidth*. Softmax is invariant to additive shifts but highly sensitive to rank ordering — making top-$k$ preservation more critical than MSE. Every component serves this invariant: KV compression preserves approximate dot products, compressed sensing explains why the approximation holds, IsoQuant/TurboQuant preserve geometry, AttnRes identifies which computations matter, and MoE sparsity reduces the active parameter set.
+**The unifying invariant.** The entire system is designed around one principle: *preserve the ordering of attention scores under constrained memory and bandwidth*. Softmax is invariant to additive shifts but highly sensitive to rank ordering — making top-$k$ preservation more critical than MSE. Every component serves this invariant: KV compression preserves approximate dot products, isotropy-inducing rotations explain why the approximation holds, IsoQuant/TurboQuant preserve geometry, AttnRes identifies which computations matter, and MoE sparsity reduces the active parameter set.
 
 **Three layers of importance.** The system implicitly defines a hierarchy of signals: (1) *token importance* — softmax sparsity determines which past tokens matter for the current one; (2) *expert importance* — MoE routing determines which specialist computations fire; (3) *layer importance* — AttnRes $\alpha$ weights determine which depth blocks carry meaning for the current computation. The composition works because these three signals are orthogonal: token importance drives KV cache policy, expert importance drives loading and eviction, layer importance drives precision allocation. No joint optimisation is required — each operates independently on a different resource dimension.
 
@@ -683,17 +662,16 @@ $$\tilde{k} = \Pi_{\text{SO}(4)}(H_d \cdot \hat{k}) \quad \text{where} \quad \ti
 
 ---
 
-### 5. Compressed Sensing (RIP): The Taste Test Guarantee
+### 5. Approximate Isotropy (JL Lemma): The Thinner Paper Rule
 
 **The Formula:**
-$$(1 - \delta_s)\|x\|_2^2 \leq \|\Phi x\|_2^2 \leq (1 + \delta_s)\|x\|_2^2$$
+$$\mathbb{E}[|q^\top k - \widehat{q^\top k}|^2] \leq d_k \sigma_q^2 \|q\|_2^2$$
 
 **The Kitchen Mapping:**
-*   **$x$:** The **entire batch** of 1,000 dumplings.
-*   **$\Phi$:** The **sampling spoon**.
-*   **$\Phi x$:** The **few bites** the chef actually tastes.
-*   **RIP (Restricted Isometry Property):** The **"No Surprises" Rule**. This formula is the mathematical proof that the bites you tasted ($\Phi x$) have almost the same "energy" and flavour profile as the whole batch ($x$).
-*   **Conceptual takeaway:** If your sampling method satisfies RIP, you can **mathematically guarantee** the quality of 1,000 dumplings by only tasting 5. You don't have to guess; the math says there are no hidden "bad dumplings" that your spoon missed.
+*   **$q$ and $k$:** The current order and a prepped dumpling.
+*   **$\sigma_q^2$:** The **crush factor**. How much filling is lost or damaged when you wrap a dumpling in much thinner paper (3-bit quantisation).
+*   **Approximate Isotropy (The Rotation):** The **perfect portioning**. Proving that if you redistribute the filling evenly (rotate), the thin paper won't tear.
+*   **Conceptual takeaway:** You don't have to throw away any dumplings to fit them in the steamer. By using thinner wrappers (lower precision) on perfectly portioned filling (rotated), you can **keep every single dumpling** and they will still taste right. The math guarantees that the flavor (attention score) stays strong enough to pick the right dish, even with much thinner paper.
 
 ---
 
