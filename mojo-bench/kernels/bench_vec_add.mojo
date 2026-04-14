@@ -47,6 +47,7 @@ fn main():
         grid_dim=(blocks,), block_dim=(threads_per_block,),
     )
 
+    ctx.synchronize()
     ctx.enqueue_copy(host_c, dev_c, N)
     ctx.synchronize()
 
