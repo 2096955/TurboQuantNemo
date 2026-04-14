@@ -205,7 +205,7 @@ fn compute_rmse(a: UnsafePointer[Float32], b: UnsafePointer[Float32], size: Int)
     return sqrt(sum_sq / Float64(size))
 
 
-fn bench_kv_compression(T: Int) -> (Float64, Float64, Float64, Float64):
+fn bench_kv_compression(T: Int) -> (Float64, Float64, Float64, Float64, Float64):
     """Benchmark KV compression for sequence length T.
 
     Returns: (compress_time_us, decompress_time_us, compress_gb_s, decompress_gb_s, rmse)
