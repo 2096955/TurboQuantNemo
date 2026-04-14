@@ -238,7 +238,10 @@ def main():
 
     print("Measuring peak memory bandwidth...")
     bw_gbs = measure_peak_bandwidth(args.warmup, args.iters)
-    print(f"  Peak bandwidth: {bw_gbs:.1f} GB/s")
+    theoretical_bw = 546.0  # M4 Max 128GB: 16-channel LPDDR5X-8533
+    bw_ratio = bw_gbs / theoretical_bw
+    print(f"  Peak bandwidth: {bw_gbs:.1f} GB/s (measured)")
+    print(f"  Theoretical: {theoretical_bw:.0f} GB/s, ratio: {bw_ratio:.2f} (expected 0.73-0.85)")
 
     print("Measuring dispatch overhead...")
     dispatch_us = measure_dispatch_overhead()
@@ -259,6 +262,8 @@ def main():
             "peak_fp16_tflops": round(fp16_tflops, 2),
             "peak_fp32_tflops": round(fp32_tflops, 2),
             "peak_memory_bandwidth_gbs": round(bw_gbs, 1),
+            "theoretical_memory_bandwidth_gbs": 546.0,
+            "bandwidth_efficiency_ratio": round(bw_gbs / 546.0, 3),
             "noop_dispatch_us": round(dispatch_us, 2),
         },
         "power_baseline": power,
@@ -701,30 +706,21 @@ git commit -m "feat(benchmark): add standard Mojo kernels — MatMul, Softmax, R
 
 ---
 
-## Task 4: Novel Mojo Kernels — IsoQuant Rotate, KV Compress, Fused Attention (M3)
+## Task 4a: IsoQuant Rotation Kernel (M3a)
 
 **Files:**
 - Create: `mojo-bench/kernels/bench_isoquant_rotate.mojo`
-- Create: `mojo-bench/kernels/bench_kv_compress.mojo`
-- Create: `mojo-bench/kernels/bench_fused_attention.mojo`
+
+**Risk:** Low — self-contained math, no external dependencies beyond harness.
 
 **Delegation:** Dispatch to Gemini CLI:
 ```bash
-delegate-to-gemini "Implement 3 novel Mojo GPU kernels. Spec: docs/superpowers/specs/2026-04-13-mojo-vs-mlx-kernel-benchmark-design.md sections 3.1, 3.2. Reference MLX implementations: mlx-lm/mlx_lm/models/mlx_isoquant.py (structured_rotate_forward/inverse, build_isoquant_rotation_components), mlx-lm/mlx_lm/models/fused_kv_decode_kernels.py (fused_qk_dot, fused_value_accum, fused_inverse_rotate, fully_fused_attention).
+delegate-to-gemini "Implement bench_isoquant_rotate.mojo with TWO sub-benchmarks. Spec: docs/superpowers/specs/2026-04-13-mojo-vs-mlx-kernel-benchmark-design.md section 3.1. Reference: mlx-lm/mlx_lm/models/mlx_isoquant.py (structured_rotate_forward/inverse, build_isoquant_rotation_components).
 
-1. bench_isoquant_rotate.mojo — TWO sub-benchmarks:
-   a) Forward: WHT + SO(4) forward rotation on batch (H,S,D) — write-path cost
-   b) Inverse: Structured inverse rotation on single vector (H,1,D) — read-path cost
-   Both dense and structured implementations for each. Measure speedup of structured vs dense. Report GB/s.
-   Math: isoclinic SO(4) via quaternion pairs (q_L * v * conj(q_R)) on 4D blocks.
-
-2. bench_kv_compress.mojo — Quantize-store-retrieve-dequant pipeline using codebook VQ (like TurboQuant). Load codebook from turboquant_codebooks/dim_128_3bit.npz (convert to Mojo tensors). Report GB/s + reconstruction RMSE.
-
-3. bench_fused_attention.mojo — THREE variants per spec:
-   a) Unfused: Individual ctx.synchronize() per op (QK dot, softmax, V accum, inverse rotate)
-   b) Framework-fused: Composed function, single ctx.synchronize()
-   c) Hand-fused: Single Mojo kernel (QK+online softmax+V accum+inverse rotate in one dispatch)
-   The production pipeline is: fused_qk_dot → softmax → fused_value_accum → metal_rotate_inverse."
+Forward: WHT + SO(4) forward rotation on batch (H,S,D) — write-path cost.
+Inverse: Structured inverse rotation on single vector (H,1,D) — read-path cost.
+Both dense and structured implementations for each. Measure speedup of structured vs dense. Report GB/s.
+Math: isoclinic SO(4) via quaternion pairs (q_L * v * conj(q_R)) on 4D blocks."
 ```
 
 - [ ] **Step 1: Implement `bench_isoquant_rotate.mojo` with forward and inverse sub-benchmarks**
@@ -739,7 +735,39 @@ Key math from `mlx_isoquant.py:275-290`:
 - Forward: `x_rot = structured_rotate_forward(x, block_matrices_t, use_hadamard)` — applies WHT then 4x4 block matmuls
 - Inverse: `x_out = structured_rotate_inverse(x_rot, block_matrices, use_hadamard)` — applies 4x4 block matmuls then inverse WHT
 
-- [ ] **Step 2: Implement `bench_kv_compress.mojo` with codebook VQ**
+- [ ] **Step 2: Run and verify rotation kernel**
+
+```bash
+cd mojo-bench && mojo run kernels/bench_isoquant_rotate.mojo
+```
+
+Expected: Structured speedup >1x vs dense at D=128. Numerical RMSE < sqrt(D) * 1e-5 for both forward and inverse.
+
+- [ ] **Step 3: Gate G1 — Codex adversarial review of M3a**
+
+```
+/codex:adversarial-review --background
+```
+
+Review focus: Correct rotation math, structured vs dense equivalence, both forward and inverse paths tested.
+
+- [ ] **Step 4: Fix Codex findings and commit M3a**
+
+```bash
+git add mojo-bench/kernels/bench_isoquant_rotate.mojo
+git commit -m "feat(benchmark): add IsoQuant rotation kernel — forward + inverse (M3a)"
+```
+
+---
+
+## Task 4b: KV Compression Kernel (M3b)
+
+**Files:**
+- Create: `mojo-bench/kernels/bench_kv_compress.mojo`
+
+**Risk:** Low — depends on M3a patterns but is self-contained.
+
+- [ ] **Step 1: Implement `bench_kv_compress.mojo` with codebook VQ**
 
 Pipeline: quantize input vectors to 3-bit indices via nearest-centroid lookup → pack indices → unpack → dequantize via centroid gather + norm rescaling.
 
@@ -747,46 +775,92 @@ Load codebook from `mlx-lm/mlx_lm/models/turboquant_codebooks/dim_128_3bit.npz`.
 
 Report: GB/s (bytes processed / time) and reconstruction RMSE (compare dequantized vs original).
 
-- [ ] **Step 3: Implement `bench_fused_attention.mojo` with three variants × two pipelines**
+- [ ] **Step 2: Run and verify KV compression**
 
-All three variants implement the same computation: QK dot product → softmax → V accumulation → inverse rotation. The difference is synchronization granularity:
+```bash
+cd mojo-bench && mojo run kernels/bench_kv_compress.mojo
+```
+
+Expected: Reconstruction RMSE < theoretical_quantization_error * 1.1. GB/s reported for all shapes.
+
+- [ ] **Step 3: Codex review and commit M3b**
+
+```bash
+git add mojo-bench/kernels/bench_kv_compress.mojo
+git commit -m "feat(benchmark): add KV compression kernel (M3b)"
+```
+
+---
+
+## Task 4c: Fused Attention — Unfused + Framework-Fused (M3c)
+
+**Files:**
+- Create: `mojo-bench/kernels/bench_fused_attention.mojo` (initial: unfused + framework-fused only)
+
+**Risk:** Medium — composition of prior kernels, timing methodology matters.
+
+- [ ] **Step 1: Implement unfused and framework-fused variants (IsoQuant pipeline)**
+
+Both variants implement: QK dot product → softmax → V accumulation → inverse rotation.
 
 **Unfused**: 4 separate kernel launches with `ctx.synchronize()` between each.
 **Framework-fused**: Single composed function, one `ctx.synchronize()` at the end.
-**Hand-fused**: Single GPU kernel dispatch implementing online softmax (no intermediate materialisation of attention weights).
 
-**Both IsoQuant and TurboQuant pipelines must be measured.** The cost breakdown must isolate:
+The delta between these two is a key result — it measures Mojo's ability to fuse dispatch and memory traffic.
+
+**K/V rotation sharing (resolved)**: TurboQuant uses a shared rotation for K and V (self-cancellation). IsoQuant uses independent per-head rotations (`k_isoquant_rot`, `v_isoquant_rot`) but its fused pipeline operates in rotated space and applies inverse once on the aggregated output.
+
+- [ ] **Step 2: Run and verify fused attention (unfused + framework-fused)**
+
+```bash
+cd mojo-bench && mojo run kernels/bench_fused_attention.mojo
+```
+
+Expected: Framework-fused should be faster than unfused. Both should produce numerically equivalent outputs.
+
+- [ ] **Step 3: Codex review and commit M3c**
+
+```bash
+git add mojo-bench/kernels/bench_fused_attention.mojo
+git commit -m "feat(benchmark): add fused attention — unfused + framework-fused (M3c)"
+```
+
+---
+
+## Task 4d: Fused Attention — Hand-Fused + TurboQuant + Cost Breakdown (M3d)
+
+**Files:**
+- Modify: `mojo-bench/kernels/bench_fused_attention.mojo` (add hand-fused variant + TurboQuant)
+
+**Risk:** High — hand-fused single kernel may be infeasible on Tier 3 Metal. If infeasible, M3a-M3c still proceed.
+
+- [ ] **Step 1: Attempt hand-fused single-kernel variant**
+
+Single GPU kernel dispatch implementing online softmax (no intermediate materialisation of attention weights). If Mojo's Tier 3 Metal backend cannot express this, document the limitation and skip — the unfused and framework-fused variants from M3c remain valid.
+
+- [ ] **Step 2: Add TurboQuant pipeline variant**
+
+Implement the same three variants (unfused/framework-fused/hand-fused) using TurboQuant's dense rotation instead of IsoQuant's structured rotation. The cost breakdown must isolate per-sub-operation timing:
 - (a) Per-query rotation cost (structured O(d_k log d_k) for IsoQuant vs dense O(d_k²) for TurboQuant)
 - (b) T-linear key scan (same for both — operates in rotated space)
 - (c) T-linear value accumulation (same for both — accumulates in rotated space)
 - (d) Per-output inverse rotation (same structured vs dense split as (a))
 
-This is critical: the TurboQuant variant uses self-cancellation (accumulate in rotated space, rotate output once), making its total cost O(d_k² + T·d_k) — the same asymptotic structure as IsoQuant's O(d_k log d_k + T·d_k). Any measured speedup is a constant-factor advantage at the rotation step, not an asymptotic scaling difference. The benchmark must state whether K and V use independent or shared rotations.
+Any measured IsoQuant speedup is a constant-factor advantage at the rotation steps, not an asymptotic scaling difference in T.
 
-- [ ] **Step 4: Run and verify novel kernels**
-
-```bash
-cd mojo-bench
-mojo run kernels/bench_isoquant_rotate.mojo
-mojo run kernels/bench_kv_compress.mojo
-mojo run kernels/bench_fused_attention.mojo
-```
-
-Expected: Forward/inverse rotation speedup of structured vs dense should be >1x for head_dim >= 128. KV compress reconstruction RMSE should be < theoretical_quantization_error * 1.1. Fused attention: framework-fused should be faster than unfused.
-
-- [ ] **Step 5: Gate G1 — Codex adversarial review of M3**
+- [ ] **Step 3: Gate G1 — Codex adversarial review of M3d**
 
 ```
 /codex:adversarial-review --background
 ```
 
-Review focus: Correct rotation math (both forward/inverse paths), quantization fidelity, three-variant fusion pipeline matches spec, algorithmic equivalence to MLX implementations.
+Review focus: Hand-fused feasibility, TurboQuant variant correctness, cost framing matches spec (constant-factor, not asymptotic).
 
-- [ ] **Step 6: Fix Codex findings and commit M3**
+- [ ] **Step 4: Fix Codex findings and commit M3d**
 
 ```bash
-git add mojo-bench/kernels/bench_isoquant_rotate.mojo mojo-bench/kernels/bench_kv_compress.mojo mojo-bench/kernels/bench_fused_attention.mojo
-git commit -m "feat(benchmark): add novel Mojo kernels — IsoQuant rotate, KV compress, fused attention (M3)"
+git add mojo-bench/kernels/bench_fused_attention.mojo
+git commit -m "feat(benchmark): add hand-fused + TurboQuant variants + cost breakdown (M3d)"
 ```
 
 ---
@@ -889,8 +963,11 @@ class BenchResult:
     p95_us: float = 0.0
     p99_us: float = 0.0
     ci95_bca: tuple[float, float] = (0.0, 0.0)
+    ci_converged: bool = True  # False if max_iters reached without CI < 2%
+    ci_width_pct: float = 0.0  # Actual CI width as % of median
     n_iterations: int = 0
     dw_statistic: float = 2.0
+    runs_test_p: float = 1.0  # Wald-Wolfowitz runs test p-value
     timings_us: list[float] = field(default_factory=list)
 
 
@@ -903,6 +980,15 @@ def adaptive_bench(fn, warmup: int = WARMUP_ITERS, max_iters: int = MAX_ITERS) -
     """Run benchmark with adaptive iteration count.
 
     Stops when 95% CI width < 2% of median, or after max_iters.
+
+    Failure mode: If max_iters reached without CI convergence, result is
+    reported with ci_converged=False and actual CI width. If CI width > 10%
+    of median, the result is excluded from cross-framework comparison but
+    included in raw data tables.
+
+    Thermal detection: Uses both Durbin-Watson (parametric) and
+    Wald-Wolfowitz runs test (non-parametric, distribution-free backup).
+    If DW < 1.5 OR runs-test p-value < 0.05, flags for cooldown and retry.
     """
     # Warmup
     for _ in range(warmup):
@@ -951,14 +1037,28 @@ def adaptive_bench(fn, warmup: int = WARMUP_ITERS, max_iters: int = MAX_ITERS) -
     except Exception:
         ci95 = (float(np.percentile(arr, 2.5)), float(np.percentile(arr, 97.5)))
 
-    # Durbin-Watson
+    # Durbin-Watson (parametric)
     try:
         from statsmodels.stats.stattools import durbin_watson
         dw = float(durbin_watson(arr - np.mean(arr)))
     except ImportError:
-        # Manual DW
         residuals = arr - np.mean(arr)
         dw = float(np.sum(np.diff(residuals) ** 2) / np.sum(residuals ** 2))
+
+    # Wald-Wolfowitz runs test (non-parametric backup for skewed distributions)
+    median_val = np.median(arr)
+    binary = (arr > median_val).astype(int)
+    runs = 1 + int(np.sum(np.abs(np.diff(binary))))
+    n1 = int(np.sum(binary))
+    n0 = len(binary) - n1
+    if n0 > 0 and n1 > 0:
+        expected_runs = 1 + 2 * n0 * n1 / (n0 + n1)
+        var_runs = 2 * n0 * n1 * (2 * n0 * n1 - n0 - n1) / ((n0 + n1)**2 * (n0 + n1 - 1))
+        z_runs = (runs - expected_runs) / (var_runs**0.5) if var_runs > 0 else 0.0
+        from scipy.stats import norm
+        runs_p = float(2 * norm.sf(abs(z_runs)))  # two-tailed
+    else:
+        runs_p = 1.0
 
     return BenchResult(
         mean_us=float(np.mean(arr)),
@@ -1014,7 +1114,7 @@ JSON output uses framework-agnostic `compilation` field:
 }
 ```
 
-Power metrics collected via `powermetrics` subprocess during each kernel suite.
+Power metrics collected via `powermetrics` subprocess during each kernel suite. Include `measurement_window_ms` (actual integration time) and `low_confidence: true` if window < 500ms. In the paper's energy charts, aggregate to kernel-class level for meaningful averages (powermetrics samples at ~250ms intervals, so sub-second kernel runs have limited power precision).
 
 - [ ] **Step 7: Run MLX benchmark suite**
 
@@ -1297,8 +1397,12 @@ def decode_time_attribution(mlx: dict, mojo: dict, output_dir: str) -> dict:
     }
     num_layers = 80  # Nemotron-H 120B
 
-    # ... Gemini implements: compute estimated decode time, compare to known e2e
-    return {"total_estimated_us": 0.0, "fraction_of_decode": 0.0}
+    # Note: end-to-end decode reference only available for MLX (live model run).
+    # For Mojo: report kernel-time sum as theoretical decode time lower bound.
+    # MLX attribution shows where actual decode time goes;
+    # Mojo attribution shows where it *would* go if kernels were dominant.
+    # ... Gemini implements full computation
+    return {"total_estimated_us": 0.0, "fraction_of_decode": 0.0, "e2e_available": False}
 
 
 def generate_latex_tables(mlx: dict, mojo: dict, output_dir: str):
@@ -1494,9 +1598,11 @@ python scripts/compare_mojo_vs_mlx.py \
   --output-dir results/comparison/
 ```
 
-- [ ] **Step 3: Verify multi-run protocol**
+- [ ] **Step 3: Verify multi-run protocol with version identity**
 
-Run the full suite 3 times on different days. Check inter-run CV < 5% for all kernels. If any kernel CV > 5%, investigate and document the cause.
+Run the full suite 3 times on different days. At the start of each run, verify framework versions, macOS version, and compiler versions against the pinned lockfiles. If any version has changed (macOS update, MLX release, Mojo compiler update), abort the run and re-pin before proceeding.
+
+Check inter-run CV < 5% for all kernels. If any kernel CV > 5%, investigate and document the cause.
 
 - [ ] **Step 4: Final commit**
 
@@ -1509,18 +1615,23 @@ git commit -m "feat(benchmark): finalize Mojo vs MLX benchmark suite with full r
 
 ## Execution Summary
 
-| Milestone | Task | What | Gate |
-|-----------|------|------|------|
-| M0 | Task 1 | Roofline calibration | G0 |
-| M1 | Task 2 | Mojo environment + harness | G1 (Codex) |
-| M2 | Task 3 | Standard Mojo kernels | G1 (Codex) |
-| M3 | Task 4 | Novel Mojo kernels | G1 (Codex) |
-| M4 | Task 5 | MLX benchmark script | G2 (Codex) |
-| G2.5 | Task 6 | Precision validation | G2.5 |
-| M5 | Task 7 | Comparison script | G3+G4 (Codex) |
-| M5.5 | Task 8 | GPU profiling protocol | — |
-| M6 | Task 9 | Paper section | G5 (Codex) |
-| — | Task 10 | Finalize + multi-run | — |
+| Milestone | Task | What | Gate | Risk |
+|-----------|------|------|------|------|
+| M0 | Task 1 | Roofline calibration | G0 | Low |
+| M1 | Task 2 | Mojo environment + harness | G1 (Codex) | Low |
+| M2 | Task 3 | Standard Mojo kernels | G1 (Codex) | Low |
+| M3a | Task 4a | IsoQuant rotation (fwd + inv) | G1 (Codex) | Low |
+| M3b | Task 4b | KV compression | G1 (Codex) | Low |
+| M3c | Task 4c | Fused attention (unfused + framework-fused) | G1 (Codex) | Medium |
+| M3d | Task 4d | Hand-fused + TurboQuant + cost breakdown | G1 (Codex) | **High** — may require fallback |
+| M4 | Task 5 | MLX benchmark script | G2 (Codex) | Low |
+| G2.5 | Task 6 | Precision validation | G2.5 | Low |
+| M5 | Task 7 | Comparison script | G3+G4 (Codex) | Low |
+| M5.5 | Task 8 | GPU profiling protocol | — | Manual |
+| M6 | Task 9 | Paper section | G5 (Codex) | Low |
+| — | Task 10 | Finalize + multi-run | — | — |
+
+**M3 split rationale**: M3a-M3c can proceed even if M3d (hand-fused Mojo kernel) proves infeasible on Tier 3 Metal. Each sub-milestone is independently reviewable.
 
 **Agent workflow at each gate:**
 1. Gemini CLI drafts the code

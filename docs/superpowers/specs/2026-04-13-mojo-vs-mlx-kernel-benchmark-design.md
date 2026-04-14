@@ -63,7 +63,7 @@ Before any kernel benchmarks, establish the hardware ceiling.
 |-------------|--------|----------------------|
 | Peak FP16 TFLOPS | Sustained FMA throughput microbenchmark | ~27 TFLOPS |
 | Peak FP32 TFLOPS | Sustained FMA throughput microbenchmark | ~14 TFLOPS |
-| Peak memory bandwidth | Stream-triad (read-write-read pattern) | ~400 GB/s |
+| Peak memory bandwidth | Stream-triad (read-write-read pattern) | ~400 GB/s (measured) |
 | Dispatch overhead (MLX) | Time `mx.eval()` on pre-compiled no-op | Baseline in us |
 | Dispatch overhead (Mojo) | Time `ctx.synchronize()` on no-op kernel | Baseline in us |
 
@@ -83,6 +83,8 @@ Each kernel is classified by arithmetic intensity (FLOPS / bytes accessed):
 | Fused Attention | Mixed | Compute for large S, memory for small S |
 
 For each kernel x size, report **achieved fraction of roofline** alongside absolute throughput. This is the primary comparison metric.
+
+**Bandwidth calibration note**: Apple's published theoretical bandwidth for M4 Max (128GB, 16-channel LPDDR5X-8533) is 546 GB/s. Stream-triad typically achieves 73-85% of theoretical on Apple Silicon. We use the measured stream-triad value (~400 GB/s expected) as the roofline ceiling, not the theoretical maximum, to avoid inflating the gap between achieved and peak. The ratio of measured-to-theoretical is reported as a sanity check (expected: 0.73-0.85).
 
 ---
 
@@ -119,7 +121,7 @@ The delta between unfused and framework-fused is a key result — it measures ea
 | (c) T-linear value accumulation (weighted sum) | O(T · d_k) | O(T · d_k) | Same — both accumulate in rotated space |
 | (d) Per-output inverse rotation | O(d_k log d_k) structured | O(d_k²) dense | Constant factor: structured vs dense |
 
-**Critical framing note**: Both IsoQuant and TurboQuant accumulate in rotated space and rotate the output once (self-cancellation). The asymptotic structure is O(d_k² + T·d_k) for TurboQuant and O(d_k log d_k + T·d_k) for IsoQuant — the difference is in the per-query rotation constant, not in T-scaling. The benchmark must frame any speedup as a constant-factor advantage (structured vs dense rotation at d_k=128) unless measured data at multiple T values demonstrates otherwise. If K and V use independent rotations (no self-cancellation), this must be stated explicitly as it changes the cost model to O(T·d_k²) for TurboQuant.
+**Critical framing note — rotation sharing resolved**: TurboQuant uses a shared rotation matrix for K and V, enabling self-cancellation: the inverse rotation folds into the query and output projections, yielding a decode cost of O(d_k² + T·d_k). IsoQuant uses independent per-head rotations for K and V (`k_isoquant_rot` and `v_isoquant_rot`), which do not self-cancel. However, IsoQuant's fused decode pipeline (Section 6.3 of the paper) operates in rotated space and applies the inverse once on the aggregated output, yielding O(d_k log d_k + T·d_k). The benchmark implements both pipelines as described and reports the per-sub-operation cost breakdown to verify these cost models empirically. Any measured IsoQuant speedup is a constant-factor advantage (structured d_k log d_k vs dense d_k² at the per-query and per-output rotation steps), not an asymptotic scaling difference in T.
 
 **Novel kernel fairness rule**: For IsoQuant Rotate and KV Compress, provide **two MLX implementations**:
 - **MLX high-level**: Using `mx.matmul`, `mx.gather`, etc. (fair comparison against Mojo)
@@ -213,6 +215,8 @@ Instead of fixed 100 iterations:
 
 This handles the timer-resolution problem for sub-100us kernels (more iterations) while avoiding waste on stable, slower kernels.
 
+**Failure mode**: If 500 iterations are reached without converging to CI < 2%, report the result with the achieved CI width and flag `"ci_converged": false` in the JSON output. In the paper, these kernels are annotated with their actual CI width. If CI width exceeds 10% of median, the result is excluded from cross-framework comparison but included in the raw data tables.
+
 ### 4.5 Thermal Management
 
 **Macro-level monitoring** (per-kernel-suite, not per-iteration):
@@ -224,9 +228,10 @@ This handles the timer-resolution problem for sub-100us kernels (more iterations
 **Statistical thermal detection** (replaces per-iteration clock monitoring):
 
 1. Run Durbin-Watson test on the iteration time series
-2. If DW statistic < 1.5 (positive autocorrelation, indicating thermal ramp), flag the result
-3. For flagged results: discard, cool down 120s, re-run
-4. Report DW statistic in output JSON for transparency
+2. Run Wald-Wolfowitz runs test on the binarized time series (above/below median) as a distribution-free backup — DW assumes approximate normality but kernel latencies are right-skewed
+3. If DW statistic < 1.5 **or** runs-test p-value < 0.05, flag the result
+4. For flagged results: discard, cool down 120s, re-run
+5. Report DW statistic and runs-test p-value in output JSON for transparency
 
 ### 4.6 Statistics Reported
 
@@ -312,13 +317,17 @@ Each framework writes a JSON file:
         "power": {
           "avg_package_watts": 42.3,
           "avg_gpu_watts": 28.1,
-          "throughput_per_watt_tflops": 0.043
+          "throughput_per_watt_tflops": 0.043,
+          "measurement_window_ms": 7500,
+          "low_confidence": false
         }
       }
     }
   }
 }
 ```
+
+**Power measurement granularity**: `powermetrics` samples at ~250ms intervals. Power is averaged over the full adaptive measurement phase for each kernel/size combination. The `measurement_window_ms` field records actual integration time. If measurement window < 500ms, `low_confidence` is set to `true` and the power reading is reported as indicative rather than precise. In the paper's energy efficiency charts (Section X.7), power data is aggregated to the kernel-class level (all sizes of MatMul together, all sizes of Softmax together) to ensure sufficient integration time for meaningful averages.
 
 ---
 
@@ -410,7 +419,10 @@ Since Gemini drafts both Mojo and MLX code, there is a risk that Mojo kernels ar
 | **M0** | `scripts/roofline_calibrate.py`, `mojo-bench/harness/noop_dispatch.mojo` | G0 | Hardware calibration correct, dispatch baselines measured |
 | **M1** | `pixi.toml`, `stats.mojo`, `bench_vec_add.mojo` (smoke test) | G1 | Mojo compiles on M4 Max, GPU detected, timing sync correct |
 | **M2** | `bench_matmul.mojo`, `bench_softmax.mojo`, `bench_rope.mojo` | G1 | Kernel equivalence to MLX ops, no unfair advantages, roofline >50% |
-| **M3** | `bench_isoquant_rotate.mojo` (forward + inverse sub-benchmarks), `bench_kv_compress.mojo`, `bench_fused_attention.mojo` (unfused, framework-fused, hand-fused variants; both IsoQuant and TurboQuant pipelines; cost breakdown of rotation vs T-linear ops) | G1 | Correct rotation math (both paths), quantization fidelity, three-variant fusion pipeline, TurboQuant variant measured, cost framing verified |
+| **M3a** | `bench_isoquant_rotate.mojo` (forward + inverse sub-benchmarks, both dense and structured) | G1 | Correct rotation math (both paths), structured speedup verified |
+| **M3b** | `bench_kv_compress.mojo` | G1 | Quantization fidelity, codebook loading, reconstruction RMSE |
+| **M3c** | `bench_fused_attention.mojo` (unfused + framework-fused variants, IsoQuant pipeline) | G1 | Composition correct, timing methodology, unfused vs fused delta |
+| **M3d** | `bench_fused_attention.mojo` (hand-fused variant if feasible + TurboQuant pipeline + cost breakdown) | G1 | Hand-fused feasibility on Tier 3 Metal, TurboQuant variant, cost framing verified |
 | **M4** | `scripts/benchmark_mlx_kernels.py` (with `mx.compile()`, `stream=mx.gpu`, two implementations for novel kernels) | G2 | Methodology parity with Mojo side, AMX routing controlled |
 | **G2.5** | Perplexity validation script | G2.5 | Kernel-chain precision, perplexity divergence check |
 | **M5** | `scripts/compare_mojo_vs_mlx.py` | G3+G4 | Statistical methods (BCa, geometric mean, Cohen's d), chart accuracy, roofline plots, log2 ratio visualization |
@@ -454,7 +466,9 @@ The benchmark's Section 0 frames itself as measuring "kernel operations that dom
 4. Sum to get estimated total kernel time per decode step
 5. Compare against the known end-to-end decode latency (from `eval_quality_gate.py` or live model run)
 
-**Reporting rule**: If the benchmarked kernels collectively account for <50% of estimated decode time, this must be disclosed prominently in Section X.7 with a discussion of what else dominates (dispatch overhead, memory allocation, framework scheduling, non-benchmarked ops like LayerNorm, residual add).
+**MLX vs Mojo attribution scope**: End-to-end decode latency reference is available for MLX only (from live model runs). For Mojo, we report the sum of estimated kernel times as a theoretical decode time lower bound, acknowledging that actual end-to-end time would include additional overhead not captured by kernel benchmarks. The MLX attribution shows where actual decode time goes; the Mojo attribution shows where it *would* go if the kernel costs were the dominant factor.
+
+**Reporting rule**: If the benchmarked kernels collectively account for <50% of estimated decode time, this must be disclosed prominently in Section X.9 with a discussion of what else dominates (dispatch overhead, memory allocation, framework scheduling, non-benchmarked ops like LayerNorm, residual add).
 
 This analysis appears in the comparison output as a summary table and as a stacked-bar chart showing each kernel's fraction of estimated decode time.
 
@@ -556,6 +570,8 @@ python scripts/compare_mojo_vs_mlx.py \
 ### 8.3 Multi-Run Protocol
 
 Run the full suite 3 times on different days. Report inter-run variance in the paper. If inter-run CV > 5% for any kernel, investigate and disclose the cause.
+
+**Version identity constraint**: Framework versions, macOS version, and compiler versions must remain identical across all three runs. At the start of each run, verify versions against the pinned lockfiles. If any version has changed (macOS update, MLX release, Mojo compiler update), abort the run and re-pin before proceeding.
 
 ### 8.4 Version Pinning
 
