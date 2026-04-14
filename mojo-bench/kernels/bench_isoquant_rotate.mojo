@@ -54,6 +54,60 @@ fn inverse_walsh_hadamard_inplace(x: UnsafePointer[Float32], D: Int):
     walsh_hadamard_inplace(x, D)
 
 
+fn generate_so4_from_quaternion(mat: UnsafePointer[Float32], offset: Int):
+    """Generate a proper SO(4) left-isoclinic rotation matrix from a random unit quaternion.
+
+    Constructs a 4x4 orthogonal matrix from quaternion (a, b, c, d) using left-isoclinic form:
+        L = [[ a, -b, -c, -d],
+             [ b,  a, -d,  c],
+             [ c,  d,  a, -b],
+             [ d, -c,  b,  a]]
+
+    This matrix satisfies L^T @ L = I (orthogonal) when quaternion is normalized.
+
+    Args:
+        mat: Pointer to matrix storage
+        offset: Base offset for this 4x4 block (in flat array)
+    """
+    # Generate 4 random values
+    var a = Float32(random_float64() * 2.0 - 1.0)
+    var b = Float32(random_float64() * 2.0 - 1.0)
+    var c = Float32(random_float64() * 2.0 - 1.0)
+    var d = Float32(random_float64() * 2.0 - 1.0)
+
+    # Normalize to unit quaternion
+    var norm = sqrt(Float64(a*a + b*b + c*c + d*d))
+    a = Float32(Float64(a) / norm)
+    b = Float32(Float64(b) / norm)
+    c = Float32(Float64(c) / norm)
+    d = Float32(Float64(d) / norm)
+
+    # Construct left-isoclinic SO(4) matrix (row-major storage)
+    # Row 0: [ a, -b, -c, -d]
+    mat[offset + 0*4 + 0] = a
+    mat[offset + 0*4 + 1] = -b
+    mat[offset + 0*4 + 2] = -c
+    mat[offset + 0*4 + 3] = -d
+
+    # Row 1: [ b,  a, -d,  c]
+    mat[offset + 1*4 + 0] = b
+    mat[offset + 1*4 + 1] = a
+    mat[offset + 1*4 + 2] = -d
+    mat[offset + 1*4 + 3] = c
+
+    # Row 2: [ c,  d,  a, -b]
+    mat[offset + 2*4 + 0] = c
+    mat[offset + 2*4 + 1] = d
+    mat[offset + 2*4 + 2] = a
+    mat[offset + 2*4 + 3] = -b
+
+    # Row 3: [ d, -c,  b,  a]
+    mat[offset + 3*4 + 0] = d
+    mat[offset + 3*4 + 1] = -c
+    mat[offset + 3*4 + 2] = b
+    mat[offset + 3*4 + 3] = a
+
+
 fn structured_rotate_forward_cpu(
     x: UnsafePointer[Float32],
     block_matrices: UnsafePointer[Float32],
@@ -279,9 +333,11 @@ fn bench_forward_rotation(ctx: DeviceContext, S: Int, use_hadamard: Bool) -> (Fl
     for i in range(input_size):
         input[i] = Float32(random_float64() * 2.0 - 1.0)
 
-    # Generate random block matrices (orthogonal would be ideal, but random for benchmark)
-    for i in range(block_mat_size):
-        block_matrices[i] = Float32(random_float64() * 2.0 - 1.0)
+    # Generate proper SO(4) rotation matrices from quaternions (one per block)
+    for h in range(H):
+        for b in range(n_blocks):
+            var block_offset = h * n_blocks * BLOCK_SIZE * BLOCK_SIZE + b * BLOCK_SIZE * BLOCK_SIZE
+            generate_so4_from_quaternion(block_matrices, block_offset)
 
     # Construct dense matrix from block matrices (block diagonal structure)
     for i in range(dense_mat_size):
@@ -362,8 +418,11 @@ fn bench_inverse_rotation(ctx: DeviceContext, use_hadamard: Bool) -> (Float64, F
     for i in range(input_size):
         input[i] = Float32(random_float64() * 2.0 - 1.0)
 
-    for i in range(block_mat_size):
-        block_matrices[i] = Float32(random_float64() * 2.0 - 1.0)
+    # Generate proper SO(4) rotation matrices from quaternions
+    for h in range(H):
+        for b in range(n_blocks):
+            var block_offset = h * n_blocks * BLOCK_SIZE * BLOCK_SIZE + b * BLOCK_SIZE * BLOCK_SIZE
+            generate_so4_from_quaternion(block_matrices, block_offset)
 
     # Construct dense matrix
     for i in range(dense_mat_size):
@@ -425,15 +484,28 @@ fn bench_inverse_rotation(ctx: DeviceContext, use_hadamard: Bool) -> (Float64, F
     return (dense_time_us, structured_time_us, speedup, rmse, roundtrip_rmse)
 
 
-fn compute_bandwidth(H: Int, S: Int, D: Int, elapsed_us: Float64) -> Float64:
+fn compute_bandwidth(H: Int, S: Int, D: Int, elapsed_us: Float64, use_hadamard: Bool) -> Float64:
     """Compute memory bandwidth in GB/s.
 
-    Reads: input (H*S*D) + block_matrices (H*n_blocks*4*4)
+    Reads: input (H*S*D) + block_matrices (H*n_blocks*4*4) + WHT passes
     Writes: output (H*S*D)
+
+    WHT performs log2(D) passes, each reading and writing D elements per sequence position.
     """
     var input_bytes = Float64(H * S * D * 4)  # FP32
     var mat_bytes = Float64(H * NUM_BLOCKS * BLOCK_SIZE * BLOCK_SIZE * 4)
     var total_bytes = 2.0 * input_bytes + mat_bytes  # read input + matrices, write output
+
+    # Add WHT bandwidth: log2(D) passes * D reads per (H, S) position
+    if use_hadamard:
+        var log2_D = 0
+        var D_temp = D
+        while D_temp > 1:
+            log2_D += 1
+            D_temp = D_temp // 2
+        var wht_bytes = Float64(log2_D * H * S * D * 4)  # FP32 reads per pass
+        total_bytes += wht_bytes
+
     var elapsed_s = elapsed_us / 1_000_000.0
     return total_bytes / elapsed_s / 1_000_000_000.0
 
@@ -463,8 +535,8 @@ fn main() raises:
         print("Sequence length:", S)
 
         var (dense_time, struct_time, speedup, rmse) = bench_forward_rotation(ctx, S, use_hadamard)
-        var gb_dense = compute_bandwidth(NUM_HEADS, S, HEAD_DIM, dense_time)
-        var gb_struct = compute_bandwidth(NUM_HEADS, S, HEAD_DIM, struct_time)
+        var gb_dense = compute_bandwidth(NUM_HEADS, S, HEAD_DIM, dense_time, use_hadamard)
+        var gb_struct = compute_bandwidth(NUM_HEADS, S, HEAD_DIM, struct_time, use_hadamard)
 
         print("  Dense:      ", dense_time, "us, ", gb_dense, "GB/s")
         print("  Structured: ", struct_time, "us, ", gb_struct, "GB/s")
@@ -485,8 +557,8 @@ fn main() raises:
     print()
 
     var (dense_time_inv, struct_time_inv, speedup_inv, rmse_inv, roundtrip_rmse) = bench_inverse_rotation(ctx, use_hadamard)
-    var gb_dense_inv = compute_bandwidth(NUM_HEADS, 1, HEAD_DIM, dense_time_inv)
-    var gb_struct_inv = compute_bandwidth(NUM_HEADS, 1, HEAD_DIM, struct_time_inv)
+    var gb_dense_inv = compute_bandwidth(NUM_HEADS, 1, HEAD_DIM, dense_time_inv, use_hadamard)
+    var gb_struct_inv = compute_bandwidth(NUM_HEADS, 1, HEAD_DIM, struct_time_inv, use_hadamard)
 
     print("  Dense:           ", dense_time_inv, "us, ", gb_dense_inv, "GB/s")
     print("  Structured:      ", struct_time_inv, "us, ", gb_struct_inv, "GB/s")
