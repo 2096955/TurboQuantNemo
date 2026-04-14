@@ -109,7 +109,10 @@ def _durbin_watson(residuals: np.ndarray) -> float:
     if len(residuals) < 3:
         return 2.0
     diffs = np.diff(residuals)
-    return float(np.sum(diffs**2) / np.sum(residuals**2))
+    denom = np.sum(residuals**2)
+    if denom == 0:
+        return 2.0
+    return float(np.sum(diffs**2) / denom)
 
 
 def _runs_test_p(data: np.ndarray) -> float:
@@ -515,6 +518,13 @@ def bench_kv_compress(H: int, T: int, D: int) -> BenchResult:
     )
     mx.eval(x, rotation)
 
+    # Compute RMSE BEFORE the benchmark loop (single roundtrip)
+    compressed_rmse = compressor.compress_value(x[0], rotation[0])
+    decompressed_rmse = compressor.decompress_value(compressed_rmse, rotation[0])
+    mx.eval(decompressed_rmse)
+    diff = x[0].astype(mx.float32) - decompressed_rmse.astype(mx.float32)
+    rmse = float(mx.sqrt(mx.mean(diff * diff)).item())
+
     # Measure compress + decompress roundtrip
     def run():
         compressed = compressor.compress_value(x[0], rotation[0])
@@ -529,13 +539,6 @@ def bench_kv_compress(H: int, T: int, D: int) -> BenchResult:
     bytes_per_elem = 4
     bytes_moved = T * D * bytes_per_elem * 2  # rough: read + write roundtrip
     result.gbs = bytes_moved / (result.median_us * 1e-6) / 1e9
-
-    # Compute RMSE
-    compressed = compressor.compress_value(x[0], rotation[0])
-    decompressed = compressor.decompress_value(compressed, rotation[0])
-    mx.eval(decompressed)
-    diff = x[0].astype(mx.float32) - decompressed.astype(mx.float32)
-    rmse = float(mx.sqrt(mx.mean(diff * diff)).item())
     result.rmse = rmse
 
     return result
@@ -604,7 +607,7 @@ def bench_fused_attention_unfused(H: int, T: int, D: int) -> BenchResult:
     # Run main benchmark
     result = adaptive_bench(run)
 
-    # Collect sub-timings (10 additional runs)
+    # Collect sub-timings AFTER main benchmark (shares compilation cache)
     for _ in range(5):
         run_with_sub_timings()
         mx.synchronize()
