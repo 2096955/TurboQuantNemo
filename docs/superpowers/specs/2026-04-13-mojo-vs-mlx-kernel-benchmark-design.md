@@ -210,12 +210,8 @@ Instead of fixed 100 iterations:
 1. Run 10 warm-up iterations (discarded)
 2. Run measurement iterations in batches of 25
 3. After each batch, compute CI width as percentage of median
-4. Stop when CI width < 2% of median, or after 500 iterations maximum (raised from 200 to handle sub-10us kernels)
+4. Stop when CI width < 2% of median, or after 500 iterations maximum. If 500 iterations are reached without converging to CI < 2%, report the result with the achieved CI width and flag `"ci_converged": false` in the JSON output. In the paper, these kernels are annotated with their actual CI width. If CI width exceeds 10% of median, the result is excluded from cross-framework comparison but included in the raw data tables.
 5. Report actual iteration count used per kernel/size
-
-This handles the timer-resolution problem for sub-100us kernels (more iterations) while avoiding waste on stable, slower kernels.
-
-**Failure mode**: If 500 iterations are reached without converging to CI < 2%, report the result with the achieved CI width and flag `"ci_converged": false` in the JSON output. In the paper, these kernels are annotated with their actual CI width. If CI width exceeds 10% of median, the result is excluded from cross-framework comparison but included in the raw data tables.
 
 ### 4.5 Thermal Management
 
@@ -248,7 +244,7 @@ This handles the timer-resolution problem for sub-100us kernels (more iterations
 | dw_statistic | Durbin-Watson test statistic for thermal detection |
 | cohens_d | Effect size vs the other framework (computed in comparison script) |
 | avg_package_watts | Average package power during kernel suite (from `powermetrics`) |
-| avg_gpu_watts | Average GPU power during kernel suite (from `powermetrics`) |
+| power_measurement_window_ms | Actual integration time for power data; flag as low-confidence if < 500ms |
 | throughput_per_watt | TFLOPS/W or GB/s/W — energy efficiency metric |
 
 **Summary statistics:**
@@ -464,7 +460,7 @@ The benchmark's Section 0 frames itself as measuring "kernel operations that dom
 2. Multiply by invocations-per-decode-step (e.g., MatMul invoked for QKV projection, O projection, FFN up/down = ~6 per layer)
 3. Multiply by the number of layers in the target model (e.g., Nemotron-H 120B = 80 layers)
 4. Sum to get estimated total kernel time per decode step
-5. Compare against the known end-to-end decode latency (from `eval_quality_gate.py` or live model run)
+5. Compare against the known end-to-end decode latency (from `eval_quality_gate.py` or live model run). **Note**: End-to-end reference is available for MLX only. For Mojo, we report the sum of estimated kernel times as a theoretical decode time lower bound, acknowledging that actual end-to-end time would include framework overhead not captured by kernel benchmarks.
 
 **MLX vs Mojo attribution scope**: End-to-end decode latency reference is available for MLX only (from live model runs). For Mojo, we report the sum of estimated kernel times as a theoretical decode time lower bound, acknowledging that actual end-to-end time would include additional overhead not captured by kernel benchmarks. The MLX attribution shows where actual decode time goes; the Mojo attribution shows where it *would* go if the kernel costs were the dominant factor.
 
