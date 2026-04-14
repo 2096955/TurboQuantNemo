@@ -163,7 +163,8 @@ This separates framework capability from human optimization effort.
 - M = N = K in `{512, 1024, 2048, 4096, 8192}`
 
 **Attention sequence length sweep (for Softmax/RoPE):**
-- S in `{128, 512, 2048, 8192, 32768}` with fixed H=48, D=128
+- S in `{128, 512, 2048, 8192}` with fixed H=48, D=128
+- S=32768 excluded: dense `(1, 48, 32768, 32768)` attention matrix requires 206 GB in FP32, exceeding any current Apple Silicon configuration. Real models at 32K+ context use flash attention, not dense softmax. Flash attention benchmarks for longer contexts are left to future work.
 
 ---
 
@@ -575,3 +576,61 @@ Run the full suite 3 times on different days. Report inter-run variance in the p
 - `requirements.txt` or `pyproject.toml` pins exact MLX version
 - macOS version and Metal GPU family recorded in output JSON
 - All seeds are fixed: numpy seed=42, Mojo seed=42
+
+---
+
+## 9. Implementation Progress (as of 2026-04-14)
+
+### 9.1 Milestone Status
+
+| Milestone | Status | Notes |
+|-----------|--------|-------|
+| **M0** | DONE | `roofline_calibrate.py` + `noop_dispatch.mojo` complete. Noop rewritten to enqueue actual GPU kernel (not empty sync). 146 µs dispatch overhead measured. |
+| **M1** | DONE | `pixi.toml` pinned to MAX `<26.3.0.dev2026040905` (avoids `metal:4-metal4` GPU detection bug on Apr 9+ nightlies). `stats.mojo` + `bench_vec_add.mojo` pass. Full API migration: `fn`→`def`, `alias`→`comptime`, `LayoutTensor` positional params. |
+| **M2** | DONE | All three standard kernels pass smoke tests. MatMul: `MAX_ELEMENTS` bumped to 100,663,296 to cover FFN prefill B matrix. Softmax: S=8192 restored (3.2B elements, 12.9 GB FP32, 413 ms, 62 GB/s). S=32768 excluded with physics justification. RoPE: pair-wise thread assignment, race condition fixed. |
+| **M3a** | DONE | Forward + inverse rotation, structured + dense. Scratch buffers hoisted out of hot loops. 18-21x structured speedup preserved. RMSE = 0.0 (exact match). |
+| **M3b** | DONE | KV compress + decompress. Codebook loading. Reconstruction RMSE validation. |
+| **M3c** | DONE | Unfused + framework-fused attention variants. IsoQuant pipeline. |
+| **M3d** | DONE | Hand-fused variant (CPU-only reference for Tier 3). TurboQuant pipeline. Cost breakdown table. |
+| **M4** | DONE | `benchmark_mlx_kernels.py` — `mx.compile()`, `stream=mx.gpu`, BCa bootstrap, two implementations for novel kernels (high-level + custom Metal). |
+| **G2.5** | DONE | `validate_kernel_precision.py` — kernel-chain precision, perplexity divergence check. |
+| **M5** | DONE | `compare_mojo_vs_mlx.py` — LaTeX tables, roofline plots, log2 heatmap, Cohen's d, geometric mean speedup. Schema mismatch fixed: parser now handles both MLX aggregated format and Mojo per-file/directory format. Cohen's d uses actual `n_iterations` (not hardcoded 20). |
+| **M6** | PARTIAL | Paper section 10c in `FROM_ATTENTION_TO_CONSUMER_HARDWARE.md` — structure complete, methodology written, all subsections present but data tables are PLACEHOLDERs pending actual benchmark runs. |
+
+### 9.2 Adversarial Review Status
+
+Three independent reviews completed (2026-04-14):
+
+| Reviewer | Verdict | Findings Fixed |
+|----------|---------|----------------|
+| **Manual (human)** | 3 issues (P0/P1/P2) | All 3 fixed: noop dispatch rewrite, GPU guard, raises spec |
+| **Gemini CLI** | NO-SHIP (5 issues) | 3/5 fixed (schema mismatch, Cohen's d, Mojo format support). 2 acknowledged (Mojo CPU-only kernels = by design for Tier 3; BCa not in Mojo stats.mojo = known TODO). |
+| **Codex** (2 passes) | needs-attention | All 3 fixed: matmul layout overflow, softmax 8K coverage restored, IsoQuant scratch buffer hoisted |
+
+### 9.3 Remaining Work
+
+#### Code complete, pending benchmark execution:
+
+1. **Run full benchmark suite** — `pixi run bench-all` for Mojo side, `python scripts/benchmark_mlx_kernels.py` for MLX side, `python scripts/roofline_calibrate.py` for calibration. All three on same day, plugged in, Spotlight paused.
+
+2. **Run comparison script** — `python scripts/compare_mojo_vs_mlx.py` to generate LaTeX tables, charts, and summary JSON from actual results.
+
+3. **Fill paper PLACEHOLDERs** — Section 10c.2 through 10c.10 in `FROM_ATTENTION_TO_CONSUMER_HARDWARE.md` contain PLACEHOLDER markers awaiting data from step 2.
+
+#### Known limitations to disclose:
+
+4. **MatMul roofline disclosure** — Mojo GPU matmul achieves ~2.3% roofline (naive tiled GEMM without shared memory, Tier 3 API). Must be disclosed in Section 10c.3 and 10c.10 with framework-maturity framing (not architectural ceiling).
+
+5. **Mojo BCa bootstrap** — `stats.mojo` uses simple percentile bootstrap, not BCa. MLX side uses scipy BCa. Asymmetry should be noted in methodology section.
+
+6. **Mojo kernels are CPU-only for novel ops** — IsoQuant rotation, KV compress, and fused attention run CPU-only on Mojo (Tier 3 Metal lacks shared memory). This is by design and already disclosed in the paper.
+
+#### Optional improvements (not blocking):
+
+7. **GPU profiling (Section 10c.8)** — Manual Xcode Instruments Metal System Trace for top-3 performance gaps. Requires human operator.
+
+8. **Energy efficiency (Section 10c.7)** — `powermetrics` integration for TFLOPS/W data. Requires sudo access during benchmark runs.
+
+9. **Multi-run protocol (Section 8.3)** — 3 runs on different days with inter-run CV analysis. Deferred to after initial publication-quality run.
+
+10. **Precision validation thresholds** — Gemini flagged RMSE threshold of 0.1 for chain ops as too loose, and max_abs_diff ~4.3 for fused Metal path. Review and potentially tighten before filling paper PLACEHOLDERs.
