@@ -15,8 +15,9 @@ comptime FP32 = DType.float32
 # Roofline: M4 Max GPU theoretical peak (specs for 40-core GPU)
 comptime M4_MAX_TFLOPS_FP32 = 14.2  # ~14 TFLOPS FP32
 
-# Maximum flat layout for largest benchmark shape (8192*8192 = 67108864)
-comptime MAX_ELEMENTS = 67108864
+# Must cover largest single operand across all benchmark shapes.
+# Largest: FFN prefill B matrix = K * N = 16384 * 6144 = 100,663,296
+comptime MAX_ELEMENTS = 100663296
 comptime flat_layout = Layout.row_major(MAX_ELEMENTS)
 
 
@@ -59,6 +60,16 @@ def bench_matmul_shape(
     var size_a = M * K
     var size_b = K * N
     var size_c = M * N
+
+    # Guard: ensure no operand exceeds the flat layout
+    var max_elements = size_a
+    if size_b > max_elements:
+        max_elements = size_b
+    if size_c > max_elements:
+        max_elements = size_c
+    if max_elements > MAX_ELEMENTS:
+        print("SKIP:", shape_name, "- exceeds MAX_ELEMENTS (", max_elements, ">", MAX_ELEMENTS, ")")
+        return -1.0
 
     # Allocate host buffers via context
     host_a = ctx.enqueue_create_host_buffer[DType.float32](size_a)
@@ -181,6 +192,10 @@ def main() raises:
             var name = names[i]
 
             var elapsed_us = bench_matmul_shape(ctx, M, N, K, name)
+            if elapsed_us < 0.0:
+                print()
+                continue
+
             var tflops = compute_tflops(M, N, K, elapsed_us)
             var roofline_pct = (tflops / M4_MAX_TFLOPS_FP32) * 100.0
 

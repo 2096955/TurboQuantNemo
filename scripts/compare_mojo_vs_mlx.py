@@ -60,6 +60,7 @@ class KernelResult:
     std_us: float
     ci95_lo: float
     ci95_hi: float
+    n_iterations: int = 20
     tflops: float | None = None
     gbs: float | None = None
     roofline_pct: float | None = None
@@ -73,9 +74,54 @@ class KernelResult:
 
 
 def load_results(path: str) -> dict[str, Any]:
-    """Load benchmark JSON results."""
+    """Load benchmark JSON results.
+
+    Supports three formats:
+    - Single aggregated JSON file with a "kernels" list (MLX output)
+    - Single per-shape JSON file with "kernel" key (single Mojo result)
+    - Directory of per-shape JSON files (Mojo output directory)
+    """
+    if os.path.isdir(path):
+        # Mojo writes one JSON per kernel/shape — aggregate them
+        entries = []
+        framework = "mojo"
+        framework_version = ""
+        for fname in sorted(os.listdir(path)):
+            if not fname.endswith(".json"):
+                continue
+            with open(os.path.join(path, fname)) as f:
+                entry = json.load(f)
+            framework = entry.get("framework", framework)
+            framework_version = entry.get("framework_version", framework_version)
+            entries.append(entry)
+        return {
+            "framework": framework,
+            "framework_version": framework_version,
+            "kernels": entries,
+        }
     with open(path) as f:
-        return json.load(f)
+        data = json.load(f)
+    # Single Mojo per-shape file (has "kernel" key, no "kernels" list)
+    if "kernel" in data and "kernels" not in data:
+        return {
+            "framework": data.get("framework", "mojo"),
+            "framework_version": data.get("framework_version", ""),
+            "kernels": [data],
+        }
+    return data
+
+
+def _normalize_kernel_entry(k: dict[str, Any]) -> tuple[str, str, dict, dict]:
+    """Extract (name, shape, stats_dict, throughput_dict) from a kernel entry.
+
+    Handles both MLX format (name/shape/stats) and Mojo format (kernel/shape/stats).
+    """
+    name = k.get("name") or k.get("kernel", "unknown")
+    shape = k.get("shape", "")
+    # Both MLX and Mojo write "stats"; parser previously had a typo ("statistics")
+    stats = k.get("stats") or k.get("statistics", {})
+    throughput = k.get("throughput", {})
+    return name, shape, stats, throughput
 
 
 def parse_kernel_results(data: dict[str, Any]) -> list[KernelResult]:
@@ -84,8 +130,7 @@ def parse_kernel_results(data: dict[str, Any]) -> list[KernelResult]:
     results = []
 
     for k in data.get("kernels", []):
-        stats = k["statistics"]
-        throughput = k.get("throughput", {})
+        name, shape, stats, throughput = _normalize_kernel_entry(k)
 
         # Extract CI bounds
         ci95_bca = stats.get(
@@ -97,14 +142,15 @@ def parse_kernel_results(data: dict[str, Any]) -> list[KernelResult]:
         results.append(
             KernelResult(
                 framework=framework,
-                name=k["name"],
-                shape=k["shape"],
-                dtype=k["dtype"],
+                name=name,
+                shape=shape,
+                dtype=k.get("dtype", "float32"),
                 median_us=stats["median_us"],
                 mean_us=stats["mean_us"],
                 std_us=stats["std_us"],
                 ci95_lo=ci95_lo,
                 ci95_hi=ci95_hi,
+                n_iterations=stats.get("n_iterations", 20),
                 tflops=throughput.get("tflops"),
                 gbs=throughput.get("gbs"),
                 roofline_pct=throughput.get("roofline_pct"),
@@ -693,8 +739,15 @@ def write_summary_json(
             speedup = mlx.median_us / mojo.median_us
             speedups.append(speedup)
 
-            # Cohen's d (assuming n=20 iterations for both)
-            d = cohens_d(mlx.mean_us, mlx.std_us, 20, mojo.mean_us, mojo.std_us, 20)
+            # Cohen's d using actual iteration counts from adaptive benchmarking
+            d = cohens_d(
+                mlx.mean_us,
+                mlx.std_us,
+                mlx.n_iterations,
+                mojo.mean_us,
+                mojo.std_us,
+                mojo.n_iterations,
+            )
             cohens_d_results[f"{mlx.name}_{mlx.shape}"] = round(d, 3)
 
     geo_mean = geometric_mean_speedup(speedups)
@@ -746,7 +799,7 @@ def main():
         "--mojo",
         type=str,
         required=True,
-        help="Path to Mojo benchmark JSON",
+        help="Path to Mojo benchmark JSON file or results directory",
     )
     parser.add_argument(
         "--roofline",

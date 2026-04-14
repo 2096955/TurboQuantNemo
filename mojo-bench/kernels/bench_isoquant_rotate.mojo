@@ -125,6 +125,15 @@ def structured_rotate_forward_cpu(
     """
     var n_blocks = D // BLOCK_SIZE
 
+    # Pre-allocate scratch buffers outside hot loops
+    var temp_in_list = List[Float32](capacity=BLOCK_SIZE)
+    var temp_out_list = List[Float32](capacity=BLOCK_SIZE)
+    for _ in range(BLOCK_SIZE):
+        temp_in_list.append(0.0)
+        temp_out_list.append(0.0)
+    var temp_in = temp_in_list.unsafe_ptr()
+    var temp_out = temp_out_list.unsafe_ptr()
+
     # Process each head and sequence position
     for h in range(H):
         for s in range(S):
@@ -143,10 +152,6 @@ def structured_rotate_forward_cpu(
             for b in range(n_blocks):
                 # Get 4-element block from output (post-WHT)
                 var block_start = x_base + b * BLOCK_SIZE
-                var temp_in_list = List[Float32](capacity=BLOCK_SIZE)
-                for _ in range(BLOCK_SIZE):
-                    temp_in_list.append(0.0)
-                var temp_in = temp_in_list.unsafe_ptr()
                 for i in range(BLOCK_SIZE):
                     temp_in[i] = dst[block_start + i]
 
@@ -154,11 +159,6 @@ def structured_rotate_forward_cpu(
                 var mat_base = h * n_blocks * BLOCK_SIZE * BLOCK_SIZE + b * BLOCK_SIZE * BLOCK_SIZE
 
                 # Matmul: temp_out = temp_in @ block_matrices[h, b]
-                # block_matrices stored as (4, 4) in row-major
-                var temp_out_list = List[Float32](capacity=BLOCK_SIZE)
-                for _ in range(BLOCK_SIZE):
-                    temp_out_list.append(0.0)
-                var temp_out = temp_out_list.unsafe_ptr()
                 for i in range(BLOCK_SIZE):
                     temp_out[i] = 0.0
                     for j in range(BLOCK_SIZE):
@@ -186,6 +186,15 @@ def structured_rotate_inverse_cpu(
     """
     var n_blocks = D // BLOCK_SIZE
 
+    # Pre-allocate scratch buffers outside hot loops
+    var temp_in_list = List[Float32](capacity=BLOCK_SIZE)
+    var temp_out_list = List[Float32](capacity=BLOCK_SIZE)
+    for _ in range(BLOCK_SIZE):
+        temp_in_list.append(0.0)
+        temp_out_list.append(0.0)
+    var temp_in = temp_in_list.unsafe_ptr()
+    var temp_out = temp_out_list.unsafe_ptr()
+
     for h in range(H):
         for s in range(S):
             var x_base = h * S * D + s * D
@@ -197,10 +206,6 @@ def structured_rotate_inverse_cpu(
             # Apply block rotations (transposed)
             for b in range(n_blocks):
                 var block_start = x_base + b * BLOCK_SIZE
-                var temp_in_list = List[Float32](capacity=BLOCK_SIZE)
-                for _ in range(BLOCK_SIZE):
-                    temp_in_list.append(0.0)
-                var temp_in = temp_in_list.unsafe_ptr()
                 for i in range(BLOCK_SIZE):
                     temp_in[i] = dst[block_start + i]
 
@@ -208,10 +213,6 @@ def structured_rotate_inverse_cpu(
 
                 # Matmul with transpose: temp_out = temp_in @ block_matrices[h, b].T
                 # Transpose means swap indices: temp_out[i] = sum_j temp_in[j] * mat[i][j]
-                var temp_out_list = List[Float32](capacity=BLOCK_SIZE)
-                for _ in range(BLOCK_SIZE):
-                    temp_out_list.append(0.0)
-                var temp_out = temp_out_list.unsafe_ptr()
                 for i in range(BLOCK_SIZE):
                     temp_out[i] = 0.0
                     for j in range(BLOCK_SIZE):
@@ -240,6 +241,12 @@ def dense_rotate_forward_cpu(
     dense_matrix: (H, D, D).
     dst: (H, S, D).
     """
+    # Pre-allocate scratch buffer outside hot loops
+    var temp_list = List[Float32](capacity=D)
+    for _ in range(D):
+        temp_list.append(0.0)
+    var temp = temp_list.unsafe_ptr()
+
     for h in range(H):
         for s in range(S):
             var x_base = h * S * D + s * D
@@ -254,10 +261,6 @@ def dense_rotate_forward_cpu(
                     dst[x_base + d] = x[x_base + d]
 
             # Full DxD matmul
-            var temp_list = List[Float32](capacity=D)
-            for _ in range(D):
-                temp_list.append(0.0)
-            var temp = temp_list.unsafe_ptr()
             for i in range(D):
                 temp[i] = dst[x_base + i]
 
@@ -283,15 +286,17 @@ def dense_rotate_inverse_cpu(
     dense_matrix: (H, D, D).
     dst: (H, S, D).
     """
+    # Pre-allocate scratch buffer outside hot loops
+    var temp_list = List[Float32](capacity=D)
+    for _ in range(D):
+        temp_list.append(0.0)
+    var temp = temp_list.unsafe_ptr()
+
     for h in range(H):
         for s in range(S):
             var x_base = h * S * D + s * D
 
             # Copy input
-            var temp_list = List[Float32](capacity=D)
-            for _ in range(D):
-                temp_list.append(0.0)
-            var temp = temp_list.unsafe_ptr()
             for d in range(D):
                 temp[d] = x_rot[x_base + d]
 

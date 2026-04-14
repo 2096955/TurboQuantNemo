@@ -15,13 +15,12 @@ comptime FP32 = DType.float32
 comptime NUM_HEADS = 48
 comptime HEAD_DIM = 128
 
-# Maximum flat layout: largest shape is [1, 48, 32768, 32768]
-# That is ~51 billion elements -- way too large for any GPU.
-# Practical max: seq_len=8192 -> 1 * 48 * 8192 * 8192 = 3,221,225,472
-# Even 8192 may exceed GPU memory. Use a generous but feasible max.
-# For seq_len=2048: 1 * 48 * 2048 * 2048 = 201,326,592
-# We'll use a max that covers seq_len=8192 shapes.
-comptime MAX_ELEMENTS = 201326592  # covers up to seq_len=2048
+# Layout must cover the largest benchmarked dense attention matrix.
+# S=8192: 1 * 48 * 8192 * 8192 = 3,221,225,472 elements (~12.9 GB FP32)
+# S=32768 excluded: dense (1, 48, 32768, 32768) requires 206 GB FP32 —
+# exceeds any current Apple Silicon config. Real models at 32K+ use
+# flash attention, not dense softmax.
+comptime MAX_ELEMENTS = 3221225472  # covers up to seq_len=8192
 comptime flat_layout = Layout.row_major(MAX_ELEMENTS)
 
 
@@ -67,6 +66,11 @@ def bench_softmax_shape(
 
     var batch = 1
     var total_elements = batch * NUM_HEADS * seq_len * seq_len
+
+    # Guard: ensure shape fits the flat layout
+    if total_elements > MAX_ELEMENTS:
+        print("SKIP:", shape_name, "- exceeds MAX_ELEMENTS (", total_elements, ">", MAX_ELEMENTS, ")")
+        return -1.0
 
     # Allocate host buffer via context
     host_input = ctx.enqueue_create_host_buffer[DType.float32](total_elements)
@@ -136,16 +140,21 @@ def main() raises:
 
         ctx = DeviceContext()
 
-        # Sequence length sweep (limited to sizes that fit MAX_ELEMENTS)
+        # Sequence length sweep per benchmark spec Section 3.2
+        # S=32768 excluded: dense (1,48,S,S) at S=32768 requires 206 GB FP32 —
+        # exceeds any current Apple Silicon. Flash attention benchmarks for
+        # longer contexts are left to future work.
         var seq_lengths = List[Int]()
         seq_lengths.append(128)
         seq_lengths.append(512)
         seq_lengths.append(2048)
+        seq_lengths.append(8192)
 
         var names = List[String]()
         names.append("seq_128")
         names.append("seq_512")
         names.append("seq_2048")
+        names.append("seq_8192")
 
         # Benchmark FP32
         print("--- FP32 Softmax ---")
@@ -155,6 +164,10 @@ def main() raises:
             var total_elements = 1 * NUM_HEADS * S * S
 
             var elapsed_us = bench_softmax_shape(ctx, S, name)
+            if elapsed_us < 0.0:
+                print()
+                continue
+
             var gbs = compute_bandwidth(total_elements, 4, elapsed_us)  # FP32 = 4 bytes
 
             print(name, ":")
