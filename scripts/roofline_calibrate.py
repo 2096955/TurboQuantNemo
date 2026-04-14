@@ -139,20 +139,31 @@ def read_powermetrics(duration_ms: int = 2000) -> dict:
 
 
 def get_hardware_info() -> dict:
-    """Collect hardware metadata."""
+    """Collect hardware metadata with sanity checks."""
     import platform
 
     gpu_family = "unknown"
+    gpu_cores = 0
+    memory_gb = 0
+
     try:
         info = mx.metal.device_info()
         gpu_family = info.get("gpu_family", "unknown")
+        gpu_cores = info.get("max_threads_per_threadgroup", 0)
+        memory_gb = round(info.get("memory_size", 0) / (1024**3))
     except Exception:
         pass
 
+    # Sanity checks
+    if gpu_cores == 0:
+        print("WARNING: gpu_cores=0 detected - hardware metadata may be incomplete")
+    if gpu_family == "unknown":
+        print("WARNING: metal_gpu_family=unknown - hardware detection failed")
+
     return {
         "chip": platform.processor() or "Apple Silicon",
-        "memory_gb": round(mx.metal.device_info().get("memory_size", 0) / (1024**3)),
-        "gpu_cores": mx.metal.device_info().get("max_threads_per_threadgroup", 0),
+        "memory_gb": memory_gb,
+        "gpu_cores": gpu_cores,
         "macos_version": platform.mac_ver()[0],
         "metal_gpu_family": gpu_family,
     }
@@ -202,8 +213,31 @@ def main():
         else:
             print("  Power metrics unavailable (run with sudo for power data)")
 
+    # Validation checks
+    hw_info = get_hardware_info()
+    valid = True
+    warnings = []
+
+    if hw_info["gpu_cores"] == 0 or hw_info["metal_gpu_family"] == "unknown":
+        valid = False
+        warnings.append(
+            "Hardware metadata incomplete (gpu_cores=0 or gpu_family=unknown)"
+        )
+
+    if bw_ratio < 0.5:
+        valid = False
+        warnings.append(
+            f"Bandwidth efficiency {bw_ratio:.2f} < 0.5 - calibration may be unreliable (too few iters={args.iters})"
+        )
+
+    if not valid:
+        print("\n*** VALIDATION FAILED ***")
+        for w in warnings:
+            print(f"  - {w}")
+        print("Run with more --iters (>=100) and check hardware detection")
+
     result = {
-        "hardware": get_hardware_info(),
+        "hardware": hw_info,
         "calibration": {
             "peak_fp16_tflops": round(fp16_tflops, 2),
             "peak_fp32_tflops": round(fp32_tflops, 2),
@@ -213,6 +247,8 @@ def main():
             "noop_dispatch_us": round(dispatch_us, 2),
         },
         "power_baseline": power,
+        "valid": valid,
+        "warnings": warnings,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
