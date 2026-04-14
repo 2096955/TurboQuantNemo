@@ -569,7 +569,7 @@ To understand whether the algorithmic improvements described above translate to 
 
 **Frameworks.** Mojo (Tier 3 Metal backend via `std.gpu`) and MLX (native Metal with `mx.compile()` graph fusion). Both target the same Metal GPU; the comparison isolates framework overhead and compilation strategy, not hardware differences.
 
-**Statistical rigour.** Each kernel is measured with adaptive iteration counts (stopping when the 95% BCa bootstrap CI width drops below 2% of the median, capped at 500 iterations). Thermal drift is detected via Durbin-Watson autocorrelation (threshold 1.5) with Wald-Wolfowitz runs test as a distribution-free backup for right-skewed latency distributions. Effect sizes are reported as Cohen's d; aggregate speedups use geometric mean (not arithmetic).
+**Statistical rigour.** Each kernel is measured with adaptive iteration counts (stopping when the 95% BCa bootstrap CI width drops below 2% of the median, capped at 500 iterations). Thermal drift is detected via Durbin-Watson autocorrelation (threshold 1.5) with Wald-Wolfowitz runs test as a distribution-free backup for right-skewed latency distributions. Effect sizes are reported as Cohen's d; aggregate speedups use geometric mean (not arithmetic). The MLX side uses scipy's BCa implementation; the Mojo side uses a simple percentile bootstrap (BCa is not available in the Mojo standard library). This asymmetry means MLX confidence intervals have a small-sample bias correction that Mojo intervals lack; we note this but consider it immaterial for the sample sizes used (100–500 iterations).
 
 **Roofline calibration.** Hardware ceilings are measured before each benchmark session: sustained FP16 and FP32 TFLOPS via large matmul, peak memory bandwidth via stream-triad, and per-framework dispatch overhead. Measured bandwidth is reported alongside the theoretical maximum (546 GB/s) with the achieved fraction (expected range: 0.73–0.85 for this configuration).
 
@@ -586,6 +586,8 @@ To understand whether the algorithmic improvements described above translate to 
 ### 10c.3 Standard kernel comparison
 
 [PLACEHOLDER: LaTeX table from `results/comparison/` showing MatMul, Softmax, and RoPE results across decode and prefill shapes. Include TFLOPS or GB/s, 95% CI, roofline fraction, and Cohen's d for each kernel/shape pair.]
+
+**MatMul roofline disclosure.** The Mojo GPU matmul kernel achieves approximately 2.3% of theoretical FP32 roofline on M4 Max, reflecting the absence of shared-memory tiling in the current Tier 3 Metal API and the naive tiling strategy of our implementation. MLX's `mx.matmul` delegates to Metal Performance Shaders, which achieves substantially higher roofline fractions. This comparison measures current framework maturity, not architectural ceilings — an expert implementation with shared-memory access would narrow the gap significantly. We include the matmul results for completeness but caution against interpreting them as a framework-level comparison.
 
 ### 10c.4 Novel kernel comparison
 
@@ -634,6 +636,8 @@ Per-kernel latency is weighted by invocations per decode step and number of laye
 ### 10c.10 Discussion
 
 [PLACEHOLDER: Key findings — which framework is faster for which kernel class, why (compilation strategy, dispatch overhead, memory access patterns), and what this means for the choice of framework for consumer-hardware inference. Note limitations: Mojo Tier 3 maturity, AI-generated kernels, single hardware target.]
+
+The matmul roofline gap (~2.3% Mojo vs MLX) is the most dramatic result but also the least informative about framework potential. It reflects API surface maturity (Metal Tier 3 vs Metal Performance Shaders) rather than language capability. The more informative comparisons are the memory-bound kernels (softmax, RoPE) where both frameworks have equivalent access to the hardware, and the novel kernels (IsoQuant rotation, KV compression) where algorithmic differences dominate.
 
 ---
 

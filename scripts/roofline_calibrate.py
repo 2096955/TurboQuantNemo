@@ -145,12 +145,30 @@ def get_hardware_info() -> dict:
     gpu_family = "unknown"
     gpu_cores = 0
     memory_gb = 0
+    device_name = ""
 
     try:
-        info = mx.metal.device_info()
-        gpu_family = info.get("gpu_family", "unknown")
-        gpu_cores = info.get("max_threads_per_threadgroup", 0)
+        info = mx.device_info()
+        gpu_family = info.get("architecture", "unknown")
+        device_name = info.get("device_name", "")
         memory_gb = round(info.get("memory_size", 0) / (1024**3))
+        # Extract GPU core count from device name (e.g. "Apple M4 Max" -> 40 cores)
+        core_map = {
+            "M4 Max": 40,
+            "M4 Pro": 20,
+            "M4": 10,
+            "M3 Max": 40,
+            "M3 Pro": 18,
+            "M3": 10,
+            "M2 Max": 38,
+            "M2 Ultra": 76,
+            "M1 Max": 32,
+            "M1 Ultra": 64,
+        }
+        for chip, cores in core_map.items():
+            if chip in device_name:
+                gpu_cores = cores
+                break
     except Exception:
         pass
 
@@ -161,7 +179,7 @@ def get_hardware_info() -> dict:
         print("WARNING: metal_gpu_family=unknown - hardware detection failed")
 
     return {
-        "chip": platform.processor() or "Apple Silicon",
+        "chip": device_name or platform.processor() or "Apple Silicon",
         "memory_gb": memory_gb,
         "gpu_cores": gpu_cores,
         "macos_version": platform.mac_ver()[0],

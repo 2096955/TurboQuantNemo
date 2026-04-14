@@ -173,16 +173,21 @@ def simulate_attention_layer(
     x_init_np = rng.normal(size=(num_tokens, hidden_dim)).astype(np.float64)
     x_init_mlx = mx.array(x_init_np.astype(np.float32))
 
-    # Weight matrices for QKV projection
-    W_qkv_np = rng.normal(size=(hidden_dim, 3 * hidden_dim)).astype(np.float64)
+    # Weight matrices with Xavier-like scaling to prevent overflow in chain
+    # Scale = 1/sqrt(fan_in) keeps variance stable through projections
+    W_qkv_np = (
+        rng.normal(size=(hidden_dim, 3 * hidden_dim)) / np.sqrt(hidden_dim)
+    ).astype(np.float64)
     W_qkv_mlx = mx.array(W_qkv_np.astype(np.float32))
 
-    # Weight matrix for output projection
-    W_o_np = rng.normal(size=(hidden_dim, hidden_dim)).astype(np.float64)
+    W_o_np = (rng.normal(size=(hidden_dim, hidden_dim)) / np.sqrt(hidden_dim)).astype(
+        np.float64
+    )
     W_o_mlx = mx.array(W_o_np.astype(np.float32))
 
-    # Vocab projection for perplexity (output -> logits)
-    W_vocab_np = rng.normal(size=(hidden_dim, vocab_size)).astype(np.float64)
+    W_vocab_np = (
+        rng.normal(size=(hidden_dim, vocab_size)) / np.sqrt(hidden_dim)
+    ).astype(np.float64)
     W_vocab_mlx = mx.array(W_vocab_np.astype(np.float32))
 
     # Target labels (for cross-entropy)
