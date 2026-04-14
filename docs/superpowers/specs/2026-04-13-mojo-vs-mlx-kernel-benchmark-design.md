@@ -31,7 +31,7 @@ mojo-bench/                             # New top-level directory
 │   ├── bench_matmul.mojo               # Dense GEMM (FP32, FP16)
 │   ├── bench_softmax.mojo              # Row-wise softmax
 │   ├── bench_rope.mojo                 # Rotary position embeddings
-│   ├── bench_isoquant_rotate.mojo      # Structured 4D rotation
+│   ├── bench_isoquant_rotate.mojo      # Structured 4D rotation (forward + inverse sub-benchmarks)
 │   ├── bench_kv_compress.mojo          # Quantized KV store + retrieve
 │   └── bench_fused_attention.mojo      # Full fused attention pipeline
 ├── harness/
@@ -77,7 +77,8 @@ Each kernel is classified by arithmetic intensity (FLOPS / bytes accessed):
 | MatMul (B=1, S=1) | O(1) | Memory bandwidth |
 | Softmax | Low (exp + sum + div) | Memory bandwidth |
 | RoPE | Low (sin/cos + mul) | Memory bandwidth |
-| IsoQuant Rotate | Medium (block matmul) | Depends on D |
+| IsoQuant Rotate Forward | Medium (WHT + block matmul on batch) | Depends on D and S |
+| IsoQuant Rotate Inverse | Medium (block matmul on single vector) | Memory bandwidth for small D |
 | KV Compress | Low (quantize + store) | Memory bandwidth |
 | Fused Attention | Mixed | Compute for large S, memory for small S |
 
@@ -94,9 +95,20 @@ For each kernel x size, report **achieved fraction of roofline** alongside absol
 | **MatMul** | `(M, K) x (K, N)` | Dense GEMM | `(M, N)` | TFLOPS |
 | **Softmax** | `(B, H, S, S)` | Row-wise softmax | Same shape | GB/s |
 | **RoPE** | `(B, H, S, D)` + freqs | Rotary position embed | Same shape | GB/s |
-| **IsoQuant Rotate** | `(H, S, D)` + block matrices | Structured 4D rotation | Same shape | GB/s + speedup vs dense |
+| **IsoQuant Rotate Forward** | `(H, S, D)` + block matrices | WHT + SO(4) forward rotation before quantization | Same shape | GB/s + speedup vs dense (write-path cost) |
+| **IsoQuant Rotate Inverse** | `(H, 1, D)` + block matrices | Structured inverse rotation at decode | Same shape | GB/s + speedup vs dense (read-path cost, per-query) |
 | **KV Compress** | `(B, H, S, D)` keys+values | Quantize -> store -> retrieve -> dequant | Reconstructed KV | GB/s + reconstruction error |
-| **Fused Attention** | Full attention layer inputs | MatMul -> RoPE -> Softmax -> MatMul -> KV Compress | Attention output | TFLOPS (measures fusion benefit) |
+| **Fused Attention** | Full attention layer inputs | QK dot -> Softmax -> V accum -> Inverse rotate | Attention output | TFLOPS (measures fusion benefit) |
+
+**Fused attention three-variant design**: Measured as three variants to isolate fusion benefit:
+
+| Variant | MLX | Mojo | What It Isolates |
+|---------|-----|------|------------------|
+| **Unfused** | Individual `mx.eval()` per op (fused_qk_dot, softmax, fused_value_accum, metal_rotate_inverse called separately) | Individual `ctx.synchronize()` per op | Per-kernel baseline |
+| **Framework-fused** | `mx.compile()` over full pipeline (single `mx.eval()`) | Composed function, single `ctx.synchronize()` | Framework fusion capability |
+| **Hand-fused** (if feasible) | Single custom Metal kernel (`fused_kv_decode.metal`) | Single Mojo kernel | Algorithm-level fusion ceiling |
+
+The delta between unfused and framework-fused is a key result — it measures each framework's ability to fuse dispatch and memory traffic. The production pipeline (4 kernels: `fused_qk_dot` -> softmax -> `fused_value_accum` -> `metal_rotate_inverse`) is the artifact from the paper and must be benchmarked in all three variants.
 
 **Novel kernel fairness rule**: For IsoQuant Rotate and KV Compress, provide **two MLX implementations**:
 - **MLX high-level**: Using `mx.matmul`, `mx.gather`, etc. (fair comparison against Mojo)
@@ -130,6 +142,8 @@ This separates framework capability from human optimization effort.
 | Prefill QKV | 2048 | 6144 | 6144 | Batch QKV projection |
 | FFN up | 1 | 6144 | 16384 | Feed-forward up-projection |
 | FFN down | 1 | 16384 | 6144 | Feed-forward down-projection |
+| Prefill FFN up | 2048 | 6144 | 16384 | Batch feed-forward up-projection |
+| Prefill FFN down | 2048 | 16384 | 6144 | Batch feed-forward down-projection |
 | MoE expert | 1 | 5120 | 11008 | Single MoE expert |
 
 **Standard BLAS sweep (appendix, square matrices):**
@@ -183,7 +197,7 @@ Instead of fixed 100 iterations:
 1. Run 10 warm-up iterations (discarded)
 2. Run measurement iterations in batches of 25
 3. After each batch, compute CI width as percentage of median
-4. Stop when CI width < 2% of median, or after 200 iterations maximum
+4. Stop when CI width < 2% of median, or after 500 iterations maximum (raised from 200 to handle sub-10us kernels)
 5. Report actual iteration count used per kernel/size
 
 This handles the timer-resolution problem for sub-100us kernels (more iterations) while avoiding waste on stable, slower kernels.
@@ -217,12 +231,32 @@ This handles the timer-resolution problem for sub-100us kernels (more iterations
 | n_iterations | Actual iterations used (adaptive) |
 | dw_statistic | Durbin-Watson test statistic for thermal detection |
 | cohens_d | Effect size vs the other framework (computed in comparison script) |
+| avg_package_watts | Average package power during kernel suite (from `powermetrics`) |
+| avg_gpu_watts | Average GPU power during kernel suite (from `powermetrics`) |
+| throughput_per_watt | TFLOPS/W or GB/s/W — energy efficiency metric |
 
 **Summary statistics:**
 - **Geometric mean** of speedup ratios across all kernels (not arithmetic mean)
 - Per-kernel effect size (Cohen's d) to distinguish statistical from practical significance
 
-### 4.7 Output Format
+### 4.7 Variance Attribution via GPU Profiling
+
+After the main benchmark completes, the **top-3 kernels by performance gap** (largest MLX/Mojo speedup ratio) are profiled using **Xcode Instruments Metal System Trace**. This provides causal evidence for *why* one framework is faster, not just *that* it is.
+
+For each profiled kernel, report:
+
+| Metric | Source | What It Explains |
+|--------|--------|-----------------|
+| ALU utilization % | Metal System Trace | Whether the kernel is compute-saturated |
+| Memory bandwidth utilization % | Metal System Trace | Whether the kernel is bandwidth-saturated |
+| Occupancy (waves/EU) | Metal System Trace | Whether the kernel uses enough threads |
+| Stall cycles breakdown | Metal System Trace | Where time is wasted (memory latency, barrier, etc.) |
+
+**Process**: Manual profiling, disclosed as such. Capture 3 trace runs per kernel, report median metrics. Include annotated screenshots of the trace in the paper appendix.
+
+**Disclosure**: GPU profiling is qualitative and manual. It explains observed gaps but does not change the quantitative benchmark results.
+
+### 4.8 Output Format
 
 Each framework writes a JSON file:
 
@@ -237,8 +271,11 @@ Each framework writes a JSON file:
     "metal_gpu_family": "apple9"
   },
   "framework_version": "26.2.0",
-  "compilation_flags": "--release",
-  "mx_compile_used": false,
+  "compilation": {
+    "mode": "ahead_of_time",
+    "optimization": "--release",
+    "graph_compilation": "N/A"
+  },
   "timestamp": "2026-04-13T14:30:00Z",
   "calibration": {
     "peak_fp16_tflops": 27.1,
@@ -260,7 +297,12 @@ Each framework writes a JSON file:
         "gbs": 289.4,
         "roofline_pct": 70.1,
         "n_iterations": 150,
-        "dw_statistic": 1.93
+        "dw_statistic": 1.93,
+        "power": {
+          "avg_package_watts": 42.3,
+          "avg_gpu_watts": 28.1,
+          "throughput_per_watt_tflops": 0.043
+        }
       }
     }
   }
@@ -292,7 +334,7 @@ Thresholds scale with reduction dimension to account for floating-point accumula
 | MatMul FP16 | RMSE < sqrt(K) * 1e-3 | Half-precision accumulation variance |
 | Softmax | KL div < 1e-5 | Probability distribution must be tight |
 | RoPE | Max abs < 1e-4 | Trig functions must agree |
-| IsoQuant Rotate | RMSE < sqrt(D) * 1e-5 | Rotation fidelity, scaled by head dimension |
+| IsoQuant Rotate (fwd + inv) | RMSE < sqrt(D) * 1e-5 | Rotation fidelity, scaled by head dimension; forward and inverse measured separately, both dense and structured implementations |
 | KV Compress | Reconstruction RMSE < theoretical_quantization_error * 1.1 | Bounded by quantization scheme's error floor, not by MLX's output |
 
 KV Compress threshold is derived from the codebook quantization scheme's theoretical error bound (Lloyd-Max distortion for the given bit-width), not from comparing against MLX output. Both frameworks must independently fall within 110% of theoretical optimum.
@@ -353,7 +395,7 @@ Since Gemini drafts both Mojo and MLX code, there is a risk that Mojo kernels ar
 | **M0** | `scripts/roofline_calibrate.py`, `mojo-bench/harness/noop_dispatch.mojo` | G0 | Hardware calibration correct, dispatch baselines measured |
 | **M1** | `pixi.toml`, `stats.mojo`, `bench_vec_add.mojo` (smoke test) | G1 | Mojo compiles on M4 Max, GPU detected, timing sync correct |
 | **M2** | `bench_matmul.mojo`, `bench_softmax.mojo`, `bench_rope.mojo` | G1 | Kernel equivalence to MLX ops, no unfair advantages, roofline >50% |
-| **M3** | `bench_isoquant_rotate.mojo`, `bench_kv_compress.mojo`, `bench_fused_attention.mojo` | G1 | Correct rotation math, quantization fidelity, fusion pipeline |
+| **M3** | `bench_isoquant_rotate.mojo` (forward + inverse sub-benchmarks), `bench_kv_compress.mojo`, `bench_fused_attention.mojo` (unfused, framework-fused, hand-fused variants) | G1 | Correct rotation math (both paths), quantization fidelity, three-variant fusion pipeline |
 | **M4** | `scripts/benchmark_mlx_kernels.py` (with `mx.compile()`, `stream=mx.gpu`, two implementations for novel kernels) | G2 | Methodology parity with Mojo side, AMX routing controlled |
 | **G2.5** | Perplexity validation script | G2.5 | Kernel-chain precision, perplexity divergence check |
 | **M5** | `scripts/compare_mojo_vs_mlx.py` | G3+G4 | Statistical methods (BCa, geometric mean, Cohen's d), chart accuracy, roofline plots, log2 ratio visualization |
@@ -374,6 +416,8 @@ Since Gemini drafts both Mojo and MLX code, there is a risk that Mojo kernels ar
    - Error bars: 95% BCa confidence intervals on all data points
    - Heatmap: **log2(MLX_time / Mojo_time)** — zero means equal, positive = Mojo faster, negative = MLX faster. Symmetric and honest.
    - Every ratio chart accompanied by absolute numbers table
+   - **Energy efficiency**: Throughput-per-watt (TFLOPS/W) comparison per kernel
+   - **Decode time attribution**: Stacked-bar showing each kernel's fraction of estimated decode time
 3. **Summary JSON** — Machine-readable combined results with geometric mean speedup
 
 ### 7.2 Additional Baselines (Context)
@@ -385,7 +429,21 @@ Where feasible, include:
 | **Accelerate/BLAS (CPU)** | GEMM-only — shows GPU vs CPU tradeoff for decode GEMV |
 | **Hardware roofline** | Theoretical peak — shows framework efficiency |
 
-### 7.3 Paper Section Structure
+### 7.3 Decode Time Attribution
+
+The benchmark's Section 0 frames itself as measuring "kernel operations that dominate LLM inference latency." To validate this framing, compute an estimated decode time breakdown:
+
+1. For each benchmarked kernel, take the measured per-call latency at decode shape (B=1, S=1)
+2. Multiply by invocations-per-decode-step (e.g., MatMul invoked for QKV projection, O projection, FFN up/down = ~6 per layer)
+3. Multiply by the number of layers in the target model (e.g., Nemotron-H 120B = 80 layers)
+4. Sum to get estimated total kernel time per decode step
+5. Compare against the known end-to-end decode latency (from `eval_quality_gate.py` or live model run)
+
+**Reporting rule**: If the benchmarked kernels collectively account for <50% of estimated decode time, this must be disclosed prominently in Section X.7 with a discussion of what else dominates (dispatch overhead, memory allocation, framework scheduling, non-benchmarked ops like LayerNorm, residual add).
+
+This analysis appears in the comparison output as a summary table and as a stacked-bar chart showing each kernel's fraction of estimated decode time.
+
+### 7.4 Paper Section Structure
 
 New section in `docs/FROM_ATTENTION_TO_CONSUMER_HARDWARE.md`:
 
@@ -423,10 +481,25 @@ New section in `docs/FROM_ATTENTION_TO_CONSUMER_HARDWARE.md`:
 - Kernel-chain perplexity validation
 - Proves correctness alongside performance
 
-### X.7 Discussion
+### X.7 Energy Efficiency
+- Throughput-per-watt comparison per kernel (from `powermetrics` during runs)
+- Consumer hardware runs on batteries — energy efficiency is a first-class metric
+- Chart: TFLOPS/W side-by-side for compute-bound kernels
+
+### X.8 GPU Profiling (Top-3 Performance Gaps)
+- Metal System Trace profiling of top-3 kernels by performance gap
+- ALU utilization, memory bandwidth saturation, occupancy, stall breakdown
+- Causal evidence for *why* one framework is faster, not just *that*
+
+### X.9 Decode Time Attribution
+- Estimated fraction of decode time attributable to each benchmarked kernel
+- If benchmarked kernels account for <50% of decode time, disclose prominently
+- Stacked-bar chart of kernel contributions to total decode latency
+
+### X.10 Discussion
 - Roofline analysis: how close each framework gets to hardware limits
 - Where the performance gap reflects framework maturity vs architectural limits
-- Kernel fusion as a key differentiator
+- Kernel fusion as a key differentiator (unfused vs framework-fused vs hand-fused deltas)
 - Implications for consumer hardware inference
 - Limitations: AI-generated Mojo code, Tier 3 Metal support, kernel-chain vs full-model perplexity
 ```
@@ -443,7 +516,7 @@ New section in `docs/FROM_ATTENTION_TO_CONSUMER_HARDWARE.md`:
 | macOS | 16.4+ (Metal driver behavior varies across releases) |
 | Power | Plugged in, Low Power Mode off |
 | Background | Spotlight indexing paused, iCloud sync disabled during runs |
-| `pmset` | `sudo pmset -a gpuswitch 2` (force discrete GPU if applicable) |
+| `pmset` | `sudo pmset -a sleep 0 displaysleep 0 disksleep 0 powernap 0` (prevent sleep/dimming during benchmarks) |
 
 ### 8.2 Commands
 
