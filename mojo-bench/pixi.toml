@@ -8,5 +8,16 @@ platforms = ["osx-arm64"]
 max = ">=26.2"
 
 [tasks]
-bench-all = "mojo run kernels/bench_vec_add.mojo"
 bench-smoke = "mojo run kernels/bench_vec_add.mojo"
+bench-matmul = "mojo run kernels/bench_matmul.mojo"
+bench-softmax = "mojo run kernels/bench_softmax.mojo"
+bench-rope = "mojo run kernels/bench_rope.mojo"
+bench-isoquant = "mojo run kernels/bench_isoquant_rotate.mojo"
+bench-kv-compress = "mojo run kernels/bench_kv_compress.mojo"
+bench-fused-attn = "mojo run kernels/bench_fused_attention.mojo"
+bench-all = """mojo run kernels/bench_matmul.mojo && \
+mojo run kernels/bench_softmax.mojo && \
+mojo run kernels/bench_rope.mojo && \
+mojo run kernels/bench_isoquant_rotate.mojo && \
+mojo run kernels/bench_kv_compress.mojo && \
+mojo run kernels/bench_fused_attention.mojo"""
