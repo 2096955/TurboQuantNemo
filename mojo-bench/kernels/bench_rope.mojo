@@ -65,57 +65,47 @@ fn gpu_rope_kernel[
     For each position and dimension pair (2i, 2i+1):
     out[2i]   = input[2i]   * cos[i] - input[2i+1] * sin[i]
     out[2i+1] = input[2i+1] * cos[i] + input[2i]   * sin[i]
+
+    Each thread processes one dimension PAIR to avoid race conditions.
     """
     var tid = block_idx.x * block_dim.x + thread_idx.x
 
-    # Flatten: [batch * num_heads * seq_len * head_dim]
-    var total_elements = 1 * NUM_HEADS * seq_len * head_dim
+    # Total number of dimension PAIRS (not individual elements)
+    var total_pairs = 1 * NUM_HEADS * seq_len * (head_dim // 2)
 
-    if tid >= total_elements:
+    if tid >= total_pairs:
         return
 
-    # Decode position in input tensor
-    var head_idx = (tid // head_dim) % NUM_HEADS
-    var pos = (tid // head_dim) // NUM_HEADS
-    var dim = tid % head_dim
+    # Decode position in input tensor for this pair
+    var pair_idx_in_head = tid % (head_dim // 2)
+    var head_idx = (tid // (head_dim // 2)) % NUM_HEADS
+    var pos = (tid // (head_dim // 2)) // NUM_HEADS
 
-    # RoPE only applies to pairs
-    if dim % 2 == 1:
-        # Odd dimension: handled by even dimension's pair computation
-        # But we still need to compute it
-        var pair_dim = dim - 1
-        var freq_idx = pos * (head_dim // 2) + (pair_dim // 2)
+    # Calculate indices for the dimension pair (2i, 2i+1)
+    var even_idx = (pos * NUM_HEADS + head_idx) * head_dim + (pair_idx_in_head * 2)
+    var odd_idx = even_idx + 1
 
-        var cos_val = Float32(cos_table[freq_idx])
-        var sin_val = Float32(sin_table[freq_idx])
+    # Get frequency table index
+    var freq_idx = pos * (head_dim // 2) + pair_idx_in_head
 
-        var even_val = Float32(input[tid - 1])  # input[2i]
-        var odd_val = Float32(input[tid])       # input[2i+1]
+    var cos_val = Float32(cos_table[freq_idx])
+    var sin_val = Float32(sin_table[freq_idx])
 
-        # out[2i+1] = input[2i+1] * cos + input[2i] * sin
-        var result = odd_val * cos_val + even_val * sin_val
+    # Read BOTH input values BEFORE writing ANY output (avoids race condition)
+    var x0 = Float32(input[even_idx])  # input[2i]
+    var x1 = Float32(input[odd_idx])   # input[2i+1]
 
-        if dtype == DType.float16:
-            output[tid] = Float16(result)
-        else:
-            output[tid] = result
+    # Compute both output values
+    var out_even = x0 * cos_val - x1 * sin_val
+    var out_odd = x0 * sin_val + x1 * cos_val
+
+    # Write both outputs
+    if dtype == DType.float16:
+        output[even_idx] = Float16(out_even)
+        output[odd_idx] = Float16(out_odd)
     else:
-        # Even dimension: compute both pair elements
-        var freq_idx = pos * (head_dim // 2) + (dim // 2)
-
-        var cos_val = Float32(cos_table[freq_idx])
-        var sin_val = Float32(sin_table[freq_idx])
-
-        var even_val = Float32(input[tid])      # input[2i]
-        var odd_val = Float32(input[tid + 1])   # input[2i+1]
-
-        # out[2i] = input[2i] * cos - input[2i+1] * sin
-        var result = even_val * cos_val - odd_val * sin_val
-
-        if dtype == DType.float16:
-            output[tid] = Float16(result)
-        else:
-            output[tid] = result
+        output[even_idx] = out_even
+        output[odd_idx] = out_odd
 
 
 fn bench_rope_shape[
@@ -172,9 +162,10 @@ fn bench_rope_shape[
 
     ctx.synchronize()
 
-    # Grid configuration
+    # Grid configuration: launch one thread per dimension PAIR, not per element
+    var total_pairs = total_elements // 2
     var threads_per_block = 256
-    var blocks = (total_elements + threads_per_block - 1) // threads_per_block
+    var blocks = (total_pairs + threads_per_block - 1) // threads_per_block
 
     # Warmup
     for _ in range(WARMUP):
