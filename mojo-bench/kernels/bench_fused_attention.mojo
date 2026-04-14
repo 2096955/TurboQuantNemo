@@ -481,8 +481,322 @@ fn bench_fused_attention(
     return total_time_us
 
 
+fn hand_fused_attention_cpu(
+    Q: UnsafePointer[Float32],
+    K: UnsafePointer[Float32],
+    V: UnsafePointer[Float32],
+    block_matrices: UnsafePointer[Float32],
+    output: UnsafePointer[Float32],
+    H: Int, S_q: Int, S_kv: Int, D: Int,
+    scale: Float32,
+    use_hadamard: Bool
+) -> Bool:
+    """Hand-fused single-kernel attention with online softmax.
+
+    No intermediate materialization of attention weights.
+    Uses running max/sum/output for numerically stable online softmax.
+
+    Returns: True if successful, False if infeasible on this platform.
+
+    WARNING: This is a CPU-only reference implementation. True single-kernel
+    Metal fusion would require custom shader code, which is not available
+    on Mojo Tier 3. This implementation demonstrates the algorithm correctness.
+    """
+    var n_blocks = D // BLOCK_SIZE
+    var output_rot_size = BATCH * H * S_q * D
+    var output_rot = UnsafePointer[Float32].alloc(output_rot_size)
+
+    # Initialize output_rot to zero
+    for i in range(output_rot_size):
+        output_rot[i] = 0.0
+
+    # For each batch and head
+    for b in range(BATCH):
+        for h in range(H):
+            for s in range(S_q):
+                # Per-query online softmax state
+                var running_max = Float32(-1e9)
+                var running_sum = Float32(0.0)
+
+                # Temporary output accumulator (d_k dimensions)
+                var running_output = UnsafePointer[Float32].alloc(D)
+                for d in range(D):
+                    running_output[d] = 0.0
+
+                # Online softmax: iterate over all keys
+                for t in range(S_kv):
+                    # Compute score = dot(q, k[t]) * scale
+                    var score = Float32(0.0)
+                    var q_base = b * H * S_q * D + h * S_q * D + s * D
+                    var k_base = b * H * S_kv * D + h * S_kv * D + t * D
+
+                    for d in range(D):
+                        score += Q[q_base + d] * K[k_base + d]
+                    score *= scale
+
+                    # Update running max and apply correction
+                    var old_max = running_max
+                    if score > running_max:
+                        running_max = score
+
+                    var correction = exp(old_max - running_max)
+
+                    # Update running sum with correction
+                    running_sum = running_sum * correction + exp(score - running_max)
+
+                    # Update running output with correction and new value contribution
+                    var exp_score = exp(score - running_max)
+                    var v_base = b * H * S_kv * D + h * S_kv * D + t * D
+
+                    for d in range(D):
+                        running_output[d] = running_output[d] * correction + exp_score * V[v_base + d]
+
+                # Normalize final output
+                var out_base = b * H * S_q * D + h * S_q * D + s * D
+                for d in range(D):
+                    output_rot[out_base + d] = running_output[d] / running_sum
+
+                running_output.free()
+
+    # Step 4: Inverse rotation (same as other variants)
+    for b in range(BATCH):
+        var out_base = b * H * S_q * D
+        inverse_rotate_cpu(output_rot.offset(out_base), block_matrices, output.offset(out_base), H, S_q, D, use_hadamard)
+
+    output_rot.free()
+    return True
+
+
+fn dense_rotate_inverse_cpu(
+    x_rot: UnsafePointer[Float32],
+    dense_matrix: UnsafePointer[Float32],
+    out: UnsafePointer[Float32],
+    H: Int, S: Int, D: Int
+):
+    """Inverse rotation using DENSE D×D matrix (TurboQuant style).
+
+    x_rot: (H, S, D) in rotated space
+    dense_matrix: (H, D, D) full rotation matrix (row-major)
+    out: (H, S, D) in original space
+
+    This is O(D²) per head per token, vs O(D log D) for IsoQuant.
+    """
+    for h in range(H):
+        for s in range(S):
+            var x_base = h * S * D + s * D
+            var mat_base = h * D * D
+
+            # Dense matmul: out = x_rot @ dense_matrix.T
+            for i in range(D):
+                var sum = Float32(0.0)
+                for j in range(D):
+                    # Transposed access: dense_matrix[h, i, j] for matrix.T
+                    sum += x_rot[x_base + j] * dense_matrix[mat_base + i * D + j]
+                out[x_base + i] = sum
+
+
+fn bench_turboquant_unfused(
+    ctx: DeviceContext,
+    T: Int
+) -> (Float64, Float64, Float64, Float64, Float64):
+    """Benchmark TurboQuant attention (dense rotation) with per-step timing.
+
+    Same pipeline as IsoQuant but uses O(D²) dense rotation instead of
+    O(D log D) structured rotation.
+
+    Returns: (total_time_us, qk_time_us, softmax_time_us, v_time_us, inverse_time_us)
+    """
+    var H = NUM_HEADS
+    var D = HEAD_DIM
+    var S_q = 1
+    var S_kv = T
+
+    var scale = Float32(1.0 / sqrt(Float64(D)))
+
+    # Allocate tensors
+    var q_size = BATCH * H * S_q * D
+    var kv_size = BATCH * H * S_kv * D
+    var scores_size = BATCH * H * S_q * S_kv
+    var dense_mat_size = H * D * D  # Full D×D per head (vs block-diagonal)
+
+    var Q = UnsafePointer[Float32].alloc(q_size)
+    var K = UnsafePointer[Float32].alloc(kv_size)
+    var V = UnsafePointer[Float32].alloc(kv_size)
+    var dense_matrices = UnsafePointer[Float32].alloc(dense_mat_size)
+
+    var scores = UnsafePointer[Float32].alloc(scores_size)
+    var attn_weights = UnsafePointer[Float32].alloc(scores_size)
+    var output_rot = UnsafePointer[Float32].alloc(q_size)
+    var output = UnsafePointer[Float32].alloc(q_size)
+
+    # Initialize with seed=42
+    seed(42)
+    for i in range(q_size):
+        Q[i] = Float32(random_float64() * 2.0 - 1.0)
+    for i in range(kv_size):
+        K[i] = Float32(random_float64() * 2.0 - 1.0)
+        V[i] = Float32(random_float64() * 2.0 - 1.0)
+
+    # Generate dense rotation matrices (random orthogonal via QR would be proper,
+    # but for timing purposes we use random normalized matrices)
+    for i in range(dense_mat_size):
+        dense_matrices[i] = Float32(random_float64() * 2.0 - 1.0)
+
+    # Warmup
+    for _ in range(WARMUP):
+        for b in range(BATCH):
+            for h in range(H):
+                var q_base = b * H * S_q * D + h * S_q * D
+                var k_base = b * H * S_kv * D + h * S_kv * D
+                var scores_base = b * H * S_q * S_kv + h * S_q * S_kv
+                matmul_cpu(Q.offset(q_base), K.offset(k_base), scores.offset(scores_base), S_q, S_kv, D, transpose_b=True)
+
+        softmax_cpu(scores, attn_weights, BATCH, H, S_q, S_kv, scale)
+
+        for b in range(BATCH):
+            for h in range(H):
+                var attn_base = b * H * S_q * S_kv + h * S_q * S_kv
+                var v_base = b * H * S_kv * D + h * S_kv * D
+                var out_base = b * H * S_q * D + h * S_q * D
+                matmul_cpu(attn_weights.offset(attn_base), V.offset(v_base), output_rot.offset(out_base), S_q, D, S_kv)
+
+        for b in range(BATCH):
+            var out_base = b * H * S_q * D
+            dense_rotate_inverse_cpu(output_rot.offset(out_base), dense_matrices, output.offset(out_base), H, S_q, D)
+
+    # Timed iterations with per-step breakdown
+    var qk_total = 0
+    var softmax_total = 0
+    var v_total = 0
+    var inverse_total = 0
+
+    var start_all = perf_counter_ns()
+    for _ in range(ITERS):
+        # Step 1: QK
+        var start_qk = perf_counter_ns()
+        for b in range(BATCH):
+            for h in range(H):
+                var q_base = b * H * S_q * D + h * S_q * D
+                var k_base = b * H * S_kv * D + h * S_kv * D
+                var scores_base = b * H * S_q * S_kv + h * S_q * S_kv
+                matmul_cpu(Q.offset(q_base), K.offset(k_base), scores.offset(scores_base), S_q, S_kv, D, transpose_b=True)
+        var qk_elapsed = perf_counter_ns() - start_qk
+        qk_total += qk_elapsed
+
+        # Step 2: Softmax
+        var start_softmax = perf_counter_ns()
+        softmax_cpu(scores, attn_weights, BATCH, H, S_q, S_kv, scale)
+        var softmax_elapsed = perf_counter_ns() - start_softmax
+        softmax_total += softmax_elapsed
+
+        # Step 3: V accumulation
+        var start_v = perf_counter_ns()
+        for b in range(BATCH):
+            for h in range(H):
+                var attn_base = b * H * S_q * S_kv + h * S_q * S_kv
+                var v_base = b * H * S_kv * D + h * S_kv * D
+                var out_base = b * H * S_q * D + h * S_q * D
+                matmul_cpu(attn_weights.offset(attn_base), V.offset(v_base), output_rot.offset(out_base), S_q, D, S_kv)
+        var v_elapsed = perf_counter_ns() - start_v
+        v_total += v_elapsed
+
+        # Step 4: Dense inverse rotation (TurboQuant O(D²))
+        var start_inverse = perf_counter_ns()
+        for b in range(BATCH):
+            var out_base = b * H * S_q * D
+            dense_rotate_inverse_cpu(output_rot.offset(out_base), dense_matrices, output.offset(out_base), H, S_q, D)
+        var inverse_elapsed = perf_counter_ns() - start_inverse
+        inverse_total += inverse_elapsed
+
+    var total_elapsed = perf_counter_ns() - start_all
+
+    var total_time_us = Float64(total_elapsed) / Float64(ITERS) / 1000.0
+    var qk_time_us = Float64(qk_total) / Float64(ITERS) / 1000.0
+    var softmax_time_us = Float64(softmax_total) / Float64(ITERS) / 1000.0
+    var v_time_us = Float64(v_total) / Float64(ITERS) / 1000.0
+    var inverse_time_us = Float64(inverse_total) / Float64(ITERS) / 1000.0
+
+    # Cleanup
+    Q.free()
+    K.free()
+    V.free()
+    dense_matrices.free()
+    scores.free()
+    attn_weights.free()
+    output_rot.free()
+    output.free()
+
+    return (total_time_us, qk_time_us, softmax_time_us, v_time_us, inverse_time_us)
+
+
+fn bench_hand_fused_attention(
+    ctx: DeviceContext,
+    T: Int,
+    use_hadamard: Bool
+) -> Float64:
+    """Benchmark hand-fused attention (online softmax, no intermediate storage).
+
+    Returns: total_time_us (or 0.0 if skipped)
+    """
+    var H = NUM_HEADS
+    var D = HEAD_DIM
+    var S_q = 1
+    var S_kv = T
+    var n_blocks = NUM_BLOCKS
+
+    var scale = Float32(1.0 / sqrt(Float64(D)))
+
+    # Allocate tensors
+    var q_size = BATCH * H * S_q * D
+    var kv_size = BATCH * H * S_kv * D
+    var block_mat_size = H * n_blocks * BLOCK_SIZE * BLOCK_SIZE
+
+    var Q = UnsafePointer[Float32].alloc(q_size)
+    var K = UnsafePointer[Float32].alloc(kv_size)
+    var V = UnsafePointer[Float32].alloc(kv_size)
+    var block_matrices = UnsafePointer[Float32].alloc(block_mat_size)
+    var output = UnsafePointer[Float32].alloc(q_size)
+
+    # Initialize with seed=42
+    seed(42)
+    for i in range(q_size):
+        Q[i] = Float32(random_float64() * 2.0 - 1.0)
+    for i in range(kv_size):
+        K[i] = Float32(random_float64() * 2.0 - 1.0)
+        V[i] = Float32(random_float64() * 2.0 - 1.0)
+
+    # Generate rotation matrices
+    for h in range(H):
+        for b in range(n_blocks):
+            var block_offset = h * n_blocks * BLOCK_SIZE * BLOCK_SIZE + b * BLOCK_SIZE * BLOCK_SIZE
+            generate_so4_from_quaternion(block_matrices, block_offset)
+
+    # Warmup
+    for _ in range(WARMUP):
+        var success = hand_fused_attention_cpu(Q, K, V, block_matrices, output, H, S_q, S_kv, D, scale, use_hadamard)
+        if not success:
+            print("WARNING: Hand-fused kernel is CPU-only reference, not GPU-fused")
+
+    # Timed iterations
+    var start = perf_counter_ns()
+    for _ in range(ITERS):
+        var _ = hand_fused_attention_cpu(Q, K, V, block_matrices, output, H, S_q, S_kv, D, scale, use_hadamard)
+    var elapsed = perf_counter_ns() - start
+
+    var total_time_us = Float64(elapsed) / Float64(ITERS) / 1000.0
+
+    # Cleanup
+    Q.free()
+    K.free()
+    V.free()
+    block_matrices.free()
+    output.free()
+
+    return total_time_us
+
+
 fn main() raises:
-    print("=== Mojo Fused Attention Benchmark (IsoQuant) ===")
+    print("=== Mojo Fused Attention Benchmark (IsoQuant vs TurboQuant + Hand-Fused) ===")
     print("Config: B=", BATCH, ", H=", NUM_HEADS, ", D=", HEAD_DIM)
     print("Pipeline: QK -> Softmax -> V -> Inverse Rotation")
     print()
@@ -497,7 +811,7 @@ fn main() raises:
 
     var use_hadamard = True
 
-    print("--- Unfused Attention (4 separate sync points) ---")
+    print("--- IsoQuant Unfused Attention (O(D log D) rotation) ---")
     print()
 
     for i in range(len(seq_lengths)):
@@ -510,8 +824,47 @@ fn main() raises:
         print("  QK matmul:      ", qk_time, "us (", (qk_time / total_time * 100.0), "%)")
         print("  Softmax:        ", softmax_time, "us (", (softmax_time / total_time * 100.0), "%)")
         print("  V matmul:       ", v_time, "us (", (v_time / total_time * 100.0), "%)")
-        print("  Inverse rotate: ", inverse_time, "us (", (inverse_time / total_time * 100.0), "%)")
+        print("  Inverse rotate: ", inverse_time, "us (", (inverse_time / total_time * 100.0), "%) [IsoQuant: WHT + SO(4) blocks]")
         print()
+
+    print()
+    print("--- TurboQuant Unfused Attention (O(D²) dense rotation) ---")
+    print()
+
+    for i in range(len(seq_lengths)):
+        var T = seq_lengths[i]
+        print("Sequence length T =", T)
+
+        var (total_time, qk_time, softmax_time, v_time, inverse_time) = bench_turboquant_unfused(ctx, T)
+
+        print("  Total:          ", total_time, "us")
+        print("  QK matmul:      ", qk_time, "us (", (qk_time / total_time * 100.0), "%)")
+        print("  Softmax:        ", softmax_time, "us (", (softmax_time / total_time * 100.0), "%)")
+        print("  V matmul:       ", v_time, "us (", (v_time / total_time * 100.0), "%)")
+        print("  Inverse rotate: ", inverse_time, "us (", (inverse_time / total_time * 100.0), "%) [TurboQuant: Dense D×D matmul]")
+        print()
+
+    print()
+    print("--- Cost Breakdown Comparison (T=2048) ---")
+    print()
+
+    var T_compare = 2048
+    var (iso_total, iso_qk, iso_softmax, iso_v, iso_inverse) = bench_unfused_attention(ctx, T_compare, use_hadamard)
+    var (turbo_total, turbo_qk, turbo_softmax, turbo_v, turbo_inverse) = bench_turboquant_unfused(ctx, T_compare)
+
+    print("Operation                     | IsoQuant (us) | TurboQuant (us) | Speedup")
+    print("------------------------------|---------------|-----------------|--------")
+    print("QK matmul (T-linear)          |", iso_qk, "|", turbo_qk, "|", turbo_qk / iso_qk, "x")
+    print("Softmax (T-linear)            |", iso_softmax, "|", turbo_softmax, "|", turbo_softmax / iso_softmax, "x")
+    print("V accumulation (T-linear)     |", iso_v, "|", turbo_v, "|", turbo_v / iso_v, "x")
+    print("Inverse rotation              |", iso_inverse, "|", turbo_inverse, "|", turbo_inverse / iso_inverse, "x")
+    print("  (IsoQuant: O(D log D))      |               |                 |")
+    print("  (TurboQuant: O(D²))         |               |                 |")
+    print("TOTAL                         |", iso_total, "|", turbo_total, "|", turbo_total / iso_total, "x")
+    print()
+    print("NOTE: IsoQuant speedup is CONSTANT-FACTOR at rotation steps, NOT asymptotic.")
+    print("      T-linear steps (QK, softmax, V) should be identical modulo noise.")
+    print()
 
     print()
     print("--- Framework-Fused Attention (single sync point) ---")
@@ -528,6 +881,27 @@ fn main() raises:
         print("  Fused time:   ", fused_time, "us")
         print("  Unfused time: ", unfused_total, "us")
         print("  Speedup:      ", speedup, "x")
+        print()
+
+    print()
+    print("--- Hand-Fused Attention (Online Softmax, No Intermediate Storage) ---")
+    print()
+    print("WARNING: This is a CPU-only reference implementation.")
+    print("         True single-kernel Metal fusion requires custom shader code,")
+    print("         which is not available on Mojo Tier 3.")
+    print()
+
+    for i in range(len(seq_lengths)):
+        var T = seq_lengths[i]
+        print("Sequence length T =", T)
+
+        var hand_fused_time = bench_hand_fused_attention(ctx, T, use_hadamard)
+        var (unfused_total, _, _, _, _) = bench_unfused_attention(ctx, T, use_hadamard)
+        var speedup = unfused_total / hand_fused_time
+
+        print("  Hand-fused time: ", hand_fused_time, "us")
+        print("  Unfused time:    ", unfused_total, "us")
+        print("  Speedup:         ", speedup, "x")
         print()
 
     print("=== Fused Attention Benchmark Complete ===")
