@@ -110,6 +110,17 @@ For each kernel x size, report **achieved fraction of roofline** alongside absol
 
 The delta between unfused and framework-fused is a key result — it measures each framework's ability to fuse dispatch and memory traffic. The production pipeline (4 kernels: `fused_qk_dot` -> softmax -> `fused_value_accum` -> `metal_rotate_inverse`) is the artifact from the paper and must be benchmarked in all three variants.
 
+**Fused attention cost breakdown**: The fused attention kernel measures the complete decode-time attention computation including all rotation costs. **Both IsoQuant and TurboQuant variants are measured.** The cost breakdown isolates:
+
+| Sub-operation | IsoQuant Cost | TurboQuant Cost | What Differs |
+|---------------|---------------|-----------------|--------------|
+| (a) Per-query rotation | O(d_k log d_k) structured | O(d_k²) dense | Constant factor: structured vs dense |
+| (b) T-linear key scan (Q·K^T from compressed storage) | O(T · d_k) | O(T · d_k) | Same — both operate in rotated space |
+| (c) T-linear value accumulation (weighted sum) | O(T · d_k) | O(T · d_k) | Same — both accumulate in rotated space |
+| (d) Per-output inverse rotation | O(d_k log d_k) structured | O(d_k²) dense | Constant factor: structured vs dense |
+
+**Critical framing note**: Both IsoQuant and TurboQuant accumulate in rotated space and rotate the output once (self-cancellation). The asymptotic structure is O(d_k² + T·d_k) for TurboQuant and O(d_k log d_k + T·d_k) for IsoQuant — the difference is in the per-query rotation constant, not in T-scaling. The benchmark must frame any speedup as a constant-factor advantage (structured vs dense rotation at d_k=128) unless measured data at multiple T values demonstrates otherwise. If K and V use independent rotations (no self-cancellation), this must be stated explicitly as it changes the cost model to O(T·d_k²) for TurboQuant.
+
 **Novel kernel fairness rule**: For IsoQuant Rotate and KV Compress, provide **two MLX implementations**:
 - **MLX high-level**: Using `mx.matmul`, `mx.gather`, etc. (fair comparison against Mojo)
 - **MLX custom Metal**: Using hand-optimized `.metal` kernels (labeled "hand-optimized Metal", not "MLX")
@@ -315,7 +326,11 @@ Each framework writes a JSON file:
 
 ### 5.1 Per-Kernel Numerical Checks
 
-Both frameworks receive identical inputs from seeded RNG (numpy seed=42, converted to framework tensors). For each kernel, compute:
+Both frameworks receive identical inputs from seeded RNG (numpy seed=42, converted to framework tensors).
+
+**Precision reference for novel kernels**: For novel kernels where MLX has two implementations (high-level and custom Metal), precision validation uses the **high-level implementation as the numerical reference** for both frameworks. The custom Metal implementation's divergence from the high-level reference is reported separately, so the reader can distinguish framework-induced error from hand-optimization-induced error. This matters because the MLX fused Metal decode path has known numerical divergence (max_abs_diff ~4.3 against the composed FP32 reference).
+
+For each kernel, compute:
 
 | Metric | Description |
 |--------|-------------|
@@ -350,7 +365,7 @@ Kernel-chain precision validation using simulated forward passes:
 
 **Threshold justification**: 0.5% perplexity divergence is derived from Dettmers et al. (2022) "LLM.int8()" which established that quantization-induced perplexity changes below 0.5% are imperceptible in downstream task performance. We adopt this as our equivalence threshold.
 
-**Known limitations**: This kernel-chain simulation omits residual connections, LayerNorm, and feed-forward layers. The perplexity delta is therefore a lower bound on actual divergence. This limitation is disclosed in the paper.
+**Known limitations**: This kernel-chain simulation omits residual connections, LayerNorm, and feed-forward layers. The relationship between partial-pipeline and full-pipeline divergence is non-monotonic: residual connections and LayerNorm may dampen error propagation, while additional compute layers may amplify it. We report partial-pipeline divergence as an informative proxy, not a bound. This limitation is disclosed in the paper.
 
 Note: Mojo cannot run full model inference on Apple Silicon (Tier 3), so this gate uses kernel-chain simulation, not end-to-end model serving.
 
@@ -395,7 +410,7 @@ Since Gemini drafts both Mojo and MLX code, there is a risk that Mojo kernels ar
 | **M0** | `scripts/roofline_calibrate.py`, `mojo-bench/harness/noop_dispatch.mojo` | G0 | Hardware calibration correct, dispatch baselines measured |
 | **M1** | `pixi.toml`, `stats.mojo`, `bench_vec_add.mojo` (smoke test) | G1 | Mojo compiles on M4 Max, GPU detected, timing sync correct |
 | **M2** | `bench_matmul.mojo`, `bench_softmax.mojo`, `bench_rope.mojo` | G1 | Kernel equivalence to MLX ops, no unfair advantages, roofline >50% |
-| **M3** | `bench_isoquant_rotate.mojo` (forward + inverse sub-benchmarks), `bench_kv_compress.mojo`, `bench_fused_attention.mojo` (unfused, framework-fused, hand-fused variants) | G1 | Correct rotation math (both paths), quantization fidelity, three-variant fusion pipeline |
+| **M3** | `bench_isoquant_rotate.mojo` (forward + inverse sub-benchmarks), `bench_kv_compress.mojo`, `bench_fused_attention.mojo` (unfused, framework-fused, hand-fused variants; both IsoQuant and TurboQuant pipelines; cost breakdown of rotation vs T-linear ops) | G1 | Correct rotation math (both paths), quantization fidelity, three-variant fusion pipeline, TurboQuant variant measured, cost framing verified |
 | **M4** | `scripts/benchmark_mlx_kernels.py` (with `mx.compile()`, `stream=mx.gpu`, two implementations for novel kernels) | G2 | Methodology parity with Mojo side, AMX routing controlled |
 | **G2.5** | Perplexity validation script | G2.5 | Kernel-chain precision, perplexity divergence check |
 | **M5** | `scripts/compare_mojo_vs_mlx.py` | G3+G4 | Statistical methods (BCa, geometric mean, Cohen's d), chart accuracy, roofline plots, log2 ratio visualization |
