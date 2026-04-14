@@ -7,26 +7,26 @@ Two sub-benchmarks:
 
 Each includes dense (full DxD matmul) vs structured (4x4 block) implementations.
 """
-from gpu.host import DeviceContext
-from gpu import thread_idx, block_idx, block_dim
+from std.gpu.host import DeviceContext
+from std.gpu import thread_idx, block_idx, block_dim
 from layout import LayoutTensor, Layout
-from memory import UnsafePointer
-from time import perf_counter_ns
-from random import seed, random_float64
-from math import sqrt
+from std.memory import UnsafePointer
+from std.time import perf_counter_ns
+from std.random import seed, random_float64
+from std.math import sqrt
 
-alias WARMUP = 10
-alias ITERS = 50
-alias FP32 = DType.float32
+comptime WARMUP = 10
+comptime ITERS = 50
+comptime FP32 = DType.float32
 
 # IsoQuant config
-alias NUM_HEADS = 8  # GQA heads
-alias HEAD_DIM = 128
-alias BLOCK_SIZE = 4
-alias NUM_BLOCKS = HEAD_DIM // BLOCK_SIZE  # 32 blocks per head
+comptime NUM_HEADS = 8  # GQA heads
+comptime HEAD_DIM = 128
+comptime BLOCK_SIZE = 4
+comptime NUM_BLOCKS = HEAD_DIM // BLOCK_SIZE  # 32 blocks per head
 
 
-fn walsh_hadamard_inplace(x: UnsafePointer[Float32], D: Int):
+def walsh_hadamard_inplace(x: UnsafePointer[Float32, MutAnyOrigin], D: Int):
     """In-place Walsh-Hadamard Transform on vector of length D.
 
     D must be power of 2. Implements butterfly pattern with normalization.
@@ -49,12 +49,12 @@ fn walsh_hadamard_inplace(x: UnsafePointer[Float32], D: Int):
         x[i] *= scale
 
 
-fn inverse_walsh_hadamard_inplace(x: UnsafePointer[Float32], D: Int):
+def inverse_walsh_hadamard_inplace(x: UnsafePointer[Float32, MutAnyOrigin], D: Int):
     """Inverse Walsh-Hadamard Transform (same as forward for WHT)."""
     walsh_hadamard_inplace(x, D)
 
 
-fn generate_so4_from_quaternion(mat: UnsafePointer[Float32], offset: Int):
+def generate_so4_from_quaternion(mat: UnsafePointer[Float32, MutAnyOrigin], offset: Int):
     """Generate a proper SO(4) left-isoclinic rotation matrix from a random unit quaternion.
 
     Constructs a 4x4 orthogonal matrix from quaternion (a, b, c, d) using left-isoclinic form:
@@ -108,10 +108,10 @@ fn generate_so4_from_quaternion(mat: UnsafePointer[Float32], offset: Int):
     mat[offset + 3*4 + 3] = a
 
 
-fn structured_rotate_forward_cpu(
-    x: UnsafePointer[Float32],
-    block_matrices: UnsafePointer[Float32],
-    out: UnsafePointer[Float32],
+def structured_rotate_forward_cpu(
+    x: UnsafePointer[Float32, MutAnyOrigin],
+    block_matrices: UnsafePointer[Float32, MutAnyOrigin],
+    dst: UnsafePointer[Float32, MutAnyOrigin],
     H: Int,
     S: Int,
     D: Int,
@@ -120,8 +120,8 @@ fn structured_rotate_forward_cpu(
     """Forward rotation: WHT + block matmul.
 
     x: (H, S, D)
-    block_matrices: (H, n_blocks, 4, 4) — note: stored as transposed for forward
-    out: (H, S, D)
+    block_matrices: (H, n_blocks, 4, 4) -- stored as transposed for forward.
+    dst: (H, S, D).
     """
     var n_blocks = D // BLOCK_SIZE
 
@@ -133,26 +133,32 @@ fn structured_rotate_forward_cpu(
             if use_hadamard:
                 # Copy to output, apply WHT in-place
                 for d in range(D):
-                    out[x_base + d] = x[x_base + d]
-                walsh_hadamard_inplace(out.offset(x_base), D)
+                    dst[x_base + d] = x[x_base + d]
+                walsh_hadamard_inplace(dst + x_base, D)
             else:
                 for d in range(D):
-                    out[x_base + d] = x[x_base + d]
+                    dst[x_base + d] = x[x_base + d]
 
             # Apply block rotations
             for b in range(n_blocks):
                 # Get 4-element block from output (post-WHT)
                 var block_start = x_base + b * BLOCK_SIZE
-                var temp_in = UnsafePointer[Float32].alloc(BLOCK_SIZE)
+                var temp_in_list = List[Float32](capacity=BLOCK_SIZE)
+                for _ in range(BLOCK_SIZE):
+                    temp_in_list.append(0.0)
+                var temp_in = temp_in_list.unsafe_ptr()
                 for i in range(BLOCK_SIZE):
-                    temp_in[i] = out[block_start + i]
+                    temp_in[i] = dst[block_start + i]
 
                 # Get 4x4 rotation matrix for this head and block
                 var mat_base = h * n_blocks * BLOCK_SIZE * BLOCK_SIZE + b * BLOCK_SIZE * BLOCK_SIZE
 
                 # Matmul: temp_out = temp_in @ block_matrices[h, b]
                 # block_matrices stored as (4, 4) in row-major
-                var temp_out = UnsafePointer[Float32].alloc(BLOCK_SIZE)
+                var temp_out_list = List[Float32](capacity=BLOCK_SIZE)
+                for _ in range(BLOCK_SIZE):
+                    temp_out_list.append(0.0)
+                var temp_out = temp_out_list.unsafe_ptr()
                 for i in range(BLOCK_SIZE):
                     temp_out[i] = 0.0
                     for j in range(BLOCK_SIZE):
@@ -160,16 +166,13 @@ fn structured_rotate_forward_cpu(
 
                 # Write back
                 for i in range(BLOCK_SIZE):
-                    out[block_start + i] = temp_out[i]
-
-                temp_in.free()
-                temp_out.free()
+                    dst[block_start + i] = temp_out[i]
 
 
-fn structured_rotate_inverse_cpu(
-    x_rot: UnsafePointer[Float32],
-    block_matrices: UnsafePointer[Float32],
-    out: UnsafePointer[Float32],
+def structured_rotate_inverse_cpu(
+    x_rot: UnsafePointer[Float32, MutAnyOrigin],
+    block_matrices: UnsafePointer[Float32, MutAnyOrigin],
+    dst: UnsafePointer[Float32, MutAnyOrigin],
     H: Int,
     S: Int,
     D: Int,
@@ -177,9 +180,9 @@ fn structured_rotate_inverse_cpu(
 ):
     """Inverse rotation: block matmul (transposed) + inverse WHT.
 
-    x_rot: (H, S, D)
-    block_matrices: (H, n_blocks, 4, 4) — used transposed for inverse
-    out: (H, S, D)
+    x_rot: (H, S, D).
+    block_matrices: (H, n_blocks, 4, 4) -- used transposed for inverse.
+    dst: (H, S, D).
     """
     var n_blocks = D // BLOCK_SIZE
 
@@ -189,40 +192,43 @@ fn structured_rotate_inverse_cpu(
 
             # Copy input to output
             for d in range(D):
-                out[x_base + d] = x_rot[x_base + d]
+                dst[x_base + d] = x_rot[x_base + d]
 
             # Apply block rotations (transposed)
             for b in range(n_blocks):
                 var block_start = x_base + b * BLOCK_SIZE
-                var temp_in = UnsafePointer[Float32].alloc(BLOCK_SIZE)
+                var temp_in_list = List[Float32](capacity=BLOCK_SIZE)
+                for _ in range(BLOCK_SIZE):
+                    temp_in_list.append(0.0)
+                var temp_in = temp_in_list.unsafe_ptr()
                 for i in range(BLOCK_SIZE):
-                    temp_in[i] = out[block_start + i]
+                    temp_in[i] = dst[block_start + i]
 
                 var mat_base = h * n_blocks * BLOCK_SIZE * BLOCK_SIZE + b * BLOCK_SIZE * BLOCK_SIZE
 
                 # Matmul with transpose: temp_out = temp_in @ block_matrices[h, b].T
                 # Transpose means swap indices: temp_out[i] = sum_j temp_in[j] * mat[i][j]
-                var temp_out = UnsafePointer[Float32].alloc(BLOCK_SIZE)
+                var temp_out_list = List[Float32](capacity=BLOCK_SIZE)
+                for _ in range(BLOCK_SIZE):
+                    temp_out_list.append(0.0)
+                var temp_out = temp_out_list.unsafe_ptr()
                 for i in range(BLOCK_SIZE):
                     temp_out[i] = 0.0
                     for j in range(BLOCK_SIZE):
                         temp_out[i] += temp_in[j] * block_matrices[mat_base + i * BLOCK_SIZE + j]
 
                 for i in range(BLOCK_SIZE):
-                    out[block_start + i] = temp_out[i]
-
-                temp_in.free()
-                temp_out.free()
+                    dst[block_start + i] = temp_out[i]
 
             # Apply inverse WHT if enabled
             if use_hadamard:
-                inverse_walsh_hadamard_inplace(out.offset(x_base), D)
+                inverse_walsh_hadamard_inplace(dst + x_base, D)
 
 
-fn dense_rotate_forward_cpu(
-    x: UnsafePointer[Float32],
-    dense_matrix: UnsafePointer[Float32],
-    out: UnsafePointer[Float32],
+def dense_rotate_forward_cpu(
+    x: UnsafePointer[Float32, MutAnyOrigin],
+    dense_matrix: UnsafePointer[Float32, MutAnyOrigin],
+    dst: UnsafePointer[Float32, MutAnyOrigin],
     H: Int,
     S: Int,
     D: Int,
@@ -230,9 +236,9 @@ fn dense_rotate_forward_cpu(
 ):
     """Dense forward rotation: WHT + full DxD matmul.
 
-    x: (H, S, D)
-    dense_matrix: (H, D, D)
-    out: (H, S, D)
+    x: (H, S, D).
+    dense_matrix: (H, D, D).
+    dst: (H, S, D).
     """
     for h in range(H):
         for s in range(S):
@@ -241,30 +247,31 @@ fn dense_rotate_forward_cpu(
             # Apply WHT if enabled
             if use_hadamard:
                 for d in range(D):
-                    out[x_base + d] = x[x_base + d]
-                walsh_hadamard_inplace(out.offset(x_base), D)
+                    dst[x_base + d] = x[x_base + d]
+                walsh_hadamard_inplace(dst + x_base, D)
             else:
                 for d in range(D):
-                    out[x_base + d] = x[x_base + d]
+                    dst[x_base + d] = x[x_base + d]
 
             # Full DxD matmul
-            var temp = UnsafePointer[Float32].alloc(D)
+            var temp_list = List[Float32](capacity=D)
+            for _ in range(D):
+                temp_list.append(0.0)
+            var temp = temp_list.unsafe_ptr()
             for i in range(D):
-                temp[i] = out[x_base + i]
+                temp[i] = dst[x_base + i]
 
             var mat_base = h * D * D
             for i in range(D):
-                out[x_base + i] = 0.0
+                dst[x_base + i] = 0.0
                 for j in range(D):
-                    out[x_base + i] += temp[j] * dense_matrix[mat_base + j * D + i]
-
-            temp.free()
+                    dst[x_base + i] += temp[j] * dense_matrix[mat_base + j * D + i]
 
 
-fn dense_rotate_inverse_cpu(
-    x_rot: UnsafePointer[Float32],
-    dense_matrix: UnsafePointer[Float32],
-    out: UnsafePointer[Float32],
+def dense_rotate_inverse_cpu(
+    x_rot: UnsafePointer[Float32, MutAnyOrigin],
+    dense_matrix: UnsafePointer[Float32, MutAnyOrigin],
+    dst: UnsafePointer[Float32, MutAnyOrigin],
     H: Int,
     S: Int,
     D: Int,
@@ -272,34 +279,35 @@ fn dense_rotate_inverse_cpu(
 ):
     """Dense inverse rotation: DxD matmul (transposed) + inverse WHT.
 
-    x_rot: (H, S, D)
-    dense_matrix: (H, D, D)
-    out: (H, S, D)
+    x_rot: (H, S, D).
+    dense_matrix: (H, D, D).
+    dst: (H, S, D).
     """
     for h in range(H):
         for s in range(S):
             var x_base = h * S * D + s * D
 
             # Copy input
-            var temp = UnsafePointer[Float32].alloc(D)
+            var temp_list = List[Float32](capacity=D)
+            for _ in range(D):
+                temp_list.append(0.0)
+            var temp = temp_list.unsafe_ptr()
             for d in range(D):
                 temp[d] = x_rot[x_base + d]
 
             # Full DxD matmul (transposed)
             var mat_base = h * D * D
             for i in range(D):
-                out[x_base + i] = 0.0
+                dst[x_base + i] = 0.0
                 for j in range(D):
-                    out[x_base + i] += temp[j] * dense_matrix[mat_base + i * D + j]
-
-            temp.free()
+                    dst[x_base + i] += temp[j] * dense_matrix[mat_base + i * D + j]
 
             # Apply inverse WHT if enabled
             if use_hadamard:
-                inverse_walsh_hadamard_inplace(out.offset(x_base), D)
+                inverse_walsh_hadamard_inplace(dst + x_base, D)
 
 
-fn compute_rmse(a: UnsafePointer[Float32], b: UnsafePointer[Float32], size: Int) -> Float64:
+def compute_rmse(a: UnsafePointer[Float32, MutAnyOrigin], b: UnsafePointer[Float32, MutAnyOrigin], size: Int) -> Float64:
     """Compute RMSE between two arrays."""
     var sum_sq = 0.0
     for i in range(size):
@@ -308,7 +316,7 @@ fn compute_rmse(a: UnsafePointer[Float32], b: UnsafePointer[Float32], size: Int)
     return sqrt(sum_sq / Float64(size))
 
 
-fn bench_forward_rotation(ctx: DeviceContext, S: Int, use_hadamard: Bool) -> (Float64, Float64, Float64, Float64):
+def bench_forward_rotation(ctx: DeviceContext, S: Int, use_hadamard: Bool) -> Tuple[Float64, Float64, Float64, Float64]:
     """Benchmark forward rotation for sequence length S.
 
     Returns: (dense_time_us, structured_time_us, speedup, rmse)
@@ -322,11 +330,26 @@ fn bench_forward_rotation(ctx: DeviceContext, S: Int, use_hadamard: Bool) -> (Fl
     var dense_mat_size = H * D * D
 
     # Allocate buffers
-    var input = UnsafePointer[Float32].alloc(input_size)
-    var block_matrices = UnsafePointer[Float32].alloc(block_mat_size)
-    var dense_matrix = UnsafePointer[Float32].alloc(dense_mat_size)
-    var out_structured = UnsafePointer[Float32].alloc(input_size)
-    var out_dense = UnsafePointer[Float32].alloc(input_size)
+    var input_list = List[Float32](capacity=input_size)
+    for _ in range(input_size):
+        input_list.append(0.0)
+    var input = input_list.unsafe_ptr()
+    var block_matrices_list = List[Float32](capacity=block_mat_size)
+    for _ in range(block_mat_size):
+        block_matrices_list.append(0.0)
+    var block_matrices = block_matrices_list.unsafe_ptr()
+    var dense_matrix_list = List[Float32](capacity=dense_mat_size)
+    for _ in range(dense_mat_size):
+        dense_matrix_list.append(0.0)
+    var dense_matrix = dense_matrix_list.unsafe_ptr()
+    var out_structured_list = List[Float32](capacity=input_size)
+    for _ in range(input_size):
+        out_structured_list.append(0.0)
+    var out_structured = out_structured_list.unsafe_ptr()
+    var out_dense_list = List[Float32](capacity=input_size)
+    for _ in range(input_size):
+        out_dense_list.append(0.0)
+    var out_dense = out_dense_list.unsafe_ptr()
 
     # Initialize with seed=42
     seed(42)
@@ -379,17 +402,10 @@ fn bench_forward_rotation(ctx: DeviceContext, S: Int, use_hadamard: Bool) -> (Fl
     # Compute speedup
     var speedup = dense_time_us / structured_time_us
 
-    # Cleanup
-    input.free()
-    block_matrices.free()
-    dense_matrix.free()
-    out_structured.free()
-    out_dense.free()
-
-    return (dense_time_us, structured_time_us, speedup, rmse)
+    return Tuple(dense_time_us, structured_time_us, speedup, rmse)
 
 
-fn bench_inverse_rotation(ctx: DeviceContext, use_hadamard: Bool) -> (Float64, Float64, Float64, Float64, Float64):
+def bench_inverse_rotation(ctx: DeviceContext, use_hadamard: Bool) -> Tuple[Float64, Float64, Float64, Float64, Float64]:
     """Benchmark inverse rotation for decode (S=1).
 
     Returns: (dense_time_us, structured_time_us, speedup, rmse, roundtrip_rmse)
@@ -404,14 +420,38 @@ fn bench_inverse_rotation(ctx: DeviceContext, use_hadamard: Bool) -> (Float64, F
     var dense_mat_size = H * D * D
 
     # Allocate buffers
-    var input = UnsafePointer[Float32].alloc(input_size)
-    var block_matrices = UnsafePointer[Float32].alloc(block_mat_size)
-    var dense_matrix = UnsafePointer[Float32].alloc(dense_mat_size)
-    var rotated_structured = UnsafePointer[Float32].alloc(input_size)
-    var rotated_dense = UnsafePointer[Float32].alloc(input_size)
-    var out_structured = UnsafePointer[Float32].alloc(input_size)
-    var out_dense = UnsafePointer[Float32].alloc(input_size)
-    var roundtrip = UnsafePointer[Float32].alloc(input_size)
+    var input_list = List[Float32](capacity=input_size)
+    for _ in range(input_size):
+        input_list.append(0.0)
+    var input = input_list.unsafe_ptr()
+    var block_matrices_list = List[Float32](capacity=block_mat_size)
+    for _ in range(block_mat_size):
+        block_matrices_list.append(0.0)
+    var block_matrices = block_matrices_list.unsafe_ptr()
+    var dense_matrix_list = List[Float32](capacity=dense_mat_size)
+    for _ in range(dense_mat_size):
+        dense_matrix_list.append(0.0)
+    var dense_matrix = dense_matrix_list.unsafe_ptr()
+    var rotated_structured_list = List[Float32](capacity=input_size)
+    for _ in range(input_size):
+        rotated_structured_list.append(0.0)
+    var rotated_structured = rotated_structured_list.unsafe_ptr()
+    var rotated_dense_list = List[Float32](capacity=input_size)
+    for _ in range(input_size):
+        rotated_dense_list.append(0.0)
+    var rotated_dense = rotated_dense_list.unsafe_ptr()
+    var out_structured_list = List[Float32](capacity=input_size)
+    for _ in range(input_size):
+        out_structured_list.append(0.0)
+    var out_structured = out_structured_list.unsafe_ptr()
+    var out_dense_list = List[Float32](capacity=input_size)
+    for _ in range(input_size):
+        out_dense_list.append(0.0)
+    var out_dense = out_dense_list.unsafe_ptr()
+    var roundtrip_list = List[Float32](capacity=input_size)
+    for _ in range(input_size):
+        roundtrip_list.append(0.0)
+    var roundtrip = roundtrip_list.unsafe_ptr()
 
     # Initialize with seed=42
     seed(42)
@@ -471,20 +511,10 @@ fn bench_inverse_rotation(ctx: DeviceContext, use_hadamard: Bool) -> (Float64, F
 
     var speedup = dense_time_us / structured_time_us
 
-    # Cleanup
-    input.free()
-    block_matrices.free()
-    dense_matrix.free()
-    rotated_structured.free()
-    rotated_dense.free()
-    out_structured.free()
-    out_dense.free()
-    roundtrip.free()
-
-    return (dense_time_us, structured_time_us, speedup, rmse, roundtrip_rmse)
+    return Tuple(dense_time_us, structured_time_us, speedup, rmse, roundtrip_rmse)
 
 
-fn compute_bandwidth(H: Int, S: Int, D: Int, elapsed_us: Float64, use_hadamard: Bool) -> Float64:
+def compute_bandwidth(H: Int, S: Int, D: Int, elapsed_us: Float64, use_hadamard: Bool) -> Float64:
     """Compute memory bandwidth in GB/s.
 
     Reads: input (H*S*D) + block_matrices (H*n_blocks*4*4) + WHT passes
@@ -510,7 +540,7 @@ fn compute_bandwidth(H: Int, S: Int, D: Int, elapsed_us: Float64, use_hadamard: 
     return total_bytes / elapsed_s / 1_000_000_000.0
 
 
-fn main() raises:
+def main() raises:
     print("=== Mojo IsoQuant Rotation Benchmark ===")
     print("Config: H=", NUM_HEADS, ", D=", HEAD_DIM, ", n_blocks=", NUM_BLOCKS)
     print()
@@ -534,7 +564,11 @@ fn main() raises:
         var S = seq_lengths[i]
         print("Sequence length:", S)
 
-        var (dense_time, struct_time, speedup, rmse) = bench_forward_rotation(ctx, S, use_hadamard)
+        var fwd_result = bench_forward_rotation(ctx, S, use_hadamard)
+        var dense_time = fwd_result[0]
+        var struct_time = fwd_result[1]
+        var speedup = fwd_result[2]
+        var rmse = fwd_result[3]
         var gb_dense = compute_bandwidth(NUM_HEADS, S, HEAD_DIM, dense_time, use_hadamard)
         var gb_struct = compute_bandwidth(NUM_HEADS, S, HEAD_DIM, struct_time, use_hadamard)
 
@@ -556,7 +590,12 @@ fn main() raises:
     print("Shape: (H, 1, D) where H=", NUM_HEADS, ", D=", HEAD_DIM)
     print()
 
-    var (dense_time_inv, struct_time_inv, speedup_inv, rmse_inv, roundtrip_rmse) = bench_inverse_rotation(ctx, use_hadamard)
+    var inv_result = bench_inverse_rotation(ctx, use_hadamard)
+    var dense_time_inv = inv_result[0]
+    var struct_time_inv = inv_result[1]
+    var speedup_inv = inv_result[2]
+    var rmse_inv = inv_result[3]
+    var roundtrip_rmse = inv_result[4]
     var gb_dense_inv = compute_bandwidth(NUM_HEADS, 1, HEAD_DIM, dense_time_inv, use_hadamard)
     var gb_struct_inv = compute_bandwidth(NUM_HEADS, 1, HEAD_DIM, struct_time_inv, use_hadamard)
 

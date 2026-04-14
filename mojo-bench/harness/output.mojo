@@ -1,4 +1,4 @@
-fn write_kernel_result_json(
+def write_kernel_result_json(
     framework: String,
     framework_version: String,
     kernel_name: String,

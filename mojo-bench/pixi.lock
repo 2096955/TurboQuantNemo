@@ -26,11 +26,11 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/llvm-openmp-22.1.3-hc7d1edf_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/markdown-it-py-4.0.0-pyhd8ed1ab_0.conda
-      - conda: https://conda.modular.com/max-nightly/osx-arm64/max-26.3.0.dev2026041305-3.14release.conda
-      - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.3.0.dev2026041305-release.conda
+      - conda: https://conda.modular.com/max-nightly/osx-arm64/max-26.3.0.dev2026040805-3.14release.conda
+      - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.3.0.dev2026040805-release.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/mdurl-0.1.2-pyhd8ed1ab_1.conda
-      - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-0.26.3.0.dev2026041305-release.conda
-      - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-0.26.3.0.dev2026041305-release.conda
+      - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-0.26.3.0.dev2026040805-release.conda
+      - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-0.26.3.0.dev2026040805-release.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ncurses-6.5-h5e97a16_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/numpy-2.4.3-py314h1569ea8_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.2-hd24854e_0.conda
@@ -54,8 +54,6 @@ packages:
   md5: a44032f282e7d2acdeb1c240308052dd
   depends:
   - llvm-openmp >=9.0.1
-  arch: arm64
-  platform: osx
   license: BSD-3-Clause
   license_family: BSD
   size: 8325
@@ -65,8 +63,6 @@ packages:
   md5: 620b85a3f45526a8bc4d23fd78fc22f0
   depends:
   - __osx >=11.0
-  arch: arm64
-  platform: osx
   license: bzip2-1.0.6
   license_family: BSD
   size: 124834
@@ -102,8 +98,6 @@ packages:
   - blas 2.306   openblas
   - libcblas   3.11.0   6*_openblas
   - mkl <2026
-  arch: arm64
-  platform: osx
   license: BSD-3-Clause
   license_family: BSD
   size: 18859
@@ -118,8 +112,6 @@ packages:
   - liblapacke 3.11.0   6*_openblas
   - blas 2.306   openblas
   - liblapack  3.11.0   6*_openblas
-  arch: arm64
-  platform: osx
   license: BSD-3-Clause
   license_family: BSD
   size: 18863
@@ -129,8 +121,6 @@ packages:
   md5: acbb3f547c4aae16b19e417db0c6e5ed
   depends:
   - __osx >=11.0
-  arch: arm64
-  platform: osx
   license: Apache-2.0 WITH LLVM-exception
   license_family: Apache
   size: 570026
@@ -142,8 +132,6 @@ packages:
   - __osx >=11.0
   constrains:
   - expat 2.7.5.*
-  arch: arm64
-  platform: osx
   license: MIT
   license_family: MIT
   size: 68192
@@ -153,8 +141,6 @@ packages:
   md5: 43c04d9cb46ef176bb2a4c77e324d599
   depends:
   - __osx >=11.0
-  arch: arm64
-  platform: osx
   license: MIT
   license_family: MIT
   size: 40979
@@ -167,8 +153,6 @@ packages:
   constrains:
   - libgcc-ng ==15.2.0=*_18
   - libgomp 15.2.0 18
-  arch: arm64
-  platform: osx
   license: GPL-3.0-only WITH GCC-exception-3.1
   license_family: GPL
   size: 401974
@@ -180,8 +164,6 @@ packages:
   - libgfortran5 15.2.0 hdae7583_18
   constrains:
   - libgfortran-ng ==15.2.0=*_18
-  arch: arm64
-  platform: osx
   license: GPL-3.0-only WITH GCC-exception-3.1
   license_family: GPL
   size: 138973
@@ -193,8 +175,6 @@ packages:
   - libgcc >=15.2.0
   constrains:
   - libgfortran 15.2.0
-  arch: arm64
-  platform: osx
   license: GPL-3.0-only WITH GCC-exception-3.1
   license_family: GPL
   size: 598634
@@ -209,8 +189,6 @@ packages:
   - liblapacke 3.11.0   6*_openblas
   - libcblas   3.11.0   6*_openblas
   - blas 2.306   openblas
-  arch: arm64
-  platform: osx
   license: BSD-3-Clause
   license_family: BSD
   size: 18863
@@ -222,8 +200,6 @@ packages:
   - __osx >=11.0
   constrains:
   - xz 5.8.3.*
-  arch: arm64
-  platform: osx
   license: 0BSD
   size: 92472
   timestamp: 1775825802659
@@ -232,8 +208,6 @@ packages:
   md5: 57c4be259f5e0b99a5983799a228ae55
   depends:
   - __osx >=11.0
-  arch: arm64
-  platform: osx
   license: BSD-2-Clause
   license_family: BSD
   size: 73690
@@ -248,8 +222,6 @@ packages:
   - llvm-openmp >=19.1.7
   constrains:
   - openblas >=0.3.32,<0.3.33.0a0
-  arch: arm64
-  platform: osx
   license: BSD-3-Clause
   license_family: BSD
   size: 4308797
@@ -260,8 +232,6 @@ packages:
   depends:
   - __osx >=11.0
   - libzlib >=1.3.2,<2.0a0
-  arch: arm64
-  platform: osx
   license: blessing
   size: 920039
   timestamp: 1775754485962
@@ -272,8 +242,6 @@ packages:
   - __osx >=11.0
   constrains:
   - zlib 1.3.2 *_2
-  arch: arm64
-  platform: osx
   license: Zlib
   license_family: Other
   size: 47759
@@ -286,8 +254,6 @@ packages:
   constrains:
   - openmp 22.1.3|22.1.3.*
   - intel-openmp <0.0a0
-  arch: arm64
-  platform: osx
   license: Apache-2.0 WITH LLVM-exception
   license_family: APACHE
   size: 285886
@@ -302,9 +268,9 @@ packages:
   license_family: MIT
   size: 64736
   timestamp: 1754951288511
-- conda: https://conda.modular.com/max-nightly/osx-arm64/max-26.3.0.dev2026041305-3.14release.conda
-  sha256: b172d0b2b746c463aa15933cd5c9e0214dfb25e566442df5cc282a444fd16d80
-  md5: b697a9f2fbbae6bc75fc22b13323a9b2
+- conda: https://conda.modular.com/max-nightly/osx-arm64/max-26.3.0.dev2026040805-3.14release.conda
+  sha256: 81a51cda0b344a6ad454f17bdcf4179da2989b09636aec3e9ce565d62bc772d3
+  md5: 2617efd5de1bcadb64ce8646993799a9
   depends:
   - numpy >=1.18
   - typing-extensions >=4.12.2
@@ -312,18 +278,18 @@ packages:
   - rich >=13.0.1
   - python 3.14.*
   - python-gil
-  - max-core ==26.3.0.dev2026041305
+  - max-core ==26.3.0.dev2026040805
   license: LicenseRef-Modular-Proprietary
-  size: 8665030
-  timestamp: 1776061039911
-- conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.3.0.dev2026041305-release.conda
-  sha256: 6bd1747fc82bc1bf86e8ef68a96d517ed627533a5fcdcbc011716d49118b1d6b
-  md5: 152c92c1bc903ba28ee47507f1949402
+  size: 8633701
+  timestamp: 1775627588029
+- conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.3.0.dev2026040805-release.conda
+  sha256: 24d90d9aa3e02d56c22c905ccbdd946430e5cc62333a9fb3cdabf0565d05e1e1
+  md5: 6753f5c5204c4744cfbaa8b7da3efe7c
   depends:
-  - mojo-compiler ==0.26.3.0.dev2026041305
+  - mojo-compiler ==0.26.3.0.dev2026040805
   license: LicenseRef-Modular-Proprietary
-  size: 104987858
-  timestamp: 1776060936975
+  size: 103724517
+  timestamp: 1775627523704
 - conda: https://conda.anaconda.org/conda-forge/noarch/mdurl-0.1.2-pyhd8ed1ab_1.conda
   sha256: 78c1bbe1723449c52b7a9df1af2ee5f005209f67e40b6e1d3c7619127c43b1c7
   md5: 592132998493b3ff25fd7479396e8351
@@ -333,30 +299,28 @@ packages:
   license_family: MIT
   size: 14465
   timestamp: 1733255681319
-- conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-0.26.3.0.dev2026041305-release.conda
-  sha256: 511fc5e0edc27f1a75e29371a5ba6cfb63a1bdf35043e979e85060224a9a34d4
-  md5: 05b8aafe6cf75e530ade509ee7dc05e7
+- conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-0.26.3.0.dev2026040805-release.conda
+  sha256: 60335edff789a97805ffeacd1b3edde7bf8c64e621ebdbdd3ecdbb60e40802e1
+  md5: c755c549274bb1aea471375b1c654586
   depends:
-  - mojo-python ==0.26.3.0.dev2026041305
+  - mojo-python ==0.26.3.0.dev2026040805
   license: LicenseRef-Modular-Proprietary
-  size: 68322198
-  timestamp: 1776060784241
-- conda: https://conda.modular.com/max-nightly/noarch/mojo-python-0.26.3.0.dev2026041305-release.conda
+  size: 68269886
+  timestamp: 1775627392311
+- conda: https://conda.modular.com/max-nightly/noarch/mojo-python-0.26.3.0.dev2026040805-release.conda
   noarch: python
-  sha256: f449fc94609ae59c3b767c015eec86717e9b8b77ec455ee12f1de394d59a4db2
-  md5: 49ece18c8621758963a009bd03da4326
+  sha256: cc3215509dd25309ed138add8cb48ab1d194b9b89e0f74f951d7128f458855b4
+  md5: eeea7a287e4dda0f915039f768633e17
   depends:
   - python >=3.10
   license: LicenseRef-Modular-Proprietary
-  size: 23195
-  timestamp: 1776060226796
+  size: 23182
+  timestamp: 1775627196201
 - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ncurses-6.5-h5e97a16_3.conda
   sha256: 2827ada40e8d9ca69a153a45f7fd14f32b2ead7045d3bbb5d10964898fe65733
   md5: 068d497125e4bf8a66bf707254fff5ae
   depends:
   - __osx >=11.0
-  arch: arm64
-  platform: osx
   license: X11 AND BSD-3-Clause
   size: 797030
   timestamp: 1738196177597
@@ -374,8 +338,6 @@ packages:
   - libcblas >=3.9.0,<4.0a0
   constrains:
   - numpy-base <0a0
-  arch: arm64
-  platform: osx
   license: BSD-3-Clause
   license_family: BSD
   size: 6993182
@@ -386,8 +348,6 @@ packages:
   depends:
   - __osx >=11.0
   - ca-certificates
-  arch: arm64
-  platform: osx
   license: Apache-2.0
   license_family: Apache
   size: 3106008
@@ -421,8 +381,6 @@ packages:
   - tk >=8.6.13,<8.7.0a0
   - tzdata
   - zstd >=1.5.7,<1.6.0a0
-  arch: arm64
-  platform: osx
   license: Python-2.0
   size: 13533346
   timestamp: 1775616188373
@@ -455,8 +413,6 @@ packages:
   - python >=3.14,<3.15.0a0 *_cp314
   - python_abi 3.14.* *_cp314
   - yaml >=0.2.5,<0.3.0a0
-  arch: arm64
-  platform: osx
   license: MIT
   license_family: MIT
   size: 189475
@@ -467,8 +423,6 @@ packages:
   depends:
   - __osx >=11.0
   - ncurses >=6.5,<7.0a0
-  arch: arm64
-  platform: osx
   license: GPL-3.0-only
   license_family: GPL
   size: 313930
@@ -491,8 +445,6 @@ packages:
   depends:
   - __osx >=11.0
   - libzlib >=1.3.1,<2.0a0
-  arch: arm64
-  platform: osx
   license: TCL
   license_family: BSD
   size: 3127137
@@ -527,8 +479,6 @@ packages:
   md5: 78a0fe9e9c50d2c381e8ee47e3ea437d
   depends:
   - __osx >=11.0
-  arch: arm64
-  platform: osx
   license: MIT
   license_family: MIT
   size: 83386
@@ -539,8 +489,6 @@ packages:
   depends:
   - __osx >=11.0
   - libzlib >=1.3.1,<2.0a0
-  arch: arm64
-  platform: osx
   license: BSD-3-Clause
   license_family: BSD
   size: 433413

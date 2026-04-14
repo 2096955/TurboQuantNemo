@@ -12,26 +12,26 @@ Pipeline steps:
 
 All operations work in rotated space (keys and values are already rotated during prefill).
 """
-from gpu.host import DeviceContext
+from std.gpu.host import DeviceContext
 from layout import LayoutTensor, Layout
-from memory import UnsafePointer
-from time import perf_counter_ns
-from random import seed, random_float64
-from math import sqrt, exp
+from std.memory import UnsafePointer
+from std.time import perf_counter_ns
+from std.random import seed, random_float64
+from std.math import sqrt, exp
 
-alias WARMUP = 10
-alias ITERS = 50
-alias FP32 = DType.float32
+comptime WARMUP = 10
+comptime ITERS = 50
+comptime FP32 = DType.float32
 
 # IsoQuant config
-alias BATCH = 1
-alias NUM_HEADS = 8
-alias HEAD_DIM = 128
-alias BLOCK_SIZE = 4
-alias NUM_BLOCKS = HEAD_DIM // BLOCK_SIZE  # 32 blocks per head
+comptime BATCH = 1
+comptime NUM_HEADS = 8
+comptime HEAD_DIM = 128
+comptime BLOCK_SIZE = 4
+comptime NUM_BLOCKS = HEAD_DIM // BLOCK_SIZE  # 32 blocks per head
 
 
-fn walsh_hadamard_inplace(x: UnsafePointer[Float32], D: Int):
+def walsh_hadamard_inplace(x: UnsafePointer[Float32, MutAnyOrigin], D: Int):
     """In-place Walsh-Hadamard Transform on vector of length D.
 
     D must be power of 2. Implements butterfly pattern with normalization.
@@ -54,12 +54,12 @@ fn walsh_hadamard_inplace(x: UnsafePointer[Float32], D: Int):
         x[i] *= scale
 
 
-fn inverse_walsh_hadamard_inplace(x: UnsafePointer[Float32], D: Int):
+def inverse_walsh_hadamard_inplace(x: UnsafePointer[Float32, MutAnyOrigin], D: Int):
     """Inverse Walsh-Hadamard Transform (same as forward for WHT)."""
     walsh_hadamard_inplace(x, D)
 
 
-fn generate_so4_from_quaternion(mat: UnsafePointer[Float32], offset: Int):
+def generate_so4_from_quaternion(mat: UnsafePointer[Float32, MutAnyOrigin], offset: Int):
     """Generate a proper SO(4) left-isoclinic rotation matrix from a random unit quaternion.
 
     Constructs a 4x4 orthogonal matrix from quaternion (a, b, c, d) using left-isoclinic form:
@@ -113,10 +113,10 @@ fn generate_so4_from_quaternion(mat: UnsafePointer[Float32], offset: Int):
     mat[offset + 3*4 + 3] = a
 
 
-fn matmul_cpu(
-    a: UnsafePointer[Float32],
-    b: UnsafePointer[Float32],
-    c: UnsafePointer[Float32],
+def matmul_cpu(
+    a: UnsafePointer[Float32, MutAnyOrigin],
+    b: UnsafePointer[Float32, MutAnyOrigin],
+    c: UnsafePointer[Float32, MutAnyOrigin],
     M: Int, N: Int, K: Int,
     transpose_b: Bool = False
 ):
@@ -141,17 +141,17 @@ fn matmul_cpu(
             c[i * N + j] = sum
 
 
-fn softmax_cpu(
-    scores: UnsafePointer[Float32],
-    out: UnsafePointer[Float32],
+def softmax_cpu(
+    scores: UnsafePointer[Float32, MutAnyOrigin],
+    dst: UnsafePointer[Float32, MutAnyOrigin],
     B: Int, H: Int, S_q: Int, S_kv: Int,
     scale: Float32
 ):
     """Numerically stable softmax over last dimension.
 
-    scores: (B, H, S_q, S_kv)
-    out: (B, H, S_q, S_kv)
-    scale: 1/sqrt(D)
+    scores: (B, H, S_q, S_kv).
+    dst: (B, H, S_q, S_kv).
+    scale: 1/sqrt(D).
     """
     for b in range(B):
         for h in range(H):
@@ -170,26 +170,26 @@ fn softmax_cpu(
                 for i in range(S_kv):
                     var val = scores[row_start + i] * scale
                     var exp_val = exp(val - max_val * scale)
-                    out[row_start + i] = exp_val
+                    dst[row_start + i] = exp_val
                     sum += exp_val
 
                 # Normalize
                 for i in range(S_kv):
-                    out[row_start + i] /= sum
+                    dst[row_start + i] /= sum
 
 
-fn inverse_rotate_cpu(
-    x_rot: UnsafePointer[Float32],
-    block_matrices: UnsafePointer[Float32],
-    out: UnsafePointer[Float32],
+def inverse_rotate_cpu(
+    x_rot: UnsafePointer[Float32, MutAnyOrigin],
+    block_matrices: UnsafePointer[Float32, MutAnyOrigin],
+    dst: UnsafePointer[Float32, MutAnyOrigin],
     H: Int, S: Int, D: Int,
     use_hadamard: Bool
 ):
     """Inverse rotation: block matmul (transposed) + inverse WHT.
 
-    x_rot: (H, S, D) in rotated space
-    block_matrices: (H, n_blocks, 4, 4)
-    out: (H, S, D) in original space
+    x_rot: (H, S, D) in rotated space.
+    block_matrices: (H, n_blocks, 4, 4).
+    dst: (H, S, D) in original space.
     """
     var n_blocks = D // BLOCK_SIZE
 
@@ -199,40 +199,43 @@ fn inverse_rotate_cpu(
 
             # Copy input to output
             for d in range(D):
-                out[x_base + d] = x_rot[x_base + d]
+                dst[x_base + d] = x_rot[x_base + d]
 
             # Apply block rotations (transposed)
             for b in range(n_blocks):
                 var block_start = x_base + b * BLOCK_SIZE
-                var temp_in = UnsafePointer[Float32].alloc(BLOCK_SIZE)
+                var temp_in_list = List[Float32](capacity=BLOCK_SIZE)
+                for _ in range(BLOCK_SIZE):
+                    temp_in_list.append(0.0)
+                var temp_in = temp_in_list.unsafe_ptr()
                 for i in range(BLOCK_SIZE):
-                    temp_in[i] = out[block_start + i]
+                    temp_in[i] = dst[block_start + i]
 
                 var mat_base = h * n_blocks * BLOCK_SIZE * BLOCK_SIZE + b * BLOCK_SIZE * BLOCK_SIZE
 
                 # Matmul with transpose: temp_out = temp_in @ block_matrices[h, b].T
-                var temp_out = UnsafePointer[Float32].alloc(BLOCK_SIZE)
+                var temp_out_list = List[Float32](capacity=BLOCK_SIZE)
+                for _ in range(BLOCK_SIZE):
+                    temp_out_list.append(0.0)
+                var temp_out = temp_out_list.unsafe_ptr()
                 for i in range(BLOCK_SIZE):
                     temp_out[i] = 0.0
                     for j in range(BLOCK_SIZE):
                         temp_out[i] += temp_in[j] * block_matrices[mat_base + i * BLOCK_SIZE + j]
 
                 for i in range(BLOCK_SIZE):
-                    out[block_start + i] = temp_out[i]
-
-                temp_in.free()
-                temp_out.free()
+                    dst[block_start + i] = temp_out[i]
 
             # Apply inverse WHT if enabled
             if use_hadamard:
-                inverse_walsh_hadamard_inplace(out.offset(x_base), D)
+                inverse_walsh_hadamard_inplace(dst + x_base, D)
 
 
-fn bench_unfused_attention(
+def bench_unfused_attention(
     ctx: DeviceContext,
     T: Int,
     use_hadamard: Bool
-) -> (Float64, Float64, Float64, Float64, Float64):
+) -> Tuple[Float64, Float64, Float64, Float64, Float64]:
     """Benchmark unfused attention with per-step timing.
 
     Returns: (total_time_us, qk_time_us, softmax_time_us, v_time_us, inverse_time_us)
@@ -251,15 +254,39 @@ fn bench_unfused_attention(
     var scores_size = BATCH * H * S_q * S_kv
     var block_mat_size = H * n_blocks * BLOCK_SIZE * BLOCK_SIZE
 
-    var Q = UnsafePointer[Float32].alloc(q_size)
-    var K = UnsafePointer[Float32].alloc(kv_size)
-    var V = UnsafePointer[Float32].alloc(kv_size)
-    var block_matrices = UnsafePointer[Float32].alloc(block_mat_size)
+    var Q_list = List[Float32](capacity=q_size)
+    for _ in range(q_size):
+        Q_list.append(0.0)
+    var Q = Q_list.unsafe_ptr()
+    var K_list = List[Float32](capacity=kv_size)
+    for _ in range(kv_size):
+        K_list.append(0.0)
+    var K = K_list.unsafe_ptr()
+    var V_list = List[Float32](capacity=kv_size)
+    for _ in range(kv_size):
+        V_list.append(0.0)
+    var V = V_list.unsafe_ptr()
+    var block_matrices_list = List[Float32](capacity=block_mat_size)
+    for _ in range(block_mat_size):
+        block_matrices_list.append(0.0)
+    var block_matrices = block_matrices_list.unsafe_ptr()
 
-    var scores = UnsafePointer[Float32].alloc(scores_size)
-    var attn_weights = UnsafePointer[Float32].alloc(scores_size)
-    var output_rot = UnsafePointer[Float32].alloc(q_size)
-    var output = UnsafePointer[Float32].alloc(q_size)
+    var scores_list = List[Float32](capacity=scores_size)
+    for _ in range(scores_size):
+        scores_list.append(0.0)
+    var scores = scores_list.unsafe_ptr()
+    var attn_weights_list = List[Float32](capacity=scores_size)
+    for _ in range(scores_size):
+        attn_weights_list.append(0.0)
+    var attn_weights = attn_weights_list.unsafe_ptr()
+    var output_rot_list = List[Float32](capacity=q_size)
+    for _ in range(q_size):
+        output_rot_list.append(0.0)
+    var output_rot = output_rot_list.unsafe_ptr()
+    var output_list = List[Float32](capacity=q_size)
+    for _ in range(q_size):
+        output_list.append(0.0)
+    var output = output_list.unsafe_ptr()
 
     # Initialize with seed=42
     seed(42)
@@ -283,7 +310,7 @@ fn bench_unfused_attention(
                 var q_base = b * H * S_q * D + h * S_q * D
                 var k_base = b * H * S_kv * D + h * S_kv * D
                 var scores_base = b * H * S_q * S_kv + h * S_q * S_kv
-                matmul_cpu(Q.offset(q_base), K.offset(k_base), scores.offset(scores_base), S_q, S_kv, D, transpose_b=True)
+                matmul_cpu(Q + q_base, K + k_base, scores + scores_base, S_q, S_kv, D, transpose_b=True)
 
         # Step 2: Softmax
         softmax_cpu(scores, attn_weights, BATCH, H, S_q, S_kv, scale)
@@ -294,18 +321,18 @@ fn bench_unfused_attention(
                 var attn_base = b * H * S_q * S_kv + h * S_q * S_kv
                 var v_base = b * H * S_kv * D + h * S_kv * D
                 var out_base = b * H * S_q * D + h * S_q * D
-                matmul_cpu(attn_weights.offset(attn_base), V.offset(v_base), output_rot.offset(out_base), S_q, D, S_kv)
+                matmul_cpu(attn_weights + attn_base, V + v_base, output_rot + out_base, S_q, D, S_kv)
 
         # Step 4: Inverse rotation
         for b in range(BATCH):
             var out_base = b * H * S_q * D
-            inverse_rotate_cpu(output_rot.offset(out_base), block_matrices, output.offset(out_base), H, S_q, D, use_hadamard)
+            inverse_rotate_cpu(output_rot + out_base, block_matrices, output + out_base, H, S_q, D, use_hadamard)
 
     # Timed iterations with per-step breakdown
-    var qk_total = 0
-    var softmax_total = 0
-    var v_total = 0
-    var inverse_total = 0
+    var qk_total: UInt = 0
+    var softmax_total: UInt = 0
+    var v_total: UInt = 0
+    var inverse_total: UInt = 0
 
     var start_all = perf_counter_ns()
     for _ in range(ITERS):
@@ -316,7 +343,7 @@ fn bench_unfused_attention(
                 var q_base = b * H * S_q * D + h * S_q * D
                 var k_base = b * H * S_kv * D + h * S_kv * D
                 var scores_base = b * H * S_q * S_kv + h * S_q * S_kv
-                matmul_cpu(Q.offset(q_base), K.offset(k_base), scores.offset(scores_base), S_q, S_kv, D, transpose_b=True)
+                matmul_cpu(Q + q_base, K + k_base, scores + scores_base, S_q, S_kv, D, transpose_b=True)
         var qk_elapsed = perf_counter_ns() - start_qk
         qk_total += qk_elapsed
 
@@ -333,7 +360,7 @@ fn bench_unfused_attention(
                 var attn_base = b * H * S_q * S_kv + h * S_q * S_kv
                 var v_base = b * H * S_kv * D + h * S_kv * D
                 var out_base = b * H * S_q * D + h * S_q * D
-                matmul_cpu(attn_weights.offset(attn_base), V.offset(v_base), output_rot.offset(out_base), S_q, D, S_kv)
+                matmul_cpu(attn_weights + attn_base, V + v_base, output_rot + out_base, S_q, D, S_kv)
         var v_elapsed = perf_counter_ns() - start_v
         v_total += v_elapsed
 
@@ -341,7 +368,7 @@ fn bench_unfused_attention(
         var start_inverse = perf_counter_ns()
         for b in range(BATCH):
             var out_base = b * H * S_q * D
-            inverse_rotate_cpu(output_rot.offset(out_base), block_matrices, output.offset(out_base), H, S_q, D, use_hadamard)
+            inverse_rotate_cpu(output_rot + out_base, block_matrices, output + out_base, H, S_q, D, use_hadamard)
         var inverse_elapsed = perf_counter_ns() - start_inverse
         inverse_total += inverse_elapsed
 
@@ -353,25 +380,15 @@ fn bench_unfused_attention(
     var v_time_us = Float64(v_total) / Float64(ITERS) / 1000.0
     var inverse_time_us = Float64(inverse_total) / Float64(ITERS) / 1000.0
 
-    # Cleanup
-    Q.free()
-    K.free()
-    V.free()
-    block_matrices.free()
-    scores.free()
-    attn_weights.free()
-    output_rot.free()
-    output.free()
-
-    return (total_time_us, qk_time_us, softmax_time_us, v_time_us, inverse_time_us)
+    return Tuple(total_time_us, qk_time_us, softmax_time_us, v_time_us, inverse_time_us)
 
 
-fn fused_attention_cpu(
-    Q: UnsafePointer[Float32],
-    K: UnsafePointer[Float32],
-    V: UnsafePointer[Float32],
-    block_matrices: UnsafePointer[Float32],
-    output: UnsafePointer[Float32],
+def fused_attention_cpu(
+    Q: UnsafePointer[Float32, MutAnyOrigin],
+    K: UnsafePointer[Float32, MutAnyOrigin],
+    V: UnsafePointer[Float32, MutAnyOrigin],
+    block_matrices: UnsafePointer[Float32, MutAnyOrigin],
+    output: UnsafePointer[Float32, MutAnyOrigin],
     H: Int, S_q: Int, S_kv: Int, D: Int,
     scale: Float32,
     use_hadamard: Bool
@@ -384,9 +401,18 @@ fn fused_attention_cpu(
     var scores_size = BATCH * H * S_q * S_kv
     var output_rot_size = BATCH * H * S_q * D
 
-    var scores = UnsafePointer[Float32].alloc(scores_size)
-    var attn_weights = UnsafePointer[Float32].alloc(scores_size)
-    var output_rot = UnsafePointer[Float32].alloc(output_rot_size)
+    var scores_list = List[Float32](capacity=scores_size)
+    for _ in range(scores_size):
+        scores_list.append(0.0)
+    var scores = scores_list.unsafe_ptr()
+    var attn_weights_list = List[Float32](capacity=scores_size)
+    for _ in range(scores_size):
+        attn_weights_list.append(0.0)
+    var attn_weights = attn_weights_list.unsafe_ptr()
+    var output_rot_list = List[Float32](capacity=output_rot_size)
+    for _ in range(output_rot_size):
+        output_rot_list.append(0.0)
+    var output_rot = output_rot_list.unsafe_ptr()
 
     # Step 1: QK
     for b in range(BATCH):
@@ -394,7 +420,7 @@ fn fused_attention_cpu(
             var q_base = b * H * S_q * D + h * S_q * D
             var k_base = b * H * S_kv * D + h * S_kv * D
             var scores_base = b * H * S_q * S_kv + h * S_q * S_kv
-            matmul_cpu(Q.offset(q_base), K.offset(k_base), scores.offset(scores_base), S_q, S_kv, D, transpose_b=True)
+            matmul_cpu(Q + q_base, K + k_base, scores + scores_base, S_q, S_kv, D, transpose_b=True)
 
     # Step 2: Softmax
     softmax_cpu(scores, attn_weights, BATCH, H, S_q, S_kv, scale)
@@ -405,19 +431,15 @@ fn fused_attention_cpu(
             var attn_base = b * H * S_q * S_kv + h * S_q * S_kv
             var v_base = b * H * S_kv * D + h * S_kv * D
             var out_base = b * H * S_q * D + h * S_q * D
-            matmul_cpu(attn_weights.offset(attn_base), V.offset(v_base), output_rot.offset(out_base), S_q, D, S_kv)
+            matmul_cpu(attn_weights + attn_base, V + v_base, output_rot + out_base, S_q, D, S_kv)
 
     # Step 4: Inverse rotation
     for b in range(BATCH):
         var out_base = b * H * S_q * D
-        inverse_rotate_cpu(output_rot.offset(out_base), block_matrices, output.offset(out_base), H, S_q, D, use_hadamard)
-
-    scores.free()
-    attn_weights.free()
-    output_rot.free()
+        inverse_rotate_cpu(output_rot + out_base, block_matrices, output + out_base, H, S_q, D, use_hadamard)
 
 
-fn bench_fused_attention(
+def bench_fused_attention(
     ctx: DeviceContext,
     T: Int,
     use_hadamard: Bool
@@ -439,11 +461,26 @@ fn bench_fused_attention(
     var kv_size = BATCH * H * S_kv * D
     var block_mat_size = H * n_blocks * BLOCK_SIZE * BLOCK_SIZE
 
-    var Q = UnsafePointer[Float32].alloc(q_size)
-    var K = UnsafePointer[Float32].alloc(kv_size)
-    var V = UnsafePointer[Float32].alloc(kv_size)
-    var block_matrices = UnsafePointer[Float32].alloc(block_mat_size)
-    var output = UnsafePointer[Float32].alloc(q_size)
+    var Q_list = List[Float32](capacity=q_size)
+    for _ in range(q_size):
+        Q_list.append(0.0)
+    var Q = Q_list.unsafe_ptr()
+    var K_list = List[Float32](capacity=kv_size)
+    for _ in range(kv_size):
+        K_list.append(0.0)
+    var K = K_list.unsafe_ptr()
+    var V_list = List[Float32](capacity=kv_size)
+    for _ in range(kv_size):
+        V_list.append(0.0)
+    var V = V_list.unsafe_ptr()
+    var block_matrices_list = List[Float32](capacity=block_mat_size)
+    for _ in range(block_mat_size):
+        block_matrices_list.append(0.0)
+    var block_matrices = block_matrices_list.unsafe_ptr()
+    var output_list = List[Float32](capacity=q_size)
+    for _ in range(q_size):
+        output_list.append(0.0)
+    var output = output_list.unsafe_ptr()
 
     # Initialize with seed=42
     seed(42)
@@ -471,22 +508,15 @@ fn bench_fused_attention(
 
     var total_time_us = Float64(elapsed) / Float64(ITERS) / 1000.0
 
-    # Cleanup
-    Q.free()
-    K.free()
-    V.free()
-    block_matrices.free()
-    output.free()
-
     return total_time_us
 
 
-fn hand_fused_attention_cpu(
-    Q: UnsafePointer[Float32],
-    K: UnsafePointer[Float32],
-    V: UnsafePointer[Float32],
-    block_matrices: UnsafePointer[Float32],
-    output: UnsafePointer[Float32],
+def hand_fused_attention_cpu(
+    Q: UnsafePointer[Float32, MutAnyOrigin],
+    K: UnsafePointer[Float32, MutAnyOrigin],
+    V: UnsafePointer[Float32, MutAnyOrigin],
+    block_matrices: UnsafePointer[Float32, MutAnyOrigin],
+    output: UnsafePointer[Float32, MutAnyOrigin],
     H: Int, S_q: Int, S_kv: Int, D: Int,
     scale: Float32,
     use_hadamard: Bool
@@ -504,7 +534,10 @@ fn hand_fused_attention_cpu(
     """
     var n_blocks = D // BLOCK_SIZE
     var output_rot_size = BATCH * H * S_q * D
-    var output_rot = UnsafePointer[Float32].alloc(output_rot_size)
+    var output_rot_list = List[Float32](capacity=output_rot_size)
+    for _ in range(output_rot_size):
+        output_rot_list.append(0.0)
+    var output_rot = output_rot_list.unsafe_ptr()
 
     # Initialize output_rot to zero
     for i in range(output_rot_size):
@@ -519,7 +552,10 @@ fn hand_fused_attention_cpu(
                 var running_sum = Float32(0.0)
 
                 # Temporary output accumulator (d_k dimensions)
-                var running_output = UnsafePointer[Float32].alloc(D)
+                var running_output_list = List[Float32](capacity=D)
+                for _ in range(D):
+                    running_output_list.append(0.0)
+                var running_output = running_output_list.unsafe_ptr()
                 for d in range(D):
                     running_output[d] = 0.0
 
@@ -556,49 +592,46 @@ fn hand_fused_attention_cpu(
                 for d in range(D):
                     output_rot[out_base + d] = running_output[d] / running_sum
 
-                running_output.free()
-
     # Step 4: Inverse rotation (same as other variants)
     for b in range(BATCH):
         var out_base = b * H * S_q * D
-        inverse_rotate_cpu(output_rot.offset(out_base), block_matrices, output.offset(out_base), H, S_q, D, use_hadamard)
+        inverse_rotate_cpu(output_rot + out_base, block_matrices, output + out_base, H, S_q, D, use_hadamard)
 
-    output_rot.free()
     return True
 
 
-fn dense_rotate_inverse_cpu(
-    x_rot: UnsafePointer[Float32],
-    dense_matrix: UnsafePointer[Float32],
-    out: UnsafePointer[Float32],
+def dense_rotate_inverse_cpu(
+    x_rot: UnsafePointer[Float32, MutAnyOrigin],
+    dense_matrix: UnsafePointer[Float32, MutAnyOrigin],
+    dst: UnsafePointer[Float32, MutAnyOrigin],
     H: Int, S: Int, D: Int
 ):
-    """Inverse rotation using DENSE D×D matrix (TurboQuant style).
+    """Inverse rotation using DENSE DxD matrix (TurboQuant style).
 
-    x_rot: (H, S, D) in rotated space
-    dense_matrix: (H, D, D) full rotation matrix (row-major)
-    out: (H, S, D) in original space
+    x_rot: (H, S, D) in rotated space.
+    dense_matrix: (H, D, D) full rotation matrix (row-major).
+    dst: (H, S, D) in original space.
 
-    This is O(D²) per head per token, vs O(D log D) for IsoQuant.
+    This is O(D^2) per head per token, vs O(D log D) for IsoQuant.
     """
     for h in range(H):
         for s in range(S):
             var x_base = h * S * D + s * D
             var mat_base = h * D * D
 
-            # Dense matmul: out = x_rot @ dense_matrix.T
+            # Dense matmul: dst = x_rot @ dense_matrix.T
             for i in range(D):
                 var sum = Float32(0.0)
                 for j in range(D):
                     # Transposed access: dense_matrix[h, i, j] for matrix.T
                     sum += x_rot[x_base + j] * dense_matrix[mat_base + i * D + j]
-                out[x_base + i] = sum
+                dst[x_base + i] = sum
 
 
-fn bench_turboquant_unfused(
+def bench_turboquant_unfused(
     ctx: DeviceContext,
     T: Int
-) -> (Float64, Float64, Float64, Float64, Float64):
+) -> Tuple[Float64, Float64, Float64, Float64, Float64]:
     """Benchmark TurboQuant attention (dense rotation) with per-step timing.
 
     Same pipeline as IsoQuant but uses O(D²) dense rotation instead of
@@ -619,15 +652,39 @@ fn bench_turboquant_unfused(
     var scores_size = BATCH * H * S_q * S_kv
     var dense_mat_size = H * D * D  # Full D×D per head (vs block-diagonal)
 
-    var Q = UnsafePointer[Float32].alloc(q_size)
-    var K = UnsafePointer[Float32].alloc(kv_size)
-    var V = UnsafePointer[Float32].alloc(kv_size)
-    var dense_matrices = UnsafePointer[Float32].alloc(dense_mat_size)
+    var Q_list = List[Float32](capacity=q_size)
+    for _ in range(q_size):
+        Q_list.append(0.0)
+    var Q = Q_list.unsafe_ptr()
+    var K_list = List[Float32](capacity=kv_size)
+    for _ in range(kv_size):
+        K_list.append(0.0)
+    var K = K_list.unsafe_ptr()
+    var V_list = List[Float32](capacity=kv_size)
+    for _ in range(kv_size):
+        V_list.append(0.0)
+    var V = V_list.unsafe_ptr()
+    var dense_matrices_list = List[Float32](capacity=dense_mat_size)
+    for _ in range(dense_mat_size):
+        dense_matrices_list.append(0.0)
+    var dense_matrices = dense_matrices_list.unsafe_ptr()
 
-    var scores = UnsafePointer[Float32].alloc(scores_size)
-    var attn_weights = UnsafePointer[Float32].alloc(scores_size)
-    var output_rot = UnsafePointer[Float32].alloc(q_size)
-    var output = UnsafePointer[Float32].alloc(q_size)
+    var scores_list = List[Float32](capacity=scores_size)
+    for _ in range(scores_size):
+        scores_list.append(0.0)
+    var scores = scores_list.unsafe_ptr()
+    var attn_weights_list = List[Float32](capacity=scores_size)
+    for _ in range(scores_size):
+        attn_weights_list.append(0.0)
+    var attn_weights = attn_weights_list.unsafe_ptr()
+    var output_rot_list = List[Float32](capacity=q_size)
+    for _ in range(q_size):
+        output_rot_list.append(0.0)
+    var output_rot = output_rot_list.unsafe_ptr()
+    var output_list = List[Float32](capacity=q_size)
+    for _ in range(q_size):
+        output_list.append(0.0)
+    var output = output_list.unsafe_ptr()
 
     # Initialize with seed=42
     seed(42)
@@ -649,7 +706,7 @@ fn bench_turboquant_unfused(
                 var q_base = b * H * S_q * D + h * S_q * D
                 var k_base = b * H * S_kv * D + h * S_kv * D
                 var scores_base = b * H * S_q * S_kv + h * S_q * S_kv
-                matmul_cpu(Q.offset(q_base), K.offset(k_base), scores.offset(scores_base), S_q, S_kv, D, transpose_b=True)
+                matmul_cpu(Q + q_base, K + k_base, scores + scores_base, S_q, S_kv, D, transpose_b=True)
 
         softmax_cpu(scores, attn_weights, BATCH, H, S_q, S_kv, scale)
 
@@ -658,17 +715,17 @@ fn bench_turboquant_unfused(
                 var attn_base = b * H * S_q * S_kv + h * S_q * S_kv
                 var v_base = b * H * S_kv * D + h * S_kv * D
                 var out_base = b * H * S_q * D + h * S_q * D
-                matmul_cpu(attn_weights.offset(attn_base), V.offset(v_base), output_rot.offset(out_base), S_q, D, S_kv)
+                matmul_cpu(attn_weights + attn_base, V + v_base, output_rot + out_base, S_q, D, S_kv)
 
         for b in range(BATCH):
             var out_base = b * H * S_q * D
-            dense_rotate_inverse_cpu(output_rot.offset(out_base), dense_matrices, output.offset(out_base), H, S_q, D)
+            dense_rotate_inverse_cpu(output_rot + out_base, dense_matrices, output + out_base, H, S_q, D)
 
     # Timed iterations with per-step breakdown
-    var qk_total = 0
-    var softmax_total = 0
-    var v_total = 0
-    var inverse_total = 0
+    var qk_total: UInt = 0
+    var softmax_total: UInt = 0
+    var v_total: UInt = 0
+    var inverse_total: UInt = 0
 
     var start_all = perf_counter_ns()
     for _ in range(ITERS):
@@ -679,7 +736,7 @@ fn bench_turboquant_unfused(
                 var q_base = b * H * S_q * D + h * S_q * D
                 var k_base = b * H * S_kv * D + h * S_kv * D
                 var scores_base = b * H * S_q * S_kv + h * S_q * S_kv
-                matmul_cpu(Q.offset(q_base), K.offset(k_base), scores.offset(scores_base), S_q, S_kv, D, transpose_b=True)
+                matmul_cpu(Q + q_base, K + k_base, scores + scores_base, S_q, S_kv, D, transpose_b=True)
         var qk_elapsed = perf_counter_ns() - start_qk
         qk_total += qk_elapsed
 
@@ -696,7 +753,7 @@ fn bench_turboquant_unfused(
                 var attn_base = b * H * S_q * S_kv + h * S_q * S_kv
                 var v_base = b * H * S_kv * D + h * S_kv * D
                 var out_base = b * H * S_q * D + h * S_q * D
-                matmul_cpu(attn_weights.offset(attn_base), V.offset(v_base), output_rot.offset(out_base), S_q, D, S_kv)
+                matmul_cpu(attn_weights + attn_base, V + v_base, output_rot + out_base, S_q, D, S_kv)
         var v_elapsed = perf_counter_ns() - start_v
         v_total += v_elapsed
 
@@ -704,7 +761,7 @@ fn bench_turboquant_unfused(
         var start_inverse = perf_counter_ns()
         for b in range(BATCH):
             var out_base = b * H * S_q * D
-            dense_rotate_inverse_cpu(output_rot.offset(out_base), dense_matrices, output.offset(out_base), H, S_q, D)
+            dense_rotate_inverse_cpu(output_rot + out_base, dense_matrices, output + out_base, H, S_q, D)
         var inverse_elapsed = perf_counter_ns() - start_inverse
         inverse_total += inverse_elapsed
 
@@ -716,20 +773,10 @@ fn bench_turboquant_unfused(
     var v_time_us = Float64(v_total) / Float64(ITERS) / 1000.0
     var inverse_time_us = Float64(inverse_total) / Float64(ITERS) / 1000.0
 
-    # Cleanup
-    Q.free()
-    K.free()
-    V.free()
-    dense_matrices.free()
-    scores.free()
-    attn_weights.free()
-    output_rot.free()
-    output.free()
-
-    return (total_time_us, qk_time_us, softmax_time_us, v_time_us, inverse_time_us)
+    return Tuple(total_time_us, qk_time_us, softmax_time_us, v_time_us, inverse_time_us)
 
 
-fn bench_hand_fused_attention(
+def bench_hand_fused_attention(
     ctx: DeviceContext,
     T: Int,
     use_hadamard: Bool
@@ -751,11 +798,26 @@ fn bench_hand_fused_attention(
     var kv_size = BATCH * H * S_kv * D
     var block_mat_size = H * n_blocks * BLOCK_SIZE * BLOCK_SIZE
 
-    var Q = UnsafePointer[Float32].alloc(q_size)
-    var K = UnsafePointer[Float32].alloc(kv_size)
-    var V = UnsafePointer[Float32].alloc(kv_size)
-    var block_matrices = UnsafePointer[Float32].alloc(block_mat_size)
-    var output = UnsafePointer[Float32].alloc(q_size)
+    var Q_list = List[Float32](capacity=q_size)
+    for _ in range(q_size):
+        Q_list.append(0.0)
+    var Q = Q_list.unsafe_ptr()
+    var K_list = List[Float32](capacity=kv_size)
+    for _ in range(kv_size):
+        K_list.append(0.0)
+    var K = K_list.unsafe_ptr()
+    var V_list = List[Float32](capacity=kv_size)
+    for _ in range(kv_size):
+        V_list.append(0.0)
+    var V = V_list.unsafe_ptr()
+    var block_matrices_list = List[Float32](capacity=block_mat_size)
+    for _ in range(block_mat_size):
+        block_matrices_list.append(0.0)
+    var block_matrices = block_matrices_list.unsafe_ptr()
+    var output_list = List[Float32](capacity=q_size)
+    for _ in range(q_size):
+        output_list.append(0.0)
+    var output = output_list.unsafe_ptr()
 
     # Initialize with seed=42
     seed(42)
@@ -785,17 +847,10 @@ fn bench_hand_fused_attention(
 
     var total_time_us = Float64(elapsed) / Float64(ITERS) / 1000.0
 
-    # Cleanup
-    Q.free()
-    K.free()
-    V.free()
-    block_matrices.free()
-    output.free()
-
     return total_time_us
 
 
-fn main() raises:
+def main() raises:
     print("=== Mojo Fused Attention Benchmark (IsoQuant vs TurboQuant + Hand-Fused) ===")
     print("Config: B=", BATCH, ", H=", NUM_HEADS, ", D=", HEAD_DIM)
     print("Pipeline: QK -> Softmax -> V -> Inverse Rotation")
@@ -818,7 +873,12 @@ fn main() raises:
         var T = seq_lengths[i]
         print("Sequence length T =", T)
 
-        var (total_time, qk_time, softmax_time, v_time, inverse_time) = bench_unfused_attention(ctx, T, use_hadamard)
+        var iso_r = bench_unfused_attention(ctx, T, use_hadamard)
+        var total_time = iso_r[0]
+        var qk_time = iso_r[1]
+        var softmax_time = iso_r[2]
+        var v_time = iso_r[3]
+        var inverse_time = iso_r[4]
 
         print("  Total:          ", total_time, "us")
         print("  QK matmul:      ", qk_time, "us (", (qk_time / total_time * 100.0), "%)")
@@ -828,20 +888,25 @@ fn main() raises:
         print()
 
     print()
-    print("--- TurboQuant Unfused Attention (O(D²) dense rotation) ---")
+    print("--- TurboQuant Unfused Attention (O(D^2) dense rotation) ---")
     print()
 
     for i in range(len(seq_lengths)):
         var T = seq_lengths[i]
         print("Sequence length T =", T)
 
-        var (total_time, qk_time, softmax_time, v_time, inverse_time) = bench_turboquant_unfused(ctx, T)
+        var turbo_r = bench_turboquant_unfused(ctx, T)
+        var total_time = turbo_r[0]
+        var qk_time = turbo_r[1]
+        var softmax_time = turbo_r[2]
+        var v_time = turbo_r[3]
+        var inverse_time = turbo_r[4]
 
         print("  Total:          ", total_time, "us")
         print("  QK matmul:      ", qk_time, "us (", (qk_time / total_time * 100.0), "%)")
         print("  Softmax:        ", softmax_time, "us (", (softmax_time / total_time * 100.0), "%)")
         print("  V matmul:       ", v_time, "us (", (v_time / total_time * 100.0), "%)")
-        print("  Inverse rotate: ", inverse_time, "us (", (inverse_time / total_time * 100.0), "%) [TurboQuant: Dense D×D matmul]")
+        print("  Inverse rotate: ", inverse_time, "us (", (inverse_time / total_time * 100.0), "%) [TurboQuant: Dense DxD matmul]")
         print()
 
     print()
@@ -849,8 +914,18 @@ fn main() raises:
     print()
 
     var T_compare = 2048
-    var (iso_total, iso_qk, iso_softmax, iso_v, iso_inverse) = bench_unfused_attention(ctx, T_compare, use_hadamard)
-    var (turbo_total, turbo_qk, turbo_softmax, turbo_v, turbo_inverse) = bench_turboquant_unfused(ctx, T_compare)
+    var iso_cmp = bench_unfused_attention(ctx, T_compare, use_hadamard)
+    var iso_total = iso_cmp[0]
+    var iso_qk = iso_cmp[1]
+    var iso_softmax = iso_cmp[2]
+    var iso_v = iso_cmp[3]
+    var iso_inverse = iso_cmp[4]
+    var turbo_cmp = bench_turboquant_unfused(ctx, T_compare)
+    var turbo_total = turbo_cmp[0]
+    var turbo_qk = turbo_cmp[1]
+    var turbo_softmax = turbo_cmp[2]
+    var turbo_v = turbo_cmp[3]
+    var turbo_inverse = turbo_cmp[4]
 
     print("Operation                     | IsoQuant (us) | TurboQuant (us) | Speedup")
     print("------------------------------|---------------|-----------------|--------")
@@ -859,7 +934,7 @@ fn main() raises:
     print("V accumulation (T-linear)     |", iso_v, "|", turbo_v, "|", turbo_v / iso_v, "x")
     print("Inverse rotation              |", iso_inverse, "|", turbo_inverse, "|", turbo_inverse / iso_inverse, "x")
     print("  (IsoQuant: O(D log D))      |               |                 |")
-    print("  (TurboQuant: O(D²))         |               |                 |")
+    print("  (TurboQuant: O(D^2))        |               |                 |")
     print("TOTAL                         |", iso_total, "|", turbo_total, "|", turbo_total / iso_total, "x")
     print()
     print("NOTE: IsoQuant speedup is CONSTANT-FACTOR at rotation steps, NOT asymptotic.")
@@ -875,7 +950,8 @@ fn main() raises:
         print("Sequence length T =", T)
 
         var fused_time = bench_fused_attention(ctx, T, use_hadamard)
-        var (unfused_total, _, _, _, _) = bench_unfused_attention(ctx, T, use_hadamard)
+        var unfused_r = bench_unfused_attention(ctx, T, use_hadamard)
+        var unfused_total = unfused_r[0]
         var speedup = unfused_total / fused_time
 
         print("  Fused time:   ", fused_time, "us")
@@ -896,7 +972,8 @@ fn main() raises:
         print("Sequence length T =", T)
 
         var hand_fused_time = bench_hand_fused_attention(ctx, T, use_hadamard)
-        var (unfused_total, _, _, _, _) = bench_unfused_attention(ctx, T, use_hadamard)
+        var unfused_r2 = bench_unfused_attention(ctx, T, use_hadamard)
+        var unfused_total = unfused_r2[0]
         var speedup = unfused_total / hand_fused_time
 
         print("  Hand-fused time: ", hand_fused_time, "us")

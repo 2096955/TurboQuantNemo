@@ -1,61 +1,39 @@
 """Rotary Position Embeddings (RoPE) benchmark for Mojo GPU."""
-from gpu.host import DeviceContext
-from gpu import thread_idx, block_idx, block_dim, barrier
+from std.math import ceildiv, sin, cos, pow
+from std.sys import has_accelerator
+from std.gpu.host import DeviceContext
+from std.gpu import thread_idx, block_idx, block_dim
 from layout import LayoutTensor, Layout
-from memory import UnsafePointer
-from time import perf_counter_ns
-from random import seed, random_float64
-from math import sin, cos, pow
+from std.time import perf_counter_ns
+from std.random import seed, random_float64
 
-alias WARMUP = 10
-alias ITERS = 50
-alias FP32 = DType.float32
-alias FP16 = DType.float16
+comptime WARMUP = 10
+comptime ITERS = 50
+comptime FP32 = DType.float32
 
 # RoPE config matching Qwen/LLaMA models
-alias NUM_HEADS = 48
-alias HEAD_DIM = 128
-alias ROPE_BASE = 10000.0
+comptime NUM_HEADS = 48
+comptime HEAD_DIM = 128
+comptime ROPE_BASE = 10000.0
+
+# Maximum flat layout for input tensor
+# Largest shape: [1, 48, 32768, 128] = 201,326,592 elements
+comptime MAX_INPUT_ELEMENTS = 201326592
+comptime flat_input_layout = Layout.row_major(MAX_INPUT_ELEMENTS)
+
+# Maximum flat layout for cos/sin tables
+# Largest: 32768 * 64 = 2,097,152
+comptime MAX_TABLE_ELEMENTS = 2097152
+comptime flat_table_layout = Layout.row_major(MAX_TABLE_ELEMENTS)
 
 
-fn precompute_freqs_cis(head_dim: Int, seq_len: Int, base: Float64) -> (UnsafePointer[Float32], UnsafePointer[Float32]):
-    """Precompute sin/cos frequency tables for RoPE.
-
-    Returns (cos_table, sin_table) of size [seq_len, head_dim/2].
-    Each position gets rotary frequencies for pairs of dimensions.
-    """
-    var half_dim = head_dim // 2
-    var table_size = seq_len * half_dim
-
-    var cos_table = UnsafePointer[Float32].alloc(table_size)
-    var sin_table = UnsafePointer[Float32].alloc(table_size)
-
-    # Compute frequencies: freq[i] = 1.0 / (base^(2i/head_dim))
-    for pos in range(seq_len):
-        for i in range(half_dim):
-            var freq = 1.0 / pow(base, Float64(2 * i) / Float64(head_dim))
-            var angle = Float64(pos) * freq
-
-            var idx = pos * half_dim + i
-            cos_table[idx] = Float32(cos(angle))
-            sin_table[idx] = Float32(sin(angle))
-
-    return (cos_table, sin_table)
-
-
-fn gpu_rope_kernel[
+def gpu_rope_kernel(
+    input: LayoutTensor[DType.float32, flat_input_layout, MutAnyOrigin],
+    cos_table: LayoutTensor[DType.float32, flat_table_layout, MutAnyOrigin],
+    sin_table: LayoutTensor[DType.float32, flat_table_layout, MutAnyOrigin],
+    output: LayoutTensor[DType.float32, flat_input_layout, MutAnyOrigin],
     seq_len: Int,
     head_dim: Int,
-    dtype: DType,
-    layout_input: Layout,
-    layout_cos: Layout,
-    layout_sin: Layout,
-    layout_output: Layout
-](
-    input: LayoutTensor[mut=False, dtype=dtype, layout=layout_input],
-    cos_table: LayoutTensor[mut=False, dtype=dtype, layout=layout_cos],
-    sin_table: LayoutTensor[mut=False, dtype=dtype, layout=layout_sin],
-    output: LayoutTensor[mut=True, dtype=dtype, layout=layout_output]
 ):
     """Apply Rotary Position Embeddings.
 
@@ -70,7 +48,6 @@ fn gpu_rope_kernel[
     """
     var tid = block_idx.x * block_dim.x + thread_idx.x
 
-    # Total number of dimension PAIRS (not individual elements)
     var total_pairs = 1 * NUM_HEADS * seq_len * (head_dim // 2)
 
     if tid >= total_pairs:
@@ -88,200 +65,151 @@ fn gpu_rope_kernel[
     # Get frequency table index
     var freq_idx = pos * (head_dim // 2) + pair_idx_in_head
 
-    var cos_val = Float32(cos_table[freq_idx])
-    var sin_val = Float32(sin_table[freq_idx])
+    var cos_val = rebind[Float32](cos_table[freq_idx])
+    var sin_val = rebind[Float32](sin_table[freq_idx])
 
-    # Read BOTH input values BEFORE writing ANY output (avoids race condition)
-    var x0 = Float32(input[even_idx])  # input[2i]
-    var x1 = Float32(input[odd_idx])   # input[2i+1]
+    # Read BOTH input values BEFORE writing ANY output
+    var x0 = rebind[Float32](input[even_idx])
+    var x1 = rebind[Float32](input[odd_idx])
 
     # Compute both output values
-    var out_even = x0 * cos_val - x1 * sin_val
-    var out_odd = x0 * sin_val + x1 * cos_val
-
-    # Write both outputs
-    if dtype == DType.float16:
-        output[even_idx] = Float16(out_even)
-        output[odd_idx] = Float16(out_odd)
-    else:
-        output[even_idx] = out_even
-        output[odd_idx] = out_odd
+    output[even_idx] = x0 * cos_val - x1 * sin_val
+    output[odd_idx] = x0 * sin_val + x1 * cos_val
 
 
-fn bench_rope_shape[
-    dtype: DType
-](ctx: DeviceContext, seq_len: Int, shape_name: String) -> Float64:
+def bench_rope_shape(
+    ctx: DeviceContext, seq_len: Int, shape_name: String
+) raises -> Float64:
     """Benchmark RoPE for given sequence length. Returns elapsed time in microseconds."""
 
-    # Input shape: [1, 48, S, 128]
     var batch = 1
     var total_elements = batch * NUM_HEADS * seq_len * HEAD_DIM
     var table_size = seq_len * (HEAD_DIM // 2)
 
-    # Precompute frequency tables on host
-    var (host_cos, host_sin) = precompute_freqs_cis(HEAD_DIM, seq_len, ROPE_BASE)
+    # Precompute frequency tables on host using managed buffers
+    host_cos = ctx.enqueue_create_host_buffer[DType.float32](table_size)
+    host_sin = ctx.enqueue_create_host_buffer[DType.float32](table_size)
+    ctx.synchronize()
 
-    # Allocate input/output
-    var host_input = UnsafePointer[Float32].alloc(total_elements)
-    var host_output = UnsafePointer[Float32].alloc(total_elements)
+    var half_dim = HEAD_DIM // 2
+    for pos in range(seq_len):
+        for i in range(half_dim):
+            var freq = 1.0 / pow(Float64(ROPE_BASE), Float64(2 * i) / Float64(HEAD_DIM))
+            var angle = Float64(pos) * freq
+            var idx = pos * half_dim + i
+            host_cos[idx] = Float32(cos(angle))
+            host_sin[idx] = Float32(sin(angle))
+
+    # Allocate input
+    host_input = ctx.enqueue_create_host_buffer[DType.float32](total_elements)
+    ctx.synchronize()
 
     # Initialize input with random activations (seed=42)
     seed(42)
     for i in range(total_elements):
-        host_input[i] = Float32(random_float64() * 2.0 - 1.0)  # [-1, 1]
+        host_input[i] = Float32(random_float64() * 2.0 - 1.0)
 
     # Create device buffers
-    var dev_input = ctx.enqueue_create_buffer[dtype](total_elements)
-    var dev_output = ctx.enqueue_create_buffer[dtype](total_elements)
-    var dev_cos = ctx.enqueue_create_buffer[dtype](table_size)
-    var dev_sin = ctx.enqueue_create_buffer[dtype](table_size)
+    dev_input = ctx.enqueue_create_buffer[DType.float32](total_elements)
+    dev_output = ctx.enqueue_create_buffer[DType.float32](total_elements)
+    dev_cos = ctx.enqueue_create_buffer[DType.float32](table_size)
+    dev_sin = ctx.enqueue_create_buffer[DType.float32](table_size)
 
     # Copy to device
-    if dtype == DType.float16:
-        var host_input_fp16 = UnsafePointer[Float16].alloc(total_elements)
-        var host_cos_fp16 = UnsafePointer[Float16].alloc(table_size)
-        var host_sin_fp16 = UnsafePointer[Float16].alloc(table_size)
-
-        for i in range(total_elements):
-            host_input_fp16[i] = Float16(host_input[i])
-        for i in range(table_size):
-            host_cos_fp16[i] = Float16(host_cos[i])
-            host_sin_fp16[i] = Float16(host_sin[i])
-
-        ctx.enqueue_copy(dev_input, host_input_fp16, total_elements)
-        ctx.enqueue_copy(dev_cos, host_cos_fp16, table_size)
-        ctx.enqueue_copy(dev_sin, host_sin_fp16, table_size)
-
-        host_input_fp16.free()
-        host_cos_fp16.free()
-        host_sin_fp16.free()
-    else:
-        ctx.enqueue_copy(dev_input, host_input, total_elements)
-        ctx.enqueue_copy(dev_cos, host_cos, table_size)
-        ctx.enqueue_copy(dev_sin, host_sin, table_size)
-
+    ctx.enqueue_copy(dst_buf=dev_input, src_buf=host_input)
+    ctx.enqueue_copy(dst_buf=dev_cos, src_buf=host_cos)
+    ctx.enqueue_copy(dst_buf=dev_sin, src_buf=host_sin)
     ctx.synchronize()
 
-    # Grid configuration: launch one thread per dimension PAIR, not per element
+    # Grid configuration: one thread per dimension PAIR
     var total_pairs = total_elements // 2
     var threads_per_block = 256
-    var blocks = (total_pairs + threads_per_block - 1) // threads_per_block
+    var blocks = ceildiv(total_pairs, threads_per_block)
+
+    # Wrap device buffers in LayoutTensors
+    input_tensor = LayoutTensor[DType.float32, flat_input_layout](dev_input)
+    output_tensor = LayoutTensor[DType.float32, flat_input_layout](dev_output)
+    cos_tensor = LayoutTensor[DType.float32, flat_table_layout](dev_cos)
+    sin_tensor = LayoutTensor[DType.float32, flat_table_layout](dev_sin)
 
     # Warmup
     for _ in range(WARMUP):
-        ctx.enqueue_function[gpu_rope_kernel[
-            seq_len, HEAD_DIM, dtype,
-            Layout.row_major(total_elements),
-            Layout.row_major(table_size),
-            Layout.row_major(table_size),
-            Layout.row_major(total_elements)
-        ]](
-            dev_input.as_tensor(),
-            dev_cos.as_tensor(),
-            dev_sin.as_tensor(),
-            dev_output.as_tensor(),
-            grid_dim=(blocks,), block_dim=(threads_per_block,)
+        ctx.enqueue_function[gpu_rope_kernel, gpu_rope_kernel](
+            input_tensor, cos_tensor, sin_tensor, output_tensor,
+            seq_len, HEAD_DIM,
+            grid_dim=blocks, block_dim=threads_per_block,
         )
         ctx.synchronize()
 
     # Timed iterations
     var start = perf_counter_ns()
     for _ in range(ITERS):
-        ctx.enqueue_function[gpu_rope_kernel[
-            seq_len, HEAD_DIM, dtype,
-            Layout.row_major(total_elements),
-            Layout.row_major(table_size),
-            Layout.row_major(table_size),
-            Layout.row_major(total_elements)
-        ]](
-            dev_input.as_tensor(),
-            dev_cos.as_tensor(),
-            dev_sin.as_tensor(),
-            dev_output.as_tensor(),
-            grid_dim=(blocks,), block_dim=(threads_per_block,)
+        ctx.enqueue_function[gpu_rope_kernel, gpu_rope_kernel](
+            input_tensor, cos_tensor, sin_tensor, output_tensor,
+            seq_len, HEAD_DIM,
+            grid_dim=blocks, block_dim=threads_per_block,
         )
         ctx.synchronize()
     var elapsed = perf_counter_ns() - start
 
-    # Cleanup
-    host_input.free()
-    host_output.free()
-    host_cos.free()
-    host_sin.free()
-
     return Float64(elapsed) / Float64(ITERS) / 1000.0
 
 
-fn compute_bandwidth(total_elements: Int, dtype_size: Int, elapsed_us: Float64) -> Float64:
+def compute_bandwidth(total_elements: Int, dtype_size: Int, elapsed_us: Float64) -> Float64:
     """Compute memory bandwidth in GB/s.
 
     RoPE reads: input + cos + sin
     RoPE writes: output
-    Total: 4 arrays, but cos/sin are smaller (seq_len * head_dim/2)
-    Approximate as 2 * input_size for simplicity (dominant term)
+    Approximate as 2 * input_size for simplicity (dominant term).
     """
     var bytes = Float64(2 * total_elements * dtype_size)
     var elapsed_s = elapsed_us / 1_000_000.0
     return bytes / elapsed_s / 1_000_000_000.0
 
 
-fn main() raises:
-    print("=== Mojo GPU RoPE Benchmark ===")
-    print("Config: batch=1, heads=", NUM_HEADS, ", head_dim=", HEAD_DIM)
-    print("RoPE base:", ROPE_BASE)
-    print()
-
-    var ctx = DeviceContext()
-
-    # Sequence length sweep
-    var seq_lengths = List[Int]()
-    seq_lengths.append(128)
-    seq_lengths.append(512)
-    seq_lengths.append(2048)
-    seq_lengths.append(8192)
-    seq_lengths.append(32768)
-
-    var names = List[String]()
-    names.append("seq_128")
-    names.append("seq_512")
-    names.append("seq_2048")
-    names.append("seq_8192")
-    names.append("seq_32768")
-
-    # Benchmark FP32
-    print("--- FP32 RoPE ---")
-    for i in range(len(seq_lengths)):
-        var S = seq_lengths[i]
-        var name = names[i]
-        var total_elements = 1 * NUM_HEADS * S * HEAD_DIM
-
-        var elapsed_us = bench_rope_shape[FP32](ctx, S, name)
-        var gbs = compute_bandwidth(total_elements, 4, elapsed_us)
-
-        print(name, ":")
-        print("  Shape: (1,", NUM_HEADS, ",", S, ",", HEAD_DIM, ")")
-        print("  Elements:", total_elements)
-        print("  Time:", elapsed_us, "us")
-        print("  Bandwidth:", gbs, "GB/s")
+def main() raises:
+    comptime if not has_accelerator():
+        print("No compatible GPU found")
+    else:
+        print("=== Mojo GPU RoPE Benchmark ===")
+        print("Config: batch=1, heads=", NUM_HEADS, ", head_dim=", HEAD_DIM)
+        print("RoPE base:", ROPE_BASE)
         print()
 
-    # Benchmark FP16
-    print("--- FP16 RoPE ---")
-    for i in range(len(seq_lengths)):
-        var S = seq_lengths[i]
-        var name = names[i]
-        var total_elements = 1 * NUM_HEADS * S * HEAD_DIM
+        ctx = DeviceContext()
 
-        var elapsed_us = bench_rope_shape[FP16](ctx, S, name)
-        var gbs = compute_bandwidth(total_elements, 2, elapsed_us)
+        # Sequence length sweep
+        var seq_lengths = List[Int]()
+        seq_lengths.append(128)
+        seq_lengths.append(512)
+        seq_lengths.append(2048)
+        seq_lengths.append(8192)
+        seq_lengths.append(32768)
 
-        print(name, ":")
-        print("  Shape: (1,", NUM_HEADS, ",", S, ",", HEAD_DIM, ")")
-        print("  Elements:", total_elements)
-        print("  Time:", elapsed_us, "us")
-        print("  Bandwidth:", gbs, "GB/s")
-        print()
+        var names = List[String]()
+        names.append("seq_128")
+        names.append("seq_512")
+        names.append("seq_2048")
+        names.append("seq_8192")
+        names.append("seq_32768")
 
-    print("=== RoPE Benchmark Complete ===")
-    print("NOTE: Results should be post-processed with adaptive_bench harness")
-    print("      and written to JSON for comparison with MLX.")
+        # Benchmark FP32
+        print("--- FP32 RoPE ---")
+        for i in range(len(seq_lengths)):
+            var S = seq_lengths[i]
+            var name = names[i]
+            var total_elements = 1 * NUM_HEADS * S * HEAD_DIM
+
+            var elapsed_us = bench_rope_shape(ctx, S, name)
+            var gbs = compute_bandwidth(total_elements, 4, elapsed_us)
+
+            print(name, ":")
+            print("  Shape: (1,", NUM_HEADS, ",", S, ",", HEAD_DIM, ")")
+            print("  Elements:", total_elements)
+            print("  Time:", elapsed_us, "us")
+            print("  Bandwidth:", gbs, "GB/s")
+            print()
+
+        print("=== RoPE Benchmark Complete ===")
+        print("NOTE: Results should be post-processed with adaptive_bench harness")
+        print("      and written to JSON for comparison with MLX.")

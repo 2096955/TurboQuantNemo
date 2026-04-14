@@ -1,7 +1,7 @@
-from gpu.host import DeviceContext
-from time import perf_counter_ns
+from std.gpu.host import DeviceContext
+from std.time import perf_counter_ns
 
-fn measure_noop_dispatch(warmup: Int = 100, iters: Int = 500) -> Float64:
+def measure_noop_dispatch(warmup: Int = 100, iters: Int = 500) -> Float64:
     """Measure GPU dispatch overhead in microseconds."""
     var ctx = DeviceContext()
 
@@ -18,6 +18,6 @@ fn measure_noop_dispatch(warmup: Int = 100, iters: Int = 500) -> Float64:
     return Float64(elapsed) / Float64(iters) / 1000.0  # ns -> us
 
 
-fn main():
+def main() raises:
     var overhead_us = measure_noop_dispatch()
     print("Dispatch overhead:", overhead_us, "us")

@@ -1,13 +1,13 @@
 from collections import List
-from math import sqrt, log
-from time import perf_counter_ns
+from std.math import sqrt, log
+from std.time import perf_counter_ns
 
-alias MAX_ITERS = 500
-alias BATCH_SIZE = 25
-alias WARMUP_ITERS = 10
-alias BOOTSTRAP_SAMPLES = 10_000
-alias CI_TARGET_PCT = 2.0  # Stop when CI width < 2% of median
-alias DW_THRESHOLD = 1.5   # Flag if Durbin-Watson < 1.5
+comptime MAX_ITERS = 500
+comptime BATCH_SIZE = 25
+comptime WARMUP_ITERS = 10
+comptime BOOTSTRAP_SAMPLES = 10_000
+comptime CI_TARGET_PCT = 2.0  # Stop when CI width < 2% of median
+comptime DW_THRESHOLD = 1.5   # Flag if Durbin-Watson < 1.5
 
 
 @value
@@ -27,7 +27,7 @@ struct BenchResult:
     var ci_width_pct: Float64
 
 
-fn sort_float_list(inout arr: List[Float64]):
+def sort_float_list(inout arr: List[Float64]):
     """Simple insertion sort for benchmark result lists."""
     for i in range(1, len(arr)):
         var key = arr[i]
@@ -38,7 +38,7 @@ fn sort_float_list(inout arr: List[Float64]):
         arr[j + 1] = key
 
 
-fn percentile(sorted_arr: List[Float64], pct: Float64) -> Float64:
+def percentile(sorted_arr: List[Float64], pct: Float64) -> Float64:
     """Get percentile from sorted array using linear interpolation."""
     var n = len(sorted_arr)
     if n == 0:
@@ -57,14 +57,14 @@ fn percentile(sorted_arr: List[Float64], pct: Float64) -> Float64:
     return sorted_arr[floor_idx] + frac * (sorted_arr[ceil_idx] - sorted_arr[floor_idx])
 
 
-fn compute_mean(arr: List[Float64]) -> Float64:
+def compute_mean(arr: List[Float64]) -> Float64:
     var s: Float64 = 0.0
     for i in range(len(arr)):
         s += arr[i]
     return s / Float64(len(arr))
 
 
-fn compute_std(arr: List[Float64], mean: Float64) -> Float64:
+def compute_std(arr: List[Float64], mean: Float64) -> Float64:
     var s: Float64 = 0.0
     for i in range(len(arr)):
         var d = arr[i] - mean
@@ -72,7 +72,7 @@ fn compute_std(arr: List[Float64], mean: Float64) -> Float64:
     return sqrt(s / Float64(len(arr) - 1)) if len(arr) > 1 else 0.0
 
 
-fn durbin_watson(timings: List[Float64]) -> Float64:
+def durbin_watson(timings: List[Float64]) -> Float64:
     """Compute Durbin-Watson statistic for serial autocorrelation detection."""
     if len(timings) < 3:
         return 2.0  # No autocorrelation assumed
@@ -88,7 +88,7 @@ fn durbin_watson(timings: List[Float64]) -> Float64:
     return sum_sq_diff / sum_sq_resid if sum_sq_resid > 0 else 2.0
 
 
-fn percentile_bootstrap_ci(timings: List[Float64], n_samples: Int = BOOTSTRAP_SAMPLES, seed: Int = 42) -> Tuple[Float64, Float64]:
+def percentile_bootstrap_ci(timings: List[Float64], n_samples: Int = BOOTSTRAP_SAMPLES, seed: Int = 42) -> Tuple[Float64, Float64]:
     """Percentile bootstrap 95% CI.
 
     This is a simple percentile bootstrap implementation. For production use,
@@ -121,7 +121,7 @@ fn percentile_bootstrap_ci(timings: List[Float64], n_samples: Int = BOOTSTRAP_SA
     return (boot_means[lo_idx], boot_means[hi_idx])
 
 
-fn adaptive_bench[bench_fn: fn() -> Float64]() -> BenchResult:
+def adaptive_bench[bench_fn: fn() -> Float64]() -> BenchResult:
     """Run adaptive benchmark with automatic convergence detection.
 
     Runs warmup iterations, then batches of BATCH_SIZE iterations until:

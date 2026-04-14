@@ -15,28 +15,28 @@ Benchmarks shapes (H=8, T, D=128) for T in {128, 512, 2048, 8192}.
 
 Metrics: GB/s, compression/decompression time, reconstruction RMSE
 """
-from memory import UnsafePointer
-from time import perf_counter_ns
-from random import seed, random_float64
-from math import sqrt
+from std.memory import UnsafePointer
+from std.time import perf_counter_ns
+from std.random import seed, random_float64
+from std.math import sqrt
 
-alias WARMUP = 10
-alias ITERS = 50
-alias FP32 = DType.float32
+comptime WARMUP = 10
+comptime ITERS = 50
+comptime FP32 = DType.float32
 
 # KV cache compression config
-alias NUM_HEADS = 8
-alias HEAD_DIM = 128
-alias NUM_BITS = 3
-alias NUM_CENTROIDS = 8  # 2^3 for 3-bit quantization
+comptime NUM_HEADS = 8
+comptime HEAD_DIM = 128
+comptime NUM_BITS = 3
+comptime NUM_CENTROIDS = 8  # 2^3 for 3-bit quantization
 
 # Compressed storage: index (uint8) + norm (float32)
-alias INDEX_BYTES = 1
-alias NORM_BYTES = 4
-alias COMPRESSED_BYTES = INDEX_BYTES + NORM_BYTES
+comptime INDEX_BYTES = 1
+comptime NORM_BYTES = 4
+comptime COMPRESSED_BYTES = INDEX_BYTES + NORM_BYTES
 
 
-fn generate_synthetic_codebook(codebook: UnsafePointer[Float32], D: Int, K: Int):
+def generate_synthetic_codebook(codebook: UnsafePointer[Float32, MutAnyOrigin], D: Int, K: Int):
     """Generate synthetic codebook: K centroids of dimension D.
 
     Each centroid is a normalized random vector (seed=42 for reproducibility).
@@ -61,7 +61,7 @@ fn generate_synthetic_codebook(codebook: UnsafePointer[Float32], D: Int, K: Int)
             codebook[k * D + d] = Float32(Float64(codebook[k * D + d]) / norm)
 
 
-fn compute_l2_norm(vec: UnsafePointer[Float32], D: Int) -> Float32:
+def compute_l2_norm(vec: UnsafePointer[Float32, MutAnyOrigin], D: Int) -> Float32:
     """Compute L2 norm of a vector."""
     var sum_sq: Float64 = 0.0
     for d in range(D):
@@ -70,9 +70,9 @@ fn compute_l2_norm(vec: UnsafePointer[Float32], D: Int) -> Float32:
     return Float32(sqrt(sum_sq))
 
 
-fn find_nearest_centroid(
-    vec: UnsafePointer[Float32],
-    codebook: UnsafePointer[Float32],
+def find_nearest_centroid(
+    vec: UnsafePointer[Float32, MutAnyOrigin],
+    codebook: UnsafePointer[Float32, MutAnyOrigin],
     D: Int,
     K: Int
 ) -> Int:
@@ -103,11 +103,11 @@ fn find_nearest_centroid(
     return best_idx
 
 
-fn compress_kv(
-    kv: UnsafePointer[Float32],
-    codebook: UnsafePointer[Float32],
-    indices: UnsafePointer[UInt8],
-    norms: UnsafePointer[Float32],
+def compress_kv(
+    kv: UnsafePointer[Float32, MutAnyOrigin],
+    codebook: UnsafePointer[Float32, MutAnyOrigin],
+    indices: UnsafePointer[UInt8, MutAnyOrigin],
+    norms: UnsafePointer[Float32, MutAnyOrigin],
     H: Int,
     T: Int,
     D: Int,
@@ -131,7 +131,10 @@ fn compress_kv(
         D: Head dimension
         K: Number of centroids
     """
-    var normalized = UnsafePointer[Float32].alloc(D)
+    var normalized_list = List[Float32](capacity=D)
+    for _ in range(D):
+        normalized_list.append(0.0)
+    var normalized = normalized_list.unsafe_ptr()
 
     for h in range(H):
         for t in range(T):
@@ -139,7 +142,7 @@ fn compress_kv(
             var out_idx = h * T + t
 
             # Compute norm
-            var norm = compute_l2_norm(kv.offset(vec_idx), D)
+            var norm = compute_l2_norm(kv + vec_idx, D)
             norms[out_idx] = norm
 
             # Normalize vector
@@ -155,14 +158,12 @@ fn compress_kv(
             var centroid_idx = find_nearest_centroid(normalized, codebook, D, K)
             indices[out_idx] = UInt8(centroid_idx)
 
-    normalized.free()
 
-
-fn decompress_kv(
-    indices: UnsafePointer[UInt8],
-    norms: UnsafePointer[Float32],
-    codebook: UnsafePointer[Float32],
-    kv_out: UnsafePointer[Float32],
+def decompress_kv(
+    indices: UnsafePointer[UInt8, MutAnyOrigin],
+    norms: UnsafePointer[Float32, MutAnyOrigin],
+    codebook: UnsafePointer[Float32, MutAnyOrigin],
+    kv_out: UnsafePointer[Float32, MutAnyOrigin],
     H: Int,
     T: Int,
     D: Int
@@ -196,7 +197,7 @@ fn decompress_kv(
                 kv_out[out_idx + d] = codebook[centroid_idx * D + d] * norm
 
 
-fn compute_rmse(a: UnsafePointer[Float32], b: UnsafePointer[Float32], size: Int) -> Float64:
+def compute_rmse(a: UnsafePointer[Float32, MutAnyOrigin], b: UnsafePointer[Float32, MutAnyOrigin], size: Int) -> Float64:
     """Compute RMSE between two arrays."""
     var sum_sq: Float64 = 0.0
     for i in range(size):
@@ -205,7 +206,7 @@ fn compute_rmse(a: UnsafePointer[Float32], b: UnsafePointer[Float32], size: Int)
     return sqrt(sum_sq / Float64(size))
 
 
-fn bench_kv_compression(T: Int) -> (Float64, Float64, Float64, Float64, Float64):
+def bench_kv_compression(T: Int) -> Tuple[Float64, Float64, Float64, Float64, Float64]:
     """Benchmark KV compression for sequence length T.
 
     Returns: (compress_time_us, decompress_time_us, compress_gb_s, decompress_gb_s, rmse)
@@ -219,11 +220,26 @@ fn bench_kv_compression(T: Int) -> (Float64, Float64, Float64, Float64, Float64)
     var codebook_size = K * D
 
     # Allocate buffers
-    var kv_input = UnsafePointer[Float32].alloc(kv_size)
-    var codebook = UnsafePointer[Float32].alloc(codebook_size)
-    var indices = UnsafePointer[UInt8].alloc(index_size)
-    var norms = UnsafePointer[Float32].alloc(index_size)
-    var kv_output = UnsafePointer[Float32].alloc(kv_size)
+    var kv_input_list = List[Float32](capacity=kv_size)
+    for _ in range(kv_size):
+        kv_input_list.append(0.0)
+    var kv_input = kv_input_list.unsafe_ptr()
+    var codebook_list = List[Float32](capacity=codebook_size)
+    for _ in range(codebook_size):
+        codebook_list.append(0.0)
+    var codebook = codebook_list.unsafe_ptr()
+    var indices_list = List[UInt8](capacity=index_size)
+    for _ in range(index_size):
+        indices_list.append(0)
+    var indices = indices_list.unsafe_ptr()
+    var norms_list = List[Float32](capacity=index_size)
+    for _ in range(index_size):
+        norms_list.append(0.0)
+    var norms = norms_list.unsafe_ptr()
+    var kv_output_list = List[Float32](capacity=kv_size)
+    for _ in range(kv_size):
+        kv_output_list.append(0.0)
+    var kv_output = kv_output_list.unsafe_ptr()
 
     # Initialize input with seed=42
     seed(42)
@@ -268,17 +284,10 @@ fn bench_kv_compression(T: Int) -> (Float64, Float64, Float64, Float64, Float64)
     var decompress_bytes = Float64(index_size * 5 + codebook_size * 4 + kv_size * 4)
     var decompress_gb_s = decompress_bytes / (decompress_time_us / 1_000_000.0) / 1_000_000_000.0
 
-    # Cleanup
-    kv_input.free()
-    codebook.free()
-    indices.free()
-    norms.free()
-    kv_output.free()
-
-    return (compress_time_us, decompress_time_us, compress_gb_s, decompress_gb_s, rmse)
+    return Tuple(compress_time_us, decompress_time_us, compress_gb_s, decompress_gb_s, rmse)
 
 
-fn main() raises:
+def main() raises:
     print("=== Mojo KV Compression Benchmark ===")
     print("Config: H=", NUM_HEADS, ", D=", HEAD_DIM, ", K=", NUM_CENTROIDS, " (", NUM_BITS, "-bit)")
     print()
@@ -298,7 +307,12 @@ fn main() raises:
         print("Sequence length:", T)
         print("  Shape: (", NUM_HEADS, ",", T, ",", HEAD_DIM, ")")
 
-        var (comp_time, decomp_time, comp_gb, decomp_gb, rmse) = bench_kv_compression(T)
+        var result = bench_kv_compression(T)
+        var comp_time = result[0]
+        var decomp_time = result[1]
+        var comp_gb = result[2]
+        var decomp_gb = result[3]
+        var rmse = result[4]
 
         print("  Compress:   ", comp_time, "us, ", comp_gb, "GB/s")
         print("  Decompress: ", decomp_time, "us, ", decomp_gb, "GB/s")
