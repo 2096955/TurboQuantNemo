@@ -93,7 +93,7 @@ $$G(x) = \text{softmax}(W_g \, x) \in \mathbb{R}^E$$
 
 $$\text{MoE}(x) = \sum_{e \in \text{TopK}(G(x))} G(x)_e \cdot f_e(x)$$
 
-Only the top-$K$ experts (typically $K = 2$ or $K = 8$) are activated per token. This is the critical sparsity property: a model with $E = 384$ experts and $K = 8$ activates only ~2% of expert parameters per token. The model has 1 trillion total parameters, but only ~3B are active at any moment. The remaining 97% are dead weight in RAM — *unless we can offload them*.
+Only the top-$K$ experts (typically $K = 2$ or $K = 8$) are activated per token. This is the critical sparsity property: a model with $E = 384$ experts and $K = 8$ activates only ~2% of expert parameters per token. At trillion-parameter scale (e.g., a hypothetical 1T MoE), the model might have only ~3B parameters active at any moment — the remaining 97% are dead weight in RAM *unless we can offload them*.
 
 ### 2.1 Shared experts
 
@@ -244,7 +244,7 @@ For an orthogonal rotation $\Pi$ and an optimal scalar quantiser $Q_b$ with dist
 
 $$\mathbb{E}[|q^\top k - \widehat{q^\top k}|^2] \leq d_k \sigma_q^2 \|q\|_2^2$$
 
-with equality when the rotated components are uncorrelated. The standard deviation of the score error is therefore $O(\sigma_q \sqrt{d_k} \, \|q\|)$. Rank preservation holds with high probability if the score gap $\Delta$ between the top-1 and top-2 tokens satisfies $\Delta \gg \sigma_q \sqrt{d_k} \, \|q\|$. Note the scaling: preservation becomes *harder* as head dimension grows, not easier — this is why aggressive quantisation (1-bit) fails even with good rotations. The softmax operator suppresses noise when attention distributions are concentrated (low entropy), because only the rank order of the top few scores matters for the output. The appeal to Johnson-Lindenstrauss [21] is limited: JL gives multiplicative $(1 \pm \epsilon)$ distortion on norms, not direct bounds on inner-product gaps. A rigorous treatment would use sub-Gaussian chaining or Hanson-Wright concentration.
+with equality when the rotated components are uncorrelated. The standard deviation of the score error is therefore $O(\sigma_q \sqrt{d_k} \, \|q\|)$. Rank preservation holds with high probability if the score gap $\Delta$ between the top-1 and top-2 tokens satisfies $\Delta \gg \sigma_q \sqrt{d_k} \, \|q\|$. Note the scaling: preservation becomes *harder* as head dimension grows, not easier — this is why aggressive quantisation (1-bit) fails even with good rotations. The softmax operator suppresses noise when attention distributions are concentrated (low entropy), because only the rank order of the top few scores matters for the output. A rigorous bound on rank preservation probability would require sub-Gaussian chaining or Hanson-Wright concentration [21]; our empirical verification (below) confirms the bound holds in practice.
 
 We verify this isotropy empirically by measuring isometry error $\delta \leq 0.05$, cosine similarity $> 0.98$, and top-5 retrieval agreement $> 0.90$.
 
@@ -387,7 +387,11 @@ The v2→v3 evolution demonstrates this: without WHT, block-only SO(4) scored 1/
 
 IsoQuant is integrated into [llama.cpp](https://github.com/ggml-org/llama.cpp) [17] as `GGML_TYPE_ISOQUANT3_0`, a first-class type with dedicated Metal shaders for both write (fused WHT + SO(4) rotation) and read (flash-attention templates). The implementation includes GQA-aware 4D reshaping and proper GGML context memory allocation for per-layer rotation tensors.
 
-**GGML_TYPE_ISOQUANT3_0 implementation status.** The fused WHT+SO(4) Metal kernel (`kernel_turbo_wht_so4`) is implemented and parameterised for group size (currently restricted to 128-wide). Smoke tests on Qwen2.5-1.5B verify token-identical output over 30 decode steps under explicit non-identity test rotations. A final-logit comparison shows they are **not numerically equivalent** to the F32 composed path (`rmse = 0.9456`, top-10 overlap `7/10`). This divergence is larger than expected from half-precision accumulation alone — FP16 rounding typically produces RMSE in the $10^{-2}$–$10^{-3}$ range, not $O(1)$. The root cause is under investigation; possible contributors include FP16 intermediate overflow in the WHT butterfly, order-of-operations differences between fused and composed paths, or a correctness issue in the fused kernel. Despite this, the fused kernel produces token-identical output over 30 decode steps and recovers throughput parity, so the divergence may be concentrated in low-probability logits that do not affect greedy or low-temperature sampling. The kernel eliminates all dispatch overhead from graph-level SO(4) composition (280 extra kernel launches → 0), recovering `turbo3` throughput parity (all results sourced from **pinned artifacts** — benchmark results committed to version control with a fixed hash and timestamp):
+**GGML_TYPE_ISOQUANT3_0 implementation status.** The fused WHT+SO(4) Metal kernel (`kernel_turbo_wht_so4`) is implemented and parameterised for group size (currently restricted to 128-wide). Smoke tests on Qwen2.5-1.5B verify token-identical output over 30 decode steps under explicit non-identity test rotations.
+
+> **Open issue: numerical divergence.** A final-logit comparison shows the fused kernel is **not numerically equivalent** to the F32 composed path (`rmse = 0.9456`, top-10 overlap `7/10`). This divergence is an order of magnitude larger than expected from half-precision accumulation alone — FP16 rounding typically produces RMSE in the $10^{-2}$–$10^{-3}$ range, not $O(1)$. The root cause is under active investigation; possible contributors include FP16 intermediate overflow in the WHT butterfly, order-of-operations differences between fused and composed paths, or a correctness issue in the fused kernel. The 30-step token-identical output under greedy decoding is necessary but insufficient evidence of correctness — the top-1 logit may have enough margin to survive $O(1)$ noise over short sequences while producing divergent output at longer horizons. Longer validation runs (500+ tokens) and top-1 vs top-10 agreement analysis are needed before the fused kernel can be considered validated.
+
+Despite this open question, the kernel eliminates all dispatch overhead from graph-level SO(4) composition (280 extra kernel launches → 0), recovering `turbo3` throughput parity (all results sourced from **pinned artifacts** — benchmark results committed to version control with a fixed hash and timestamp):
 
 | Configuration | Prompt (t/s) | Gen (t/s) | Source |
 |---|---|---|---|
@@ -438,7 +442,7 @@ For $T = 4096$, $L = 61$, $d_{kv} = 512$ at FP16: the buffer is ~512 MB — well
 
 ### Error propagation across sequence positions
 
-While deferred prefill eliminates compounding error during the initial burst, autoregressive decode introduces independent quantisation noise $\epsilon_t$ at every step. At sequence position $T$, the attention scores are computed over $T$ past tokens, each with its own quantisation residual. We conjecture that rank preservation holds when $\Delta \gg \sigma_q \sqrt{d_k} \, \|q\|$; a rigorous bound via the softmax Jacobian ($J = \text{diag}(p) - pp^\top$) or Hanson-Wright concentration is straightforward but omitted for brevity. Empirically, we observe no PPL explosion at context lengths up to 4K, suggesting the 3-bit precision preserves sufficient score margin for reliable retrieval in the models tested.
+While deferred prefill eliminates compounding error during the initial burst, autoregressive decode introduces independent quantisation noise $\epsilon_t$ at every step. At sequence position $T$, the attention scores are computed over $T$ past tokens, each with its own quantisation residual. The rank preservation condition from Section 4.2 ($\Delta \gg \sigma_q \sqrt{d_k} \, \|q\|$) predicts that noise should be tolerable when score gaps are large relative to quantisation error. Empirically, this holds: we observe no PPL explosion at context lengths up to 4K (Section 10.1.2), with delta PPL *decreasing* from +0.072 at 256 tokens to +0.001 at 4K on Qwen3. This decreasing trend is consistent with score gaps growing with sequence length while quantisation noise remains constant per dimension. A formal bound via the softmax Jacobian ($J = \text{diag}(p) - pp^\top$) is straightforward but omitted; the empirical evidence is the stronger statement for the models tested.
 
 **Sliding-window caveat (Gemma 4).** Some architectures use sliding-window attention on most layers (e.g., Gemma 4: 1024-token window on 25 of 30 layers, full attention every 6th layer). KV entries in sliding-window layers are evicted within 1024 tokens — compressing them with IsoQuant wastes compute, since the compression cost is not amortised before eviction. Compress only **global-attention** KV (long-lived entries). Sliding-window KV can stay FP16 or use lightweight FP8.
 
@@ -543,21 +547,21 @@ Over 30 soak iterations with diverse prompts, peak memory grew from 17.2 GB (ben
 
 ### 10.1.2 KV fidelity (PPL at fixed depth)
 
-IsoQuant consistently preserves attention scores across all three architectures, outperforming TurboQuant by 10–50× in PPL retention:
+IsoQuant matches or slightly outperforms TurboQuant on PPL retention across the architectures where it compresses all layers. Both methods introduce negligible absolute PPL degradation at 2048 context (all deltas < 0.07); IsoQuant's deltas are consistently smaller:
 
 | Model | backend | PPL @ 512 | PPL @ 2048 | Delta @ 2048 |
 |---|---|---|---|---|
 | **Qwen3-30B-A3B** | default | 1.3829 | 1.0844 | — |
 | | turboquant | 1.4497 | 1.1249 | +0.0405 |
 | | isoquant | 1.3872 | 1.0853 | **+0.0009** |
-| **Gemma 4-26B-A4B** | default | 3.2029 | 1.3483 | — |
-| | turboquant | 3.5180 | 1.4105 | +0.0622 |
-| | isoquant | 3.2029 | 1.3483 | **+0.0000**\* |
 | **Nemotron-H 120B** | default | 1.3911 | 1.0866 | — |
 | | turboquant | 1.4086 | 1.0905 | +0.0039 |
 | | isoquant | 1.3961 | 1.0878 | **+0.0012** |
+| **Gemma 4-26B-A4B**\* | default | 3.2029 | 1.3483 | — |
+| | turboquant | 3.5180 | 1.4105 | +0.0622 |
+| | isoquant | 3.2029 | 1.3483 | +0.0000 |
 
-\* Gemma 4 uses sliding-window attention on 25 of 30 layers (Section 7). Only global-attention layers (5 of 30: indices 5, 11, 17, 23, 29) receive IsoQuant compression; the remaining 25 layers use `RotatingKVCache` with a 1024-token window, which IsoQuant does not modify. The 0.0000 delta therefore reflects the architecture's limited exposure to KV compression rather than exceptional IsoQuant fidelity — it is effectively a no-op measurement. The Qwen3 and Nemotron results, where IsoQuant compresses all layers, are the meaningful fidelity evidence.
+\* **Gemma 4 caveat:** Sliding-window attention on 25 of 30 layers means IsoQuant only compresses global-attention layers (5 of 30: indices 5, 11, 17, 23, 29). The remaining layers use `RotatingKVCache` with a 1024-token window, which IsoQuant does not modify. The 0.0000 delta reflects the architecture's limited exposure to KV compression — it is effectively a no-op measurement, not evidence of exceptional fidelity. **The Qwen3 and Nemotron rows above are the meaningful fidelity evidence.**
 
 **PPL at context depth** (IsoQuant delta vs default):
 
@@ -585,6 +589,8 @@ Per-component decode time attribution via `mx.eval()` timing fences (warm run, 6
 
 KV attention is **51–54% of decode time** on standard MoE architectures (Gemma4, Qwen3), confirming it as the single largest cost center and justifying KV compression work. On hybrid Mamba+MoE (Nemotron-H), attention drops to 14% and expert routing dominates at 60%.
 
+**Implication for the headline result:** The 120B Nemotron-H result — the paper's primary contribution — benefits primarily from expert offloading and mixed-precision weight quantisation, not from KV compression. IsoQuant targets the minority cost center (14%) on this architecture. The KV compression pipeline's wall-clock impact is concentrated on standard MoE architectures (Gemma4, Qwen3) where attention dominates at 51–54%. This does not diminish the value of KV compression for those architectures, but readers should understand that the 120B throughput number is driven by the expert offload stack, not the KV pipeline.
+
 ### 10.1.4 Prior validations
 
 Pearson kurtosis measurements justify the mixed-precision weight allocation:
@@ -604,7 +610,7 @@ This confirms the Q8_0 shared expert pinning as a heuristic for tail heaviness.
 |---|---|---|
 | IsoQuant (WHT + SO(4)) | **Go** | Quality parity with default (delta PPL ≤ 0.001 @ 2048 on Qwen3/Nemotron), 64× fewer stored rotation parameters |
 | Fused Metal pipeline (MLX) | **Go** | Verified by 9 correctness tests, eliminated materialisation |
-| IsoQuant (llama.cpp) | **Active** | Fused `kernel_turbo_wht_so4` recovers near-`turbo3` throughput; numerical divergence vs composed F32 path (RMSE 0.95, 7/10 top-10 overlap) under investigation |
+| IsoQuant (llama.cpp) | **Active — open correctness question** | Fused `kernel_turbo_wht_so4` recovers near-`turbo3` throughput but has $O(1)$ numerical divergence vs composed F32 path (RMSE 0.95, 7/10 top-10 overlap) — see Section 6.4b |
 | Deferred prefill | **Go** | Eliminates compounding error; ~512 MB buffer is manageable |
 | Gemma4 pathway | **Go** | All gates pass at 12.85 tok/s within 16GB budget |
 | Nemotron-120B pathway | **Go** | All gates pass at 14.85 tok/s within 32GB budget |
@@ -626,9 +632,9 @@ This section is speculative — it asks "what would need to be true" for the 120
 | Memory budget | 17.2 GB of 25.6 GB (67%) | ~110 GB of 128 GB (86%) | Whether linear extrapolation of shard sizes holds at 1T |
 | KV compression | Delta PPL +0.001 at 4K context | Same technique, longer context | Depth curve trend is favourable but untested beyond 4K |
 | Decode throughput | 14.85 tok/s | Target >5 tok/s (interactive) | Expert load latency at 1T shard counts — unknown |
-| Quality | 11/12 on smoke-test harness | Must pass equivalent harness | Model-dependent, not stack-dependent |
+| Quality | 12/12 on smoke-test harness | Must pass equivalent harness | Model-dependent, not stack-dependent |
 
-**Memory envelope estimate** (back-of-napkin, not a prediction): at 2-bit expert shards (~1.6 MB each), a 384-expert × 60-layer model would have ~23,000 shards totalling ~36 GB. On 128GB hardware with ~20 GB for OS and model backbone, ~108 GB remains for expert cache — sufficient for ~67,500 slots, covering the entire model with ~3× headroom. This calculation assumes shard sizes scale linearly and ignores potential changes in routing behaviour. Whether the routing entropy at 1T produces a working set that fits within practical cache sizes, and whether the per-shard load latency remains acceptable, are open empirical questions that cannot be answered by extrapolation from 120B.
+**Illustrative memory envelope** (back-of-napkin, not a prediction): at 2-bit expert shards (~1.6 MB each), a 384-expert × 60-layer model would have ~23,000 shards totalling ~36 GB. On 128GB hardware with ~20 GB for OS and model backbone, ~108 GB would remain for expert cache — nominally sufficient for ~67,500 slots. These numbers are purely illustrative: they assume shard sizes scale linearly from 120B (unvalidated), ignore changes in routing behaviour at higher expert counts, and do not account for memory fragmentation or Metal resource pressure at higher occupancy. Whether the routing entropy at 1T produces a manageable working set, and whether per-shard load latency remains acceptable at 23K shards, are open empirical questions that cannot be answered by extrapolation from 120B.
 
 ---
 
