@@ -16,12 +16,15 @@ Usage:
 
 import argparse
 import json
+import signal
 import statistics
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.request import Request, urlopen
+
+DEFAULT_REQUEST_TIMEOUT_S = 90
 
 
 PROMPTS = [
@@ -42,6 +45,7 @@ def send_request(
     max_tokens: int,
     seed: int,
     request_id: int,
+    timeout_s: float,
 ) -> dict:
     """Send a single completion request and measure latency."""
     payload = json.dumps(
@@ -63,7 +67,7 @@ def send_request(
 
     t0 = time.monotonic()
     try:
-        with urlopen(req, timeout=300) as resp:
+        with urlopen(req, timeout=timeout_s) as resp:
             body = json.loads(resp.read())
         elapsed = time.monotonic() - t0
 
@@ -92,6 +96,7 @@ def run_batch(
     concurrency: int,
     max_tokens: int,
     seed: int,
+    timeout_s: float,
 ) -> dict:
     """Run a batch of concurrent requests and collect metrics."""
     prompts = [PROMPTS[i % len(PROMPTS)] for i in range(concurrency)]
@@ -100,36 +105,53 @@ def run_batch(
     results = []
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = {
-            pool.submit(send_request, base_url, prompt, max_tokens, seed + i, i): i
+            pool.submit(
+                send_request, base_url, prompt, max_tokens, seed + i, i, timeout_s
+            ): i
             for i, prompt in enumerate(prompts)
         }
-        for future in as_completed(futures):
-            results.append(future.result())
+        try:
+            for future in as_completed(futures):
+                results.append(future.result())
+        except KeyboardInterrupt:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
     wall_time = time.monotonic() - t0
 
     results.sort(key=lambda r: r["request_id"])
 
     ok_results = [r for r in results if r["status"] == "ok"]
     failed = len(results) - len(ok_results)
+    all_ok = failed == 0
 
     latencies = [r["latency_s"] for r in ok_results]
     tok_rates = [r["tok_per_s"] for r in ok_results]
     total_tokens = sum(r["tokens"] for r in ok_results)
+
+    # Aggregate throughput is meaningless when wall_time spans both successful
+    # and failed (timed-out) requests. Report None on partial failure so the
+    # scaling table doesn't print misleading speedups.
+    if all_ok and wall_time > 0:
+        agg_tps = round(total_tokens / wall_time, 2)
+    else:
+        agg_tps = None
 
     summary = {
         "concurrency": concurrency,
         "wall_time_s": round(wall_time, 3),
         "requests_ok": len(ok_results),
         "requests_failed": failed,
+        "success_rate": round(len(ok_results) / len(results), 3) if results else 0.0,
         "total_tokens": total_tokens,
-        "aggregate_tok_per_s": round(total_tokens / wall_time, 2)
-        if wall_time > 0
-        else 0,
+        "aggregate_tok_per_s": agg_tps,
     }
 
     if latencies:
         summary["latency_mean_s"] = round(statistics.mean(latencies), 3)
-        summary["latency_p50_s"] = round(sorted(latencies)[len(latencies) // 2], 3)
+        summary["latency_p50_s"] = round(statistics.median(latencies), 3)
+        if len(latencies) >= 20:
+            quantiles = statistics.quantiles(latencies, n=20)
+            summary["latency_p95_s"] = round(quantiles[18], 3)
         summary["latency_max_s"] = round(max(latencies), 3)
         if len(latencies) > 1:
             summary["latency_stdev_s"] = round(statistics.stdev(latencies), 3)
@@ -173,18 +195,30 @@ def main():
         help="Max tokens per request (default: 100)",
     )
     parser.add_argument("--seed", type=int, default=42, help="RNG seed (default: 42)")
+    parser.add_argument(
+        "--per-request-timeout",
+        type=float,
+        default=DEFAULT_REQUEST_TIMEOUT_S,
+        help=f"Per-request timeout in seconds (default: {DEFAULT_REQUEST_TIMEOUT_S})",
+    )
     parser.add_argument("--output-json", help="Write results to JSON file")
     parser.add_argument(
         "--warmup", action="store_true", help="Send a single warmup request first"
     )
     args = parser.parse_args()
 
+    # Make Ctrl-C terminate the whole process group cleanly so urlopen workers
+    # don't keep sockets open after the user gives up.
+    signal.signal(signal.SIGINT, lambda *_: sys.exit(130))
+
     base_url = f"http://{args.host}:{args.port}"
     concurrency_levels = [int(c.strip()) for c in args.concurrency.split(",")]
 
     print(f"Load test: {base_url}")
     print(f"Concurrency levels: {concurrency_levels}")
-    print(f"Max tokens per request: {args.max_tokens}")
+    print(
+        f"Max tokens per request: {args.max_tokens}  Per-request timeout: {args.per_request_timeout}s"
+    )
     print()
 
     if not check_server(base_url):
@@ -198,7 +232,9 @@ def main():
 
     if args.warmup:
         print("Warmup request...")
-        send_request(base_url, "Hello", args.max_tokens, args.seed, -1)
+        send_request(
+            base_url, "Hello", args.max_tokens, args.seed, -1, args.per_request_timeout
+        )
         print()
 
     all_results = []
@@ -210,26 +246,35 @@ def main():
     )
 
     for level in concurrency_levels:
-        batch = run_batch(base_url, level, args.max_tokens, args.seed)
+        batch = run_batch(
+            base_url, level, args.max_tokens, args.seed, args.per_request_timeout
+        )
         all_results.append(batch)
 
+        agg_display = (
+            batch["aggregate_tok_per_s"]
+            if batch["aggregate_tok_per_s"] is not None
+            else "N/A*"
+        )
         print(
             f"{batch['concurrency']:<14} "
             f"{batch['wall_time_s']:<10} "
-            f"{batch['aggregate_tok_per_s']:<12} "
+            f"{str(agg_display):<12} "
             f"{batch.get('per_request_tok_per_s_mean', 'N/A'):<16} "
             f"{batch.get('latency_mean_s', 'N/A'):<10} "
             f"{batch.get('latency_max_s', 'N/A'):<10} "
             f"{batch['requests_failed']:<8}"
         )
 
-    # Scaling analysis
-    if len(all_results) >= 2:
+    # Scaling analysis only when every batch succeeded — speedups across
+    # mixed-failure runs are meaningless.
+    full_success = all(b["requests_failed"] == 0 for b in all_results)
+    if len(all_results) >= 2 and full_success:
         base = all_results[0]
         print()
         print("Scaling analysis (vs single request):")
         base_agg = base["aggregate_tok_per_s"]
-        if base_agg > 0:
+        if base_agg and base_agg > 0:
             for batch in all_results[1:]:
                 speedup = batch["aggregate_tok_per_s"] / base_agg
                 efficiency = speedup / batch["concurrency"] * 100
@@ -238,16 +283,18 @@ def main():
                     f"{speedup:.2f}x aggregate throughput, "
                     f"{efficiency:.0f}% scaling efficiency"
                 )
+    elif len(all_results) >= 2:
+        print()
+        print("Scaling analysis skipped — at least one batch had failed requests.")
+        print("Asterisked (N/A*) aggregate values are intentionally suppressed.")
 
     if args.output_json:
         output = {
             "server": base_url,
             "max_tokens": args.max_tokens,
             "seed": args.seed,
-            "batches": [
-                {k: v for k, v in b.items() if k != "results"} for b in all_results
-            ],
-            "detailed_results": all_results,
+            "per_request_timeout_s": args.per_request_timeout,
+            "batches": all_results,
         }
         Path(args.output_json).parent.mkdir(parents=True, exist_ok=True)
         with open(args.output_json, "w") as f:

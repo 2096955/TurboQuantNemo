@@ -18,7 +18,7 @@ SEED="${SEED:-42}"
 SUITE="${SUITE:-default}"
 MAX_TOKENS="${MAX_TOKENS:-500}"
 MODEL="${MODEL:-$REPO_ROOT/gemma4-layer-aware}"
-STOCK_VENV="${STOCK_VENV:-$OUT_DIR/.stock-venv}"
+STOCK_VENV="${STOCK_VENV:-$REPO_ROOT/.stock-mlx-lm-venv}"
 
 mkdir -p "$OUT_DIR"
 
@@ -140,9 +140,12 @@ echo "=== Comparison Summary: $model_label ==="
 printf "%-30s  %-10s  %-50s\n" "Configuration" "Quality" "Notes"
 printf "%-30s  %-10s  %-50s\n" "------------------------------" "----------" "--------------------------------------------------"
 
-for label_file in "Fork (full stack):$fork_out" "Fork (no offload, default KV):$fork_baseline_out" "Stock mlx-lm:$stock_out"; do
-    label="${label_file%%:*}"
-    file="${label_file#*:}"
+labels=("Fork (full stack)"            "Fork (no offload, default KV)" "Stock mlx-lm")
+files=("$fork_out"                     "$fork_baseline_out"             "$stock_out")
+
+for i in "${!labels[@]}"; do
+    label="${labels[$i]}"
+    file="${files[$i]}"
 
     quality="N/A"
     notes=""
@@ -150,12 +153,9 @@ for label_file in "Fork (full stack):$fork_out" "Fork (no offload, default KV):$
     if command -v jq &>/dev/null && [[ -f "$file" ]]; then
         error=$(jq -r '.error // empty' "$file" 2>/dev/null)
         if [[ -n "$error" ]]; then
-            quality="N/A"
             notes="$error"
-        elif jq -e '.tasks' "$file" &>/dev/null; then
-            passed=$(jq -r '[.tasks[] | select(.passed)] | length' "$file" 2>/dev/null || echo "?")
-            total=$(jq -r '[.tasks[]] | length' "$file" 2>/dev/null || echo "?")
-            quality="${passed}/${total}"
+        elif jq -e '.n_total' "$file" &>/dev/null; then
+            quality=$(jq -r '"\(.n_pass)/\(.n_total)"' "$file" 2>/dev/null || echo "?/?")
         elif jq -e '.status' "$file" &>/dev/null; then
             status=$(jq -r '.status' "$file" 2>/dev/null)
             if [[ "$status" == "ok" ]]; then

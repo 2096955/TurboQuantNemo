@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Failure boundary test: progressively reduce memory cap until the system
-# fails, documenting HOW it fails at each step.
+# Failure boundary test: progressively reduce --memory-limit-mb until the
+# system fails, documenting HOW it fails (graceful error / Metal crash /
+# OS OOM kill / silent corruption).
 #
-# Tests two failure modes:
-#   1. Memory exhaustion — reduce --memory-limit-mb until OOM
-#   2. KV overflow — reduce --max-kv-size until cache eviction affects quality
+# Note: a "KV cache size" sweep would require eval_quality_gate.py to expose
+# a --max-kv-size flag. It currently does not, so that test is omitted. To
+# vary KV behaviour, use scripts/run_ablation_study.sh which toggles
+# --kv-cache-type {default,isoquant} at a fixed memory cap.
 #
 # Usage:
 #   bash scripts/run_failure_boundary.sh
@@ -25,14 +27,14 @@ if [[ ! -d "$MODEL" ]]; then
     exit 1
 fi
 
+# Per-run scratch dir auto-cleaned via trap so stderr files don't leak on abort
+TMPDIR_RUN="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_RUN"' EXIT
+
 model_label="$(basename "$MODEL")"
 timestamp="$(date +%Y%m%d_%H%M%S)"
 
 echo "=== Failure Boundary Test: $model_label ==="
-echo ""
-
-# --- Test 1: Memory exhaustion boundary ---
-echo "=== Test 1: Memory Exhaustion Boundary ==="
 echo "    Reducing memory cap until failure..."
 echo ""
 
@@ -44,14 +46,11 @@ printf "%-12s  %-8s  %-12s  %-40s\n" "------------" "--------" "------------" "-
 
 for cap in "${MEMORY_CAPS[@]}"; do
     out_file="$OUT_DIR/mem_boundary_${model_label}_${cap}mb_${timestamp}.json"
+    stderr_file="$TMPDIR_RUN/stderr_${cap}"
 
-    result="PASS"
-    peak="N/A"
-    failure_mode="none"
-
-    # Run quality gate with memory cap — capture exit code and stderr
-    stderr_file="$OUT_DIR/.stderr_${cap}.tmp"
-    if python "$SCRIPT_DIR/eval_quality_gate.py" \
+    # Capture exit code immediately; do not rely on $? after a compound command.
+    set +e
+    python "$SCRIPT_DIR/eval_quality_gate.py" \
         --model "$MODEL" \
         --suite micro \
         --seed "$SEED" \
@@ -59,12 +58,20 @@ for cap in "${MEMORY_CAPS[@]}"; do
         --kv-cache-type isoquant \
         --expert-offload \
         --memory-limit-mb "$cap" \
-        --output-json "$out_file" 2>"$stderr_file"; then
+        --output-json "$out_file" 2>"$stderr_file"
+    exit_code=$?
+    set -e
+
+    peak="N/A"
+    if command -v jq &>/dev/null && [[ -f "$out_file" ]]; then
+        peak=$(jq -r '.memory.peak_mb // "N/A"' "$out_file" 2>/dev/null || echo "N/A")
+    fi
+
+    if [[ $exit_code -eq 0 ]]; then
         result="PASS"
+        failure_mode="none"
     else
-        exit_code=$?
         result="FAIL"
-        # Classify failure mode from stderr
         if grep -qi "out of memory\|OOM\|MemoryError\|memory limit" "$stderr_file" 2>/dev/null; then
             failure_mode="OOM (memory limit exceeded)"
         elif grep -qi "Metal\|GPU\|device" "$stderr_file" 2>/dev/null; then
@@ -72,67 +79,18 @@ for cap in "${MEMORY_CAPS[@]}"; do
         elif grep -qi "killed\|signal\|abort" "$stderr_file" 2>/dev/null; then
             failure_mode="Process killed (likely OS OOM killer)"
         else
-            failure_mode="Exit code $exit_code (see stderr log)"
+            failure_mode="Exit $exit_code (see stderr log)"
         fi
-        # Save stderr for analysis
-        cp "$stderr_file" "$OUT_DIR/mem_boundary_stderr_${cap}mb_${timestamp}.txt"
-    fi
-
-    # Extract peak memory if artifact exists
-    if command -v jq &>/dev/null && [[ -f "$out_file" ]]; then
-        peak=$(jq -r '.memory.peak_mb // "N/A"' "$out_file" 2>/dev/null || echo "N/A")
+        mv "$stderr_file" "$OUT_DIR/mem_boundary_stderr_${cap}mb_${timestamp}.txt"
     fi
 
     printf "%-12s  %-8s  %-12s  %-40s\n" "${cap}" "$result" "$peak" "$failure_mode"
 
-    rm -f "$stderr_file"
-
-    # If we've hit failure, run one more step then stop
     if [[ "$result" == "FAIL" ]]; then
         echo ""
         echo "  First failure at ${cap} MB cap. Boundary identified."
         break
     fi
-done
-
-echo ""
-
-# --- Test 2: KV cache overflow ---
-echo "=== Test 2: KV Cache Size Limit ==="
-echo "    Testing quality with restricted KV cache sizes..."
-echo ""
-
-KV_SIZES=(4096 2048 1024 512 256)
-
-printf "%-12s  %-10s  %-40s\n" "max-kv-size" "Quality" "Notes"
-printf "%-12s  %-10s  %-40s\n" "------------" "----------" "----------------------------------------"
-
-for kv_size in "${KV_SIZES[@]}"; do
-    out_file="$OUT_DIR/kv_boundary_${model_label}_kv${kv_size}_${timestamp}.json"
-
-    quality="N/A"
-    notes=""
-
-    if python "$SCRIPT_DIR/eval_quality_gate.py" \
-        --model "$MODEL" \
-        --suite default \
-        --seed "$SEED" \
-        --max-tokens 200 \
-        --kv-cache-type isoquant \
-        --expert-offload \
-        --output-json "$out_file" 2>/dev/null; then
-        :
-    fi
-
-    if command -v jq &>/dev/null && [[ -f "$out_file" ]]; then
-        passed=$(jq -r '[.tasks[] | select(.passed)] | length' "$out_file" 2>/dev/null || echo "?")
-        total=$(jq -r '[.tasks[]] | length' "$out_file" 2>/dev/null || echo "?")
-        quality="${passed}/${total}"
-        failures=$(jq -r '[.tasks[] | select(.passed | not) | .name] | join(", ")' "$out_file" 2>/dev/null || echo "")
-        [[ -n "$failures" ]] && notes="Failed: $failures"
-    fi
-
-    printf "%-12s  %-10s  %-40s\n" "$kv_size" "$quality" "$notes"
 done
 
 echo ""

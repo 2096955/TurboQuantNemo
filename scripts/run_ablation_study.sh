@@ -125,10 +125,8 @@ for cell in "${CELLS[@]}"; do
     if command -v jq &>/dev/null; then
         toks=$(jq -r '.decode_tok_per_s // .error // "N/A"' "$bench_file" 2>/dev/null || echo "N/A")
         peak=$(jq -r '.peak_memory_mb // "N/A"' "$bench_file" 2>/dev/null || echo "N/A")
-        if [[ -f "$qg_file" ]]; then
-            passed=$(jq -r '[.tasks[] | select(.passed)] | length' "$qg_file" 2>/dev/null || echo "?")
-            total=$(jq -r '[.tasks[]] | length' "$qg_file" 2>/dev/null || echo "?")
-            quality="${passed}/${total}"
+        if [[ -f "$qg_file" ]] && jq -e '.n_total' "$qg_file" &>/dev/null; then
+            quality=$(jq -r '"\(.n_pass)/\(.n_total)"' "$qg_file" 2>/dev/null || echo "?/?")
         else
             quality="N/A"
         fi
