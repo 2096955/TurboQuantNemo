@@ -604,6 +604,16 @@ This confirms the Q8_0 shared expert pinning as a heuristic for tail heaviness.
 
 **Real 16GB hardware rerun.** Native verification on 16GB physical RAM to confirm OS swap pressure and Metal resource contention matches our simulated envelope results.
 
+**Ablation study.** Isolate the individual contribution of each compression axis (weight quantisation, KV compression, expert offloading) via a 2×2 matrix with quality + throughput per cell. Combinations that don't fit in memory are themselves informative. Script: `scripts/run_ablation_study.sh`.
+
+**Stock baseline comparison.** Run quality gate on stock `mlx-lm` (pip release, no fork) with identical prompts and seed to quantify the gap. For models that OOM without the fork's compression stack, "does not load" is the comparison. Script: `scripts/run_stock_comparison.sh`.
+
+**Failure mode characterisation.** Progressively reduce memory cap until the system fails; document whether failure is graceful error, Metal crash, or silent corruption. Also test KV cache overflow under restricted `--max-kv-size`. Script: `scripts/run_failure_boundary.sh`.
+
+**Concurrent request scaling.** All reported results are batch-size-1. The server supports `--decode-concurrency` and `--prompt-concurrency`; a load test at 1/2/4/8 concurrent requests would reveal whether expert offloading serialises under contention. Script: `scripts/load_test_concurrent.py`.
+
+**Inter-run variance.** Reported metrics are single pinned runs. Running 3–5 independent benchmark sessions (model reload each time) with `--repeat-runs 5` would provide mean ± stdev for throughput and peak memory. Script: `scripts/run_variance_study.sh`.
+
 ### 10.1.6 Go/No-go decisions (April 2026)
 
 | Component | Decision | Rationale |

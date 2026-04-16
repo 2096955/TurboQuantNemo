@@ -83,8 +83,11 @@ python validate_real_kv.py --model mlx-community/Qwen2.5-1.5B-Instruct-4bit --pr
 ```bash
 cd mlx-lm
 pip install -e .            # Editable install
-pip install -e .[test]      # With test deps
+pip install -e .[test]      # With test deps (includes pytest-timeout; each test fails after 300s)
 pytest tests/               # Full test suite
+
+# Fast quality smoke (small model + short decode; v2 harness):
+# python ../scripts/eval_quality_gate.py --model mlx-community/Llama-3.2-1B-Instruct-4bit --quick
 
 # Run with TurboQuant KV cache:
 python -m mlx_lm.generate --model <model> --prompt "Hello" --kv-cache-type turboquant
@@ -147,6 +150,11 @@ For large/noisy context, call `compress_handover` first, then pass the compresse
 | `scripts/eval_quality_gate.py` | Quality gate: 5-prompt automated pass/fail with repetition detection |
 | `scripts/verify_turboquant_wiring.py` | End-to-end DeerFlow tool-calling verification |
 | `scripts/setup-token-efficiency.sh` | Install RTK + Superpowers for token-efficient Claude Code usage |
+| `scripts/run_variance_study.sh` | Inter-run variance: N benchmark repeats with mean ± stdev |
+| `scripts/run_ablation_study.sh` | Ablation: 2×2 matrix (offload × KV) with quality + throughput |
+| `scripts/run_failure_boundary.sh` | Failure modes: memory cap sweep + KV overflow boundary |
+| `scripts/run_stock_comparison.sh` | Stock vs fork quality comparison on identical prompts |
+| `scripts/load_test_concurrent.py` | Concurrent load test for mlx-lm server (1/2/4/8 clients) |
 
 ## Token Efficiency (for 32GB machines)
 
