@@ -10,12 +10,79 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
+import subprocess
 import sys
 import time
 from typing import Any
 
 _RUNTIME = None
+
+
+def _run_text(cmd: list[str]) -> str | None:
+    try:
+        proc = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def _process_rss_mb() -> float | None:
+    out = _run_text(["ps", "-o", "rss=", "-p", str(os.getpid())])
+    if not out:
+        return None
+    try:
+        return round(float(out.strip()) / 1024.0, 2)
+    except ValueError:
+        return None
+
+
+def _swap_used_mb() -> float | None:
+    out = _run_text(["sysctl", "vm.swapusage"])
+    if not out:
+        return None
+    marker = "used ="
+    if marker not in out:
+        return None
+    try:
+        tail = out.split(marker, 1)[1].strip()
+        value = tail.split()[0]
+        if value.endswith("M"):
+            return round(float(value[:-1]), 2)
+        if value.endswith("G"):
+            return round(float(value[:-1]) * 1024.0, 2)
+    except Exception:
+        return None
+    return None
+
+
+def _vm_pageouts() -> int | None:
+    out = _run_text(["vm_stat"])
+    if not out:
+        return None
+    for line in out.splitlines():
+        if "Pages paged out" in line:
+            try:
+                return int(line.split(":")[1].strip().rstrip("."))
+            except Exception:
+                return None
+    return None
+
+
+def _system_snapshot() -> dict[str, Any]:
+    return {
+        "process_rss_mb": _process_rss_mb(),
+        "swap_used_mb": _swap_used_mb(),
+        "vm_pages_paged_out": _vm_pageouts(),
+    }
 
 
 def _runtime():
@@ -50,27 +117,47 @@ def run_benchmark(
     seed: int,
     kv_cache_type: str,
     expert_offload: bool,
-    max_resident_experts: int,
+    max_resident_experts: int | None,
     expert_offload_dir: str | None,
     memory_mode: str | None,
     strict_gates: bool,
     split_decode_timing: bool,
     warm_second_pass: bool,
+    use_predictor: bool,
+    use_dedekimi_observer: bool,
+    task_expert_cliques: dict[str, Any] | None,
+    target_envelope_mb: float | None,
 ) -> tuple[dict[str, Any], bool]:
     mx, load, generate_step = _runtime()
     mx.random.seed(seed)
+
+    # Reset IsoQuant counters so each benchmark run starts from zero.
+    # Best-effort: pre-iso models or older mlx_lm checkouts skip silently.
+    try:
+        from mlx_lm.models.mlx_isoquant import reset_stats as _reset_iso_stats
+
+        _reset_iso_stats()
+    except ImportError:
+        pass
 
     expert_offload_flag = expert_offload
     kv = kv_cache_type
     if memory_mode == "120b-32gb":
         expert_offload_flag = True
-        kv = "turboquant"
+        kv = "isoquant"
 
     model_config = {"quantize_activations": False}
     if expert_offload_flag:
         model_config["expert_offload"] = True
-        model_config["max_resident_experts"] = max_resident_experts
+        if max_resident_experts is not None:
+            model_config["max_resident_experts"] = max_resident_experts
         model_config["expert_offload_dir"] = expert_offload_dir
+    if use_predictor:
+        model_config["use_predictor"] = True
+    if use_dedekimi_observer:
+        model_config["use_dedekimi_observer"] = True
+    if task_expert_cliques:
+        model_config["task_expert_cliques"] = task_expert_cliques
 
     print(f"Loading model: {model_path}...")
     mx.reset_peak_memory()
@@ -78,6 +165,7 @@ def run_benchmark(
     model, tokenizer = load(model_path, model_config=model_config)
     load_time = time.perf_counter() - t0
     peak_after_load_mb = mx.get_peak_memory() / (1024 * 1024)
+    system_after_load = _system_snapshot()
     print(
         f"Load time: {load_time:.2f}s (peak memory after load: {peak_after_load_mb:.2f} MB)"
     )
@@ -147,6 +235,20 @@ def run_benchmark(
     mgr = getattr(model, "expert_offload_manager", None)
     cache_stats = mgr.stats_summary() if mgr is not None else {}
 
+    # IsoQuant per-step counters (write/read/fused-metal). expert_cache above
+    # measures MoE expert weights, NOT KV cache reuse — the two are distinct.
+    # Only IsoQuantKVCache is instrumented (cache.py:67-91 builds different
+    # classes for turboquant/rotorquant); emitting these counts for other
+    # cache types would conflate zero-instrumented vs zero-activity.
+    kv_cache_stats: dict[str, Any] | None = None
+    if kv == "isoquant":
+        try:
+            from mlx_lm.models.mlx_isoquant import stats_summary as _iso_stats
+
+            kv_cache_stats = _iso_stats()
+        except ImportError:
+            kv_cache_stats = None
+
     warm_decode_tps = None
     warm_peak_mb = None
     warm_cache_stats: dict[str, Any] = {}
@@ -193,6 +295,7 @@ def run_benchmark(
         "profile": profile,
         "load_time_s": load_time,
         "peak_memory_after_load_mb": peak_after_load_mb,
+        "system_after_load": system_after_load,
         "prefill_plus_first_token_s": (first_tok - t_prefill) if first_tok else None,
         "prefill_step_size": effective_prefill_step_size,
         "decode_tok_per_s": decode_tps,
@@ -202,11 +305,17 @@ def run_benchmark(
         "peak_memory_mb": peak_mb,
         "kv_cache_type": kv,
         "expert_offload": expert_offload_flag,
+        "use_predictor": use_predictor,
+        "use_dedekimi_observer": use_dedekimi_observer,
+        "task_expert_cliques": bool(task_expert_cliques),
         "expert_cache": cache_stats,
+        "kv_cache": kv_cache_stats,
         "warm_second_pass": warm_second_pass,
         "warm_pass_decode_tok_per_s": warm_decode_tps,
         "warm_pass_peak_memory_mb": warm_peak_mb,
         "warm_pass_expert_cache": warm_cache_stats,
+        "system_at_end": _system_snapshot(),
+        "target_envelope_mb": target_envelope_mb,
     }
 
     print(
@@ -221,6 +330,18 @@ def run_benchmark(
     # Merge gates (plan defaults; tune after baselines on real hardware).
     # Use session peak so load + inference both count toward envelope claims.
     peak_gate = metrics["peak_memory_mb"]
+    if target_envelope_mb is not None:
+        metrics["fits_target_envelope"] = bool(
+            peak_gate is not None and peak_gate <= target_envelope_mb
+        )
+        if peak_gate and peak_gate > target_envelope_mb:
+            msg = (
+                f"Peak memory exceeded target envelope "
+                f"({peak_gate:.2f} MB > {target_envelope_mb:.2f} MB)"
+            )
+            print(f"WARNING: {msg}")
+            if strict_gates:
+                gate_failed = True
     if profile == "A":
         if peak_gate and peak_gate > 24000:
             msg = "Peak memory exceeded soft gate for Profile A (>24 GB)"
@@ -250,7 +371,7 @@ def run_benchmark(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="MoE offload + TurboQuant benchmark harness"
+        description="MoE offload + quantized-KV benchmark harness"
     )
     parser.add_argument(
         "--model", type=str, required=True, help="Local MLX model directory"
@@ -261,16 +382,44 @@ def main() -> None:
         "--kv-cache-type",
         type=str,
         default="default",
-        choices=["default", "turboquant"],
+        choices=["default", "turboquant", "isoquant", "rotorquant"],
+    )
+    parser.add_argument(
+        "--turboquant-bits",
+        type=int,
+        default=None,
+        help="Sets TURBOQUANT_BITS for turboquant/isoquant/rotorquant caches (default: env or 3).",
     )
     parser.add_argument("--expert-offload", action="store_true")
-    parser.add_argument("--max-resident-experts", type=int, default=16)
+    parser.add_argument("--max-resident-experts", type=int, default=None)
     parser.add_argument("--expert-offload-dir", type=str, default=None)
+    parser.add_argument(
+        "--use-predictor",
+        action="store_true",
+        help="Enable AttnRes-style predictor in model config.",
+    )
+    parser.add_argument(
+        "--use-dedekimi-observer",
+        action="store_true",
+        help="Enable DedeKimi observer in model config.",
+    )
+    parser.add_argument(
+        "--task-expert-cliques-file",
+        type=str,
+        default=None,
+        help="Path to JSON mapping task names to {layer_idx: [expert_ids...]}.",
+    )
     parser.add_argument(
         "--memory-mode",
         type=str,
         default=None,
-        help='Use "120b-32gb" to force expert offload + turboquant KV.',
+        help='Use "120b-32gb" to force expert offload + isoquant KV.',
+    )
+    parser.add_argument(
+        "--target-envelope-mb",
+        type=float,
+        default=None,
+        help="Optional synthetic RAM envelope gate for the current run (for example 12800 or 25600).",
     )
     parser.add_argument(
         "--prefill-step-size",
@@ -306,6 +455,12 @@ def main() -> None:
         help="Run the full benchmark N times (reloads model each time); summary in JSON.",
     )
     args = parser.parse_args()
+    if args.turboquant_bits is not None:
+        os.environ["TURBOQUANT_BITS"] = str(args.turboquant_bits)
+    task_expert_cliques: dict[str, Any] | None = None
+    if args.task_expert_cliques_file:
+        with open(args.task_expert_cliques_file, "r") as f:
+            task_expert_cliques = json.load(f)
 
     if args.profile == "A":
         prefill_tokens, decode_tokens = 512, 128
@@ -333,6 +488,10 @@ def main() -> None:
                 strict_gates=args.strict_gates,
                 split_decode_timing=args.split_decode_timing,
                 warm_second_pass=args.warm_second_pass,
+                use_predictor=args.use_predictor,
+                use_dedekimi_observer=args.use_dedekimi_observer,
+                task_expert_cliques=task_expert_cliques,
+                target_envelope_mb=args.target_envelope_mb,
             )
             gate_failed = gate_failed or gf
             runs_out.append(metrics)

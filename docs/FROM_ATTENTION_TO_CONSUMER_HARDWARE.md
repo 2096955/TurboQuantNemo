@@ -648,7 +648,13 @@ Above C=4 the mlx-lm server (stdlib `ThreadingHTTPServer`) silently emits empty 
 
 **Real 16GB hardware rerun.** Still pending — these results are from a 32GB M4 Max with `--memory-limit-mb` simulation.
 
-**Note on metrics.** The `expert_cache.decode_hits/misses` field in benchmark JSON measures MoE expert-weight LRU accesses, **not** KV cache reuse — IsoQuant currently exposes no per-step instrumentation. A `kv_cache: null` placeholder has been added to the JSON schema to make this absence explicit; real instrumentation is a follow-up. The 0% hit rate on Gemma4-26B-A4B with 16 resident slots over 30,960 gather calls is, however, a legitimate finding for the **MoE pathway**: every decode step pays ~3.5 ms of disk I/O for expert weights, totalling ~108s of the run.
+**Note on metrics.** The `expert_cache.decode_hits/misses` field in benchmark JSON measures MoE expert-weight LRU accesses, **not** KV cache reuse — these are distinct subsystems. The 0% hit rate on Gemma4-26B-A4B with 16 resident slots over 30,960 gather calls is a legitimate finding for the **MoE pathway**: every decode step pays ~3.5 ms of disk I/O for expert weights, totalling ~108s of the run.
+
+A separate `kv_cache:` block has now been added to the benchmark JSON, populated by IsoQuant's own counters (`prefill_calls`, `decode_calls`, `compress_calls`, `decompress_calls`, `read_keys/values_calls`, `finalize_calls`, `fused_metal_attempts/failures`, `packed_cache_hits/misses`, `fallback_invocations`). First Gemma4 measurement (profile A, IsoQuant + offload):
+
+- `fused_metal_success_rate: 1.0` over 3,612 fused decode attempts — the IsoQuant Metal pipeline never fell back to the MLX-ops path on this run.
+- `decompress_calls: 0`, `read_keys/values_calls: 0` — confirmed: the fused path bypasses materialisation entirely (see Section 6.6).
+- `packed_cache_hit_rate: 0.0` — the packed-3-bit cache is invalidated after every prefill finalize, runtime-shape reset, and incremental decode append (`mlx_isoquant.py:519, 549, 592, 650`); each fused step then rebuilds it lazily. This is **by design** under the current scheme, not a bug; it is a candidate optimisation (incremental append into the packed format) but out of scope for this paper.
 
 ### 10.1.6 Go/No-go decisions (April 2026)
 
