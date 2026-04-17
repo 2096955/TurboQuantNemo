@@ -19,6 +19,7 @@ SUITE="${SUITE:-default}"
 MAX_TOKENS="${MAX_TOKENS:-500}"
 MODEL="${MODEL:-$REPO_ROOT/gemma4-layer-aware}"
 STOCK_VENV="${STOCK_VENV:-$REPO_ROOT/.stock-mlx-lm-venv}"
+PYTHON_BIN="${PYTHON:-python}"
 
 mkdir -p "$OUT_DIR"
 
@@ -41,7 +42,7 @@ setup_stock_venv() {
     fi
 
     echo "Setting up stock mlx-lm venv at $STOCK_VENV..."
-    python3 -m venv "$STOCK_VENV"
+    "$PYTHON_BIN" -m venv "$STOCK_VENV"
     "$STOCK_VENV/bin/pip" install --quiet --upgrade pip
     "$STOCK_VENV/bin/pip" install --quiet mlx-lm
     echo "Stock mlx-lm installed: $("$STOCK_VENV/bin/pip" show mlx-lm 2>/dev/null | grep Version || echo 'unknown')"
@@ -51,7 +52,7 @@ setup_stock_venv() {
 echo "=== Run 1: Fork (expert offload + IsoQuant) ==="
 fork_out="$OUT_DIR/qg_fork_${model_label}_${timestamp}.json"
 
-if python "$SCRIPT_DIR/eval_quality_gate.py" \
+if "$PYTHON_BIN" "$SCRIPT_DIR/eval_quality_gate.py" \
     --model "$MODEL" \
     --suite "$SUITE" \
     --seed "$SEED" \
@@ -70,7 +71,7 @@ echo "=== Run 2: Fork (no offload, default KV — stock-equivalent) ==="
 fork_baseline_out="$OUT_DIR/qg_fork_baseline_${model_label}_${timestamp}.json"
 fork_baseline_stderr="$OUT_DIR/.fork_baseline_stderr.tmp"
 
-if python "$SCRIPT_DIR/eval_quality_gate.py" \
+if "$PYTHON_BIN" "$SCRIPT_DIR/eval_quality_gate.py" \
     --model "$MODEL" \
     --suite "$SUITE" \
     --seed "$SEED" \
@@ -98,14 +99,17 @@ if [[ "${SKIP_STOCK_INSTALL:-}" == "1" ]]; then
     stock_out="$OUT_DIR/qg_stock_${model_label}_${timestamp}.json"
     echo '{"error": "skipped — SKIP_STOCK_INSTALL=1"}' > "$stock_out"
 else
-    setup_stock_venv
-
     stock_out="$OUT_DIR/qg_stock_${model_label}_${timestamp}.json"
     stock_stderr="$OUT_DIR/.stock_stderr.tmp"
 
-    # Stock mlx-lm won't have our quality gate script, so we test loading + basic generation
-    echo "  Testing model load + basic generation with stock mlx-lm..."
-    if "$STOCK_VENV/bin/python" -c "
+    if ! setup_stock_venv 2>"$stock_stderr"; then
+        echo "  Stock mlx-lm setup failed"
+        echo '{"status": "error", "error": "stock mlx-lm install/setup failed"}' > "$stock_out"
+        cp "$stock_stderr" "$OUT_DIR/stock_stderr_${timestamp}.txt" 2>/dev/null || true
+    else
+        # Stock mlx-lm won't have our quality gate script, so we test loading + basic generation
+        echo "  Testing model load + basic generation with stock mlx-lm..."
+        if "$STOCK_VENV/bin/python" -c "
 import json, sys, time
 try:
     from mlx_lm import load, generate
@@ -121,14 +125,15 @@ except Exception as e:
 json.dump(result, open('$stock_out', 'w'), indent=2)
 print(json.dumps(result, indent=2))
 " 2>"$stock_stderr"; then
-        echo "  -> $stock_out"
-    else
-        if grep -qi "out of memory\|OOM\|MemoryError" "$stock_stderr" 2>/dev/null; then
-            echo "  Stock mlx-lm: OOM — model does not fit without fork's compression stack"
-            echo '{"status": "error", "error": "OOM — model does not fit without compression stack"}' > "$stock_out"
+            echo "  -> $stock_out"
         else
-            echo "  Stock mlx-lm: failed (see $OUT_DIR/stock_stderr_${timestamp}.txt)"
-            cp "$stock_stderr" "$OUT_DIR/stock_stderr_${timestamp}.txt"
+            if grep -qi "out of memory\|OOM\|MemoryError" "$stock_stderr" 2>/dev/null; then
+                echo "  Stock mlx-lm: OOM — model does not fit without fork's compression stack"
+                echo '{"status": "error", "error": "OOM — model does not fit without compression stack"}' > "$stock_out"
+            else
+                echo "  Stock mlx-lm: failed (see $OUT_DIR/stock_stderr_${timestamp}.txt)"
+                cp "$stock_stderr" "$OUT_DIR/stock_stderr_${timestamp}.txt"
+            fi
         fi
     fi
     rm -f "$stock_stderr"

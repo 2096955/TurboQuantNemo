@@ -48,13 +48,14 @@ for cap in "${MEMORY_CAPS[@]}"; do
     out_file="$OUT_DIR/mem_boundary_${model_label}_${cap}mb_${timestamp}.json"
     stderr_file="$TMPDIR_RUN/stderr_${cap}"
 
-    # Capture exit code immediately; do not rely on $? after a compound command.
+    # 100 tokens is enough for the micro suite prompts to pass quality when
+    # memory permits — keeps "memory failed" distinct from "tokens too few".
     set +e
     python "$SCRIPT_DIR/eval_quality_gate.py" \
         --model "$MODEL" \
         --suite micro \
         --seed "$SEED" \
-        --max-tokens 48 \
+        --max-tokens 100 \
         --kv-cache-type isoquant \
         --expert-offload \
         --memory-limit-mb "$cap" \
@@ -63,32 +64,44 @@ for cap in "${MEMORY_CAPS[@]}"; do
     set -e
 
     peak="N/A"
+    fits_cap="unknown"
     if command -v jq &>/dev/null && [[ -f "$out_file" ]]; then
         peak=$(jq -r '.memory.peak_mb // "N/A"' "$out_file" 2>/dev/null || echo "N/A")
+        # `// "unknown"` would coerce boolean false -> "unknown"; use tostring.
+        fits_cap=$(jq -r '.memory.fits_cap | tostring' "$out_file" 2>/dev/null || echo "unknown")
     fi
 
+    # Distinguish three outcomes from exit_code + JSON:
+    #   exit 0                  -> PASS
+    #   exit !=0 and fits_cap=false -> OOM (the boundary we're looking for)
+    #   exit !=0 and fits_cap=true  -> non-memory failure (quality, etc.)
     if [[ $exit_code -eq 0 ]]; then
         result="PASS"
         failure_mode="none"
+    elif [[ "$fits_cap" == "false" ]]; then
+        result="OOM"
+        failure_mode="Memory cap exceeded (peak ${peak} > cap ${cap})"
+        mv "$stderr_file" "$OUT_DIR/mem_boundary_stderr_${cap}mb_${timestamp}.txt"
     else
-        result="FAIL"
-        if grep -qi "out of memory\|OOM\|MemoryError\|memory limit" "$stderr_file" 2>/dev/null; then
-            failure_mode="OOM (memory limit exceeded)"
-        elif grep -qi "Metal\|GPU\|device" "$stderr_file" 2>/dev/null; then
-            failure_mode="Metal/GPU resource error"
-        elif grep -qi "killed\|signal\|abort" "$stderr_file" 2>/dev/null; then
-            failure_mode="Process killed (likely OS OOM killer)"
+        result="QUAL"
+        if grep -qi "out of memory\|MemoryError\|killed\|signal SIGKILL\|abort()" "$stderr_file" 2>/dev/null; then
+            # OOM via OS killer wouldn't write the JSON, so this catches the
+            # rare case where the process partially wrote then crashed.
+            result="CRASH"
+            failure_mode="Process crash (OS killer or fatal error)"
         else
-            failure_mode="Exit $exit_code (see stderr log)"
+            failure_mode="Quality gate prompts failed (memory was fine)"
         fi
         mv "$stderr_file" "$OUT_DIR/mem_boundary_stderr_${cap}mb_${timestamp}.txt"
     fi
 
     printf "%-12s  %-8s  %-12s  %-40s\n" "${cap}" "$result" "$peak" "$failure_mode"
 
-    if [[ "$result" == "FAIL" ]]; then
+    # Stop only on memory-related failure — keep going through cap reductions
+    # if quality is the issue (that's a different test).
+    if [[ "$result" == "OOM" || "$result" == "CRASH" ]]; then
         echo ""
-        echo "  First failure at ${cap} MB cap. Boundary identified."
+        echo "  First memory failure at ${cap} MB cap. Boundary identified."
         break
     fi
 done

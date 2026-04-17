@@ -23,6 +23,7 @@ SUITE="${SUITE:-default}"
 MODEL="${MODEL:-$REPO_ROOT/gemma4-layer-aware}"
 MAX_TOKENS="${MAX_TOKENS:-500}"
 MEMORY_LIMIT="${MEMORY_LIMIT:-}"
+PYTHON_BIN="${PYTHON:-python}"
 
 mkdir -p "$OUT_DIR"
 
@@ -74,7 +75,7 @@ run_cell() {
     # Benchmark run
     echo "  [1/2] Benchmark..."
     # shellcheck disable=SC2086
-    if python "$SCRIPT_DIR/benchmark_moe_offload.py" \
+    if "$PYTHON_BIN" "$SCRIPT_DIR/benchmark_moe_offload.py" \
         --model "$MODEL" \
         --profile "$PROFILE" \
         --seed "$SEED" \
@@ -90,7 +91,7 @@ run_cell() {
     # Quality gate run
     echo "  [2/2] Quality gate (suite=$SUITE)..."
     # shellcheck disable=SC2086
-    if python "$SCRIPT_DIR/eval_quality_gate.py" \
+    if "$PYTHON_BIN" "$SCRIPT_DIR/eval_quality_gate.py" \
         --model "$MODEL" \
         --suite "$SUITE" \
         --seed "$SEED" \

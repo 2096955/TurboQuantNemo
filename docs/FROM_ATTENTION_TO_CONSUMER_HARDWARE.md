@@ -600,19 +600,55 @@ Pearson kurtosis measurements justify the mixed-precision weight allocation:
 
 This confirms the Q8_0 shared expert pinning as a heuristic for tail heaviness.
 
-### 10.1.5 What is still missing
+### 10.1.5 Initial pass on missing elements (April 2026)
 
-**Real 16GB hardware rerun.** Native verification on 16GB physical RAM to confirm OS swap pressure and Metal resource contention matches our simulated envelope results.
+Five gaps flagged in earlier drafts have now been measured on `gemma4-layer-aware` (a 26B-A4B mixed-precision Gemma4 checkpoint). Results below are first-pass; `nemotron-30b-mixed` and a real 16GB rerun are still pending.
 
-**Ablation study.** Isolate the individual contribution of each compression axis (weight quantisation, KV compression, expert offloading) via a 2×2 matrix with quality + throughput per cell. Combinations that don't fit in memory are themselves informative. Script: `scripts/run_ablation_study.sh`.
+**Inter-run variance.** Three independent benchmark sessions per configuration (profile A, seed 42, model reloaded each run):
 
-**Stock baseline comparison.** Run quality gate on stock `mlx-lm` (pip release, no fork) with identical prompts and seed to quantify the gap. For models that OOM without the fork's compression stack, "does not load" is the comparison. Script: `scripts/run_stock_comparison.sh`.
+| KV mode | decode tok/s (mean ± stdev) | peak MB (mean) |
+|---|---|---|
+| default  | 1.048 ± 0.056 (5.4%) | 2,445 |
+| isoquant | 1.054 ± 0.003 (0.3%) | 2,804 |
 
-**Failure mode characterisation.** Progressively reduce memory cap until the system fails; document whether failure is graceful error, Metal crash, or silent corruption. Also test KV cache overflow under restricted `--max-kv-size`. Script: `scripts/run_failure_boundary.sh`.
+Both runs use `--expert-offload`. Variance is small enough that the single-run numbers elsewhere in this document are within the noise floor. Script: `scripts/run_variance_study.sh`. Artifacts: `artifacts/variance/`.
 
-**Concurrent request scaling.** All reported results are batch-size-1. The server supports `--decode-concurrency` and `--prompt-concurrency`; a load test at 1/2/4/8 concurrent requests would reveal whether expert offloading serialises under contention. Script: `scripts/load_test_concurrent.py`.
+**Ablation 2×2 (offload × KV).** Isolating the cost of each axis on the same model and seed:
 
-**Inter-run variance.** Reported metrics are single pinned runs. Running 3–5 independent benchmark sessions (model reload each time) with `--repeat-runs 5` would provide mean ± stdev for throughput and peak memory. Script: `scripts/run_variance_study.sh`.
+| Configuration | tok/s | peak MB |
+|---|---|---|
+| `--expert-offload`, `isoquant` | 1.05 | 2,804 |
+| `--expert-offload`, `default`  | 1.01 | 2,445 |
+| no offload, `isoquant`         | 20.6 | 10,748 |
+| **no offload, `default`**      | **109.8** | 10,649 |
+
+The two findings worth flagging: (i) on a model that fits in RAM, `--expert-offload` costs ~100× decode throughput — Gemma4 numbers elsewhere in this paper must therefore be qualified as the **16GB-constrained scenario**, not a general recommendation; (ii) IsoQuant on the no-offload path costs ~5.3× throughput for negligible memory saving, so applying IsoQuant to a model that already fits is a net loss. Script: `scripts/run_ablation_study.sh`.
+
+**Failure mode characterisation.** Reducing `--memory-limit-mb` against `--expert-offload --kv-cache-type isoquant`:
+
+| Cap (MB) | Outcome | Peak (MB) |
+|---|---|---|
+| 8192, 6144, 5120, 4096 | Memory fits, model produces output | ~3,641 |
+| 3072 | **OOM (cap exceeded)** | 3,641 |
+
+The OOM threshold lies between 3,072 and 4,096 MB; working memory is approximately 3.6 GB. Failure is detected via `memory.fits_cap == False` in the JSON artifact (graceful — process exits non-zero, no Metal crash). The earlier draft's `--max-kv-size` sweep was removed: the harness does not currently expose that flag. Script: `scripts/run_failure_boundary.sh`.
+
+**Stock baseline comparison.** Stock `mlx-lm 0.31.2` (pip release, no fork) loads `gemma4-layer-aware` without OOM but emits **degenerate output** ("This is a of a of a of a of …" repeating) on the test prompt. The model_type registration for `gemma4` is incomplete in the upstream package (warning: "loading checkpoint of type gemma4 into model of type ``"). The fork's quality gate produces real text. So the comparison is not "stock OOMs" as initially predicted; rather, "stock loads but cannot decode this checkpoint correctly." Script: `scripts/run_stock_comparison.sh`.
+
+**Concurrent request scaling.** Load test against `mlx-lm.server` (no expert offload, IsoQuant KV) at 1/2/4/8 concurrent clients:
+
+| Concurrency | Aggregate tok/s | Mean latency (s) | Notes |
+|---|---|---|---|
+| 1 | 15.65 | 6.39 | Baseline |
+| 2 | 21.73 | 7.71 | 1.39× scaling (69% efficiency) |
+| 4 | 21.21 | 11.75 | 1.36× — plateau; server serialising |
+| 8 | unreliable | — | 4 of 8 HTTP 200s returned empty bodies (see below) |
+
+Above C=4 the mlx-lm server (stdlib `ThreadingHTTPServer`) silently emits empty completions for some concurrent requests. The load test client now treats HTTP 200 with zero tokens as a failure, but historical numbers should be re-checked. Conclusion: this serving path is not built for concurrent inference; serious multi-tenant use needs a different server. Script: `scripts/load_test_concurrent.py`.
+
+**Real 16GB hardware rerun.** Still pending — these results are from a 32GB M4 Max with `--memory-limit-mb` simulation.
+
+**Note on metrics.** The `expert_cache.decode_hits/misses` field in benchmark JSON measures MoE expert-weight LRU accesses, **not** KV cache reuse — IsoQuant currently exposes no per-step instrumentation. A `kv_cache: null` placeholder has been added to the JSON schema to make this absence explicit; real instrumentation is a follow-up. The 0% hit rate on Gemma4-26B-A4B with 16 resident slots over 30,960 gather calls is, however, a legitimate finding for the **MoE pathway**: every decode step pays ~3.5 ms of disk I/O for expert weights, totalling ~108s of the run.
 
 ### 10.1.6 Go/No-go decisions (April 2026)
 

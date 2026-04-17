@@ -46,11 +46,12 @@ def send_request(
     seed: int,
     request_id: int,
     timeout_s: float,
+    model: str = "default",
 ) -> dict:
     """Send a single completion request and measure latency."""
     payload = json.dumps(
         {
-            "model": "default",
+            "model": model,
             "prompt": prompt,
             "max_tokens": max_tokens,
             "temperature": 0.0,
@@ -72,6 +73,18 @@ def send_request(
         elapsed = time.monotonic() - t0
 
         tokens = body.get("usage", {}).get("completion_tokens", 0)
+        # mlx-lm's ThreadingHTTPServer can return HTTP 200 with an empty
+        # completion under concurrent load (silent serialisation failure).
+        # Treat zero-token responses as failures so they don't inflate the
+        # scaling table.
+        if tokens == 0:
+            return {
+                "request_id": request_id,
+                "status": "error",
+                "latency_s": round(elapsed, 3),
+                "error": "HTTP 200 with empty completion (server returned 0 tokens)",
+                "prompt_preview": prompt[:50],
+            }
         return {
             "request_id": request_id,
             "status": "ok",
@@ -97,6 +110,7 @@ def run_batch(
     max_tokens: int,
     seed: int,
     timeout_s: float,
+    model: str = "default",
 ) -> dict:
     """Run a batch of concurrent requests and collect metrics."""
     prompts = [PROMPTS[i % len(PROMPTS)] for i in range(concurrency)]
@@ -106,7 +120,14 @@ def run_batch(
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = {
             pool.submit(
-                send_request, base_url, prompt, max_tokens, seed + i, i, timeout_s
+                send_request,
+                base_url,
+                prompt,
+                max_tokens,
+                seed + i,
+                i,
+                timeout_s,
+                model,
             ): i
             for i, prompt in enumerate(prompts)
         }
@@ -205,6 +226,11 @@ def main():
     parser.add_argument(
         "--warmup", action="store_true", help="Send a single warmup request first"
     )
+    parser.add_argument(
+        "--model",
+        default="default",
+        help="Model id to send in completion payload (default: 'default')",
+    )
     args = parser.parse_args()
 
     # Make Ctrl-C terminate the whole process group cleanly so urlopen workers
@@ -233,7 +259,13 @@ def main():
     if args.warmup:
         print("Warmup request...")
         send_request(
-            base_url, "Hello", args.max_tokens, args.seed, -1, args.per_request_timeout
+            base_url,
+            "Hello",
+            args.max_tokens,
+            args.seed,
+            -1,
+            args.per_request_timeout,
+            args.model,
         )
         print()
 
@@ -247,7 +279,12 @@ def main():
 
     for level in concurrency_levels:
         batch = run_batch(
-            base_url, level, args.max_tokens, args.seed, args.per_request_timeout
+            base_url,
+            level,
+            args.max_tokens,
+            args.seed,
+            args.per_request_timeout,
+            args.model,
         )
         all_results.append(batch)
 

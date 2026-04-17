@@ -132,7 +132,7 @@ deer-flow requires additional API keys in `.env` -- see `deer-flow/.env.example`
 - **Qwen inference**: llama.cpp `/v1/completions` (default) or Ollama `/api/generate` -- toggled via `QWEN_API` env var.
 - **TurboQuant**: Codebook-based KV cache compression for MLX; codebook `.npz` files live in `mlx-lm/mlx_lm/models/turboquant_codebooks/`. **Must not** be applied to Mamba/SSM `ArrayCache` — only full attention layers.
 - **Expert offload** (mlx-lm): `mlx_lm/expert_offload.py` with LRU caching. Use `--expert-offload` flag. `repack_experts.py` writes to `repacked-*.safetensors` with atomic index update.
-- **Symlink strategy**: `turboquant-mlx/mlx_turboquant.py` is symlinked into `mlx-lm/mlx_lm/models/mlx_turboquant.py` — edit the source in `turboquant-mlx/`.
+- **No symlinks**: `mlx-lm/mlx_lm/models/mlx_turboquant.py` and `mlx_isoquant.py` are independent regular files (the historical symlink from `turboquant-mlx/` was replaced). Edit them in place under `mlx-lm/mlx_lm/models/`. The `turboquant-mlx/` directory now holds only codebook generation tooling.
 
 ## Delegation Pattern
 
