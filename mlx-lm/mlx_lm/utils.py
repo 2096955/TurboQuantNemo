@@ -683,6 +683,7 @@ def _swap_qwen3_offload_modules(model, is_quantized: bool, config: dict) -> None
                 default_mode,
             )
             for prefix in (
+                f"language_model.model.layers.{layer_idx}.mlp.switch_mlp.gate_proj",
                 f"model.layers.{layer_idx}.mlp.switch_mlp.gate_proj",
                 f"layers.{layer_idx}.mlp.switch_mlp.gate_proj",
             ):

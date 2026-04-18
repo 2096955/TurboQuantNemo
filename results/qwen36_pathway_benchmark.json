@@ -1,0 +1,110 @@
+{
+  "benchmark_date": "2026-04-17",
+  "model": "Qwen3.6-35B-A3B",
+  "configs": {
+    "A": {
+      "label": "Q8_0 GGUF on Ollama",
+      "model_path": "~/Models/Qwen3.6-35B-A3B-Q8_0/Qwen3.6-35B-A3B-Q8_0.gguf",
+      "runtime": "Ollama (llama.cpp Metal)",
+      "quantization": "Q8_0 uniform",
+      "expert_offload": false,
+      "kv_compression": "none",
+      "disk_size_gb": 36.0,
+      "peak_rss_gb": 37.0,
+      "fits_16gb": false,
+      "quality_score": "11/12",
+      "quality_failures": ["Long decode soak (missing 'def test_')"],
+      "decode_tok_per_sec": 26.0,
+      "decode_tok_per_sec_note": "Average across 12 prompts (18-31 range)"
+    },
+    "B": {
+      "label": "mlx-community uniform 4-bit",
+      "model_path": "~/Models/Qwen3.6-35B-A3B-4bit",
+      "runtime": "MLX",
+      "quantization": "4-bit uniform (group_size=64, affine)",
+      "expert_offload": false,
+      "kv_compression": "none",
+      "disk_size_gb": 5.5,
+      "peak_rss_gb": 19.6,
+      "fits_16gb": false,
+      "quality_score": "11/12",
+      "quality_failures": ["Race condition explanation (missing 'lock')"],
+      "decode_tok_per_sec": 117.8,
+      "prefill_tok_per_sec": 99.1,
+      "decode_tok_per_sec_note": "Measured on 'capital of France' prompt, 128 max tokens"
+    },
+    "C": {
+      "label": "Mixed-precision + expert offload + IsoQuant KV",
+      "model_path": "~/Models/qwen3.6-35b-a3b-mixed",
+      "runtime": "MLX",
+      "quantization": {
+        "dense_attention": "4-bit (group_size=64)",
+        "deltanet_projections": "4-bit (group_size=64)",
+        "routed_experts": "2-bit (group_size=64)",
+        "shared_expert": "8-bit (group_size=64)",
+        "router_gates": "8-bit (group_size=64)"
+      },
+      "expert_offload": true,
+      "max_resident_experts": 2048,
+      "kv_compression": "IsoQuant 3-bit (WHT + SO(4), 10 full-attention layers only)",
+      "disk_size_gb": 11.0,
+      "peak_rss_gb": 6.8,
+      "peak_rss_after_soak_gb": 12.0,
+      "fits_16gb": true,
+      "quality_score": "12/12",
+      "quality_failures": [],
+      "decode_tok_per_sec": 15.6,
+      "prefill_tok_per_sec": 12.7,
+      "decode_tok_per_sec_note": "Measured on 'capital of France' prompt, 128 max tokens"
+    }
+  },
+  "acceptance_criteria": {
+    "smoke_test_10_of_12": {
+      "target": ">=10/12",
+      "result": "12/12",
+      "status": "PASS"
+    },
+    "quality_parity_vs_A": {
+      "target": "Config C score >= Config A score - 1",
+      "result": "12 >= 11 - 1 = 10",
+      "status": "PASS"
+    },
+    "no_A_pass_C_fail": {
+      "target": "No prompt that passes on A fails on C",
+      "result": "Config A fails 'Long decode soak', Config C passes all 12",
+      "status": "PASS"
+    },
+    "peak_rss_under_16gb": {
+      "target": "< 16384 MB",
+      "result": "6847 MB (cold), 11970 MB (after 12-prompt suite)",
+      "status": "PASS"
+    },
+    "decode_throughput_5_tok_s": {
+      "target": "> 5 tok/s",
+      "result": "15.6 tok/s",
+      "status": "PASS"
+    },
+    "throughput_ratio_vs_B": {
+      "target": ">= 0.5x of Config B",
+      "result": "15.6 / 117.8 = 0.13x",
+      "status": "FAIL",
+      "note": "Expert offload I/O overhead reduces throughput significantly vs in-memory. However, Config B does NOT fit 16GB (19.6 GB peak). The 0.5x target assumed similar memory profiles."
+    }
+  },
+  "generation_settings": {
+    "temperature": 0.0,
+    "seed": 42,
+    "max_tokens": 512,
+    "prompt_count": 12,
+    "suite": "all (v2)"
+  },
+  "notes": [
+    "Config C is the ONLY config that fits 16 GB with all features enabled.",
+    "Config B exceeds 16 GB (19.6 GB peak) despite having no expert offload.",
+    "Config A exceeds 16 GB (37 GB) and uses a different runtime (llama.cpp).",
+    "Config C achieves HIGHER quality (12/12) than both baselines (11/12 each).",
+    "The throughput ratio target (0.5x of B) is not met due to expert I/O, but this is expected given the 3x memory reduction.",
+    "Config C decode speed of 15.6 tok/s is well above the absolute 5 tok/s minimum.",
+    "Thinking model: all configs generate <think> tokens that inflate latency but are stripped for quality scoring."
+  ]
+}

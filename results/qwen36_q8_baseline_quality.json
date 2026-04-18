@@ -1,0 +1,156 @@
+{
+  "model": "qwen3.6-35b-a3b:q8_0",
+  "config": "A (Q8_0 GGUF on Ollama)",
+  "settings": {
+    "temperature": 0.0,
+    "seed": 42,
+    "max_tokens": 512
+  },
+  "passed": 11,
+  "total": 12,
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": true,
+      "checks": [
+        "OK: 259 tokens (min 15)",
+        "OK: contains 'def '",
+        "OK: contains 'return'",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 18.25,
+      "response_preview": "<think>\nThinking Process:\n1.  **Analyze User Input:**\n   - **Task:** Write a Python function to compute the nth Fibonacci number.\n   - **Constraint:** Output *only* the function, no explanation.\n   - "
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "checks": [
+        "OK: 325 tokens (min 30)",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 30.39,
+      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Analyze User Request:**\n   - **Topic:** Theory of Relativity\n   - **Target Audience:** 5-year-old\n   - **Goal:** Explain a complex scientific theory in simple"
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "checks": [
+        "OK: 43 tokens (min 15)",
+        "OK: contains '2'",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 28.26,
+      "response_preview": "Here's the step-by-step breakdown:\n\n1. You start with **3 apples**.\n2. You eat **1 apple**, which means you remove 1 from your total.\n3. Subtract the eaten apple from the starting amount: **3 - 1 = 2*"
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "checks": [
+        "OK: 285 tokens (min 30)",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 23.79,
+      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Analyze User Request:**\n   - **Task:** List 5 programming languages\n   - **Requirement:** Include one strength for each language\n   - **Format:** Clear, conci"
+    },
+    {
+      "name": "Math",
+      "passed": true,
+      "checks": [
+        "OK: 245 tokens (min 10)",
+        "OK: contains '408'",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 22.02,
+      "response_preview": "To calculate $17 \\times 24$, we can use the standard multiplication algorithm or break the numbers down using the distributive property. Here, I will demonstrate the **distributive property** method a"
+    },
+    {
+      "name": "Bugfix (off-by-one)",
+      "passed": true,
+      "checks": [
+        "OK: 267 tokens (min 25)",
+        "OK: contains 'return'",
+        "OK: contains 'items'",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 24.04,
+      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Analyze the User Input:**\n   - **Input Code:**\n     ```python\n     def slice_last_n(items, n):\n         return items[len(items) - n : len(items) - 1]\n     ```"
+    },
+    {
+      "name": "Traceback interpretation",
+      "passed": true,
+      "checks": [
+        "OK: 295 tokens (min 40)",
+        "OK: contains 'str'",
+        "OK: contains 'int'",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 25.23,
+      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Error Message:** `TypeError: unsupported operand type(s) for +: 'int' and 'str'`\n   - **Request:** Explain what it means and how "
+    },
+    {
+      "name": "Multi-file style refactor",
+      "passed": true,
+      "checks": [
+        "OK: 270 tokens (min 50)",
+        "OK: contains 'rename'",
+        "OK: contains 'import'",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 25.79,
+      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Understand User Goal**: The user wants to rename a function `fetch` to `load_data` across two Python files: `a.py` (which defines it) and `b.py` (which import"
+    },
+    {
+      "name": "Write a minimal test",
+      "passed": true,
+      "checks": [
+        "OK: 313 tokens (min 5)",
+        "OK: contains 'def '",
+        "OK: contains 'assert'",
+        "OK: contains 'add'",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 27.16,
+      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Understand User Request:**\n   - Need a pytest test for a function `add(a, b)`\n   - The test should assert that `add(2, 3) == 5`\n   - Must show the complete te"
+    },
+    {
+      "name": "Implement LRU cache get",
+      "passed": true,
+      "checks": [
+        "OK: 315 tokens (min 5)",
+        "OK: contains 'key'",
+        "OK: contains 'return'",
+        "OK: contains 'None'",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 28.47,
+      "response_preview": "<think>\nThe user wants a class method `get(self, key)` for an LRU (Least Recently Used) cache.\nThe cache has a fixed capacity.\nThe implementation should use `self._order` and `self._data`.\n- `self._da"
+    },
+    {
+      "name": "Race condition explanation",
+      "passed": true,
+      "checks": [
+        "OK: 260 tokens (min 45)",
+        "OK: contains 'lock'",
+        "OK: contains 'thread'",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 30.92,
+      "response_preview": "# The Classic Race Condition: Two Threads Incrementing a Shared Counter\n\n## The Problem\n\nWhen two threads increment a shared counter without synchronization, a **race condition** occurs. The increment"
+    },
+    {
+      "name": "Long decode soak (1K+ tokens)",
+      "passed": false,
+      "checks": [
+        "OK: 974 tokens (min 200)",
+        "OK: contains 'class'",
+        "OK: contains 'def get'",
+        "OK: contains 'def put'",
+        "OK: contains 'Lock'",
+        "FAIL: missing 'def test_'",
+        "OK: no degenerate repetition"
+      ],
+      "tok_per_sec": 29.57,
+      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Understand User Requirements:**\n   - **Language:** Python\n   - **Module:** Thread-safe LRU cache\n   - **Features:**\n     1. Generic type support with `TypeVar"
+    }
+  ]
+}
