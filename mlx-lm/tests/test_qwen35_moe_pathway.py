@@ -69,9 +69,39 @@ class TestQwen35MoeOffload(unittest.TestCase):
 
 
 class TestQwen35MoeUtils(unittest.TestCase):
+    """Source-level checks that run without MLX runtime.
+
+    These catch wiring regressions even in CI environments where MLX
+    cannot be imported (no Metal GPU).  Each test greps the actual source
+    to verify the string "qwen3_5_moe" appears in the right modules.
+    """
+
     def test_offload_supported_types_in_utils(self):
         src = (Path(__file__).resolve().parents[1] / "mlx_lm" / "utils.py").read_text()
         self.assertIn('"qwen3_5_moe"', src)
+
+    def test_repack_supported_types_in_source(self):
+        src = (
+            Path(__file__).resolve().parents[1] / "mlx_lm" / "repack_experts.py"
+        ).read_text()
+        self.assertIn('"qwen3_5_moe"', src)
+
+    def test_expert_offload_types_in_source(self):
+        src = (
+            Path(__file__).resolve().parents[1] / "mlx_lm" / "expert_offload.py"
+        ).read_text()
+        self.assertIn('"qwen3_5_moe"', src)
+
+    def test_expert_weight_loader_in_source(self):
+        src = (
+            Path(__file__).resolve().parents[1] / "mlx_lm" / "expert_weight_loader.py"
+        ).read_text()
+        self.assertIn("qwen3_5_moe", src)
+
+    def test_language_model_prefix_in_utils_swap(self):
+        """The quant override lookup must include the language_model.model.layers prefix."""
+        src = (Path(__file__).resolve().parents[1] / "mlx_lm" / "utils.py").read_text()
+        self.assertIn("language_model.model.layers.", src)
 
 
 class TestSharedExpertQuantPredicate(unittest.TestCase):

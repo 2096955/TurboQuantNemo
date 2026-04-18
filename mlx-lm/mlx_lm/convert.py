@@ -340,6 +340,15 @@ def convert(
             " Please delete the file/directory or specify a new path to save to."
         )
 
+    if shared_expert_bits is not None and mixed_expert_bits is None:
+        raise ValueError(
+            "--shared-expert-bits requires --mixed-expert-bits. "
+            "The shared expert override only applies within mixed-expert quantization."
+        )
+
+    if mixed_expert_bits is not None and not quantize:
+        raise ValueError("--mixed-expert-bits requires --quantize.")
+
     print("[INFO] Loading")
     model, tokenizer, config = load(
         hf_path,
