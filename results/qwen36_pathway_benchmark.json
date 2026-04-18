@@ -1,21 +1,26 @@
 {
-  "benchmark_date": "2026-04-17",
+  "benchmark_date": "2026-04-18",
   "model": "Qwen3.6-35B-A3B",
+  "scorer_note": "All three configs scored with eval_quality_gate.evaluate_response (same checker). Config A uses Ollama /api/chat with think=false; Configs B/C use MLX with enable_thinking=False. Throughput numbers use different runtimes and measurement methods — directionally useful, not benchmark-grade comparable.",
   "configs": {
     "A": {
       "label": "Q8_0 GGUF on Ollama",
       "model_path": "~/Models/Qwen3.6-35B-A3B-Q8_0/Qwen3.6-35B-A3B-Q8_0.gguf",
       "runtime": "Ollama (llama.cpp Metal)",
+      "endpoint": "/api/chat (chat template, think=false)",
       "quantization": "Q8_0 uniform",
       "expert_offload": false,
       "kv_compression": "none",
       "disk_size_gb": 36.0,
       "peak_rss_gb": 37.0,
       "fits_16gb": false,
-      "quality_score": "11/12",
-      "quality_failures": ["Long decode soak (missing 'def test_')"],
-      "decode_tok_per_sec": 26.0,
-      "decode_tok_per_sec_note": "Average across 12 prompts (18-31 range)"
+      "quality_score": "10/12",
+      "quality_failures": [
+        "Race condition explanation (unbalanced fences)",
+        "Long decode soak (missing 'def test_')"
+      ],
+      "decode_tok_per_sec": 37.0,
+      "decode_tok_per_sec_note": "Average across 12 prompts via /api/chat (23-43 range). Different runtime than B/C — not directly comparable."
     },
     "B": {
       "label": "mlx-community uniform 4-bit",
@@ -28,10 +33,12 @@
       "peak_rss_gb": 19.6,
       "fits_16gb": false,
       "quality_score": "11/12",
-      "quality_failures": ["Race condition explanation (missing 'lock')"],
+      "quality_failures": [
+        "Race condition explanation (unbalanced fences)"
+      ],
       "decode_tok_per_sec": 117.8,
       "prefill_tok_per_sec": 99.1,
-      "decode_tok_per_sec_note": "Measured on 'capital of France' prompt, 128 max tokens"
+      "decode_tok_per_sec_note": "Single-prompt CLI measurement ('capital of France', 128 max tokens). Config B uses 19.6 GB — does NOT fit 16 GB."
     },
     "C": {
       "label": "Mixed-precision + expert offload + IsoQuant KV",
@@ -55,7 +62,7 @@
       "quality_failures": [],
       "decode_tok_per_sec": 15.6,
       "prefill_tok_per_sec": 12.7,
-      "decode_tok_per_sec_note": "Measured on 'capital of France' prompt, 128 max tokens"
+      "decode_tok_per_sec_note": "Single-prompt CLI measurement ('capital of France', 128 max tokens)."
     }
   },
   "acceptance_criteria": {
@@ -66,12 +73,12 @@
     },
     "quality_parity_vs_A": {
       "target": "Config C score >= Config A score - 1",
-      "result": "12 >= 11 - 1 = 10",
+      "result": "12 >= 10 - 1 = 9",
       "status": "PASS"
     },
     "no_A_pass_C_fail": {
       "target": "No prompt that passes on A fails on C",
-      "result": "Config A fails 'Long decode soak', Config C passes all 12",
+      "result": "A fails 'Race condition' + 'Long decode soak'; C passes both",
       "status": "PASS"
     },
     "peak_rss_under_16gb": {
@@ -88,7 +95,7 @@
       "target": ">= 0.5x of Config B",
       "result": "15.6 / 117.8 = 0.13x",
       "status": "FAIL",
-      "note": "Expert offload I/O overhead reduces throughput significantly vs in-memory. However, Config B does NOT fit 16GB (19.6 GB peak). The 0.5x target assumed similar memory profiles."
+      "note": "Config B uses 19.6 GB (does NOT fit 16 GB). Comparison is not memory-equivalent. The 0.5x target assumed similar memory profiles."
     }
   },
   "generation_settings": {
@@ -96,15 +103,15 @@
     "seed": 42,
     "max_tokens": 512,
     "prompt_count": 12,
-    "suite": "all (v2)"
+    "suite": "all (v2)",
+    "thinking_disabled": true
   },
+  "supported_claim": "Config C fits 16 GB and passes the current 12-prompt MLX quality gate.",
   "notes": [
-    "Config C is the ONLY config that fits 16 GB with all features enabled.",
-    "Config B exceeds 16 GB (19.6 GB peak) despite having no expert offload.",
-    "Config A exceeds 16 GB (37 GB) and uses a different runtime (llama.cpp).",
-    "Config C achieves HIGHER quality (12/12) than both baselines (11/12 each).",
-    "The throughput ratio target (0.5x of B) is not met due to expert I/O, but this is expected given the 3x memory reduction.",
-    "Config C decode speed of 15.6 tok/s is well above the absolute 5 tok/s minimum.",
-    "Thinking model: all configs generate <think> tokens that inflate latency but are stripped for quality scoring."
+    "Config C is the ONLY config that fits 16 GB.",
+    "Config C passes the MLX quality gate (12/12). Baselines score 10/12 (A) and 11/12 (B) under the same scorer.",
+    "The 'Race condition' fence failure hits both A and B but not C — this is a formatting difference, not a semantic quality difference.",
+    "Throughput numbers use different runtimes and measurement methods. Config A uses Ollama /api/chat; B/C use MLX CLI. Not directly comparable.",
+    "No router/logit fidelity artifact exists — quality comparisons are limited to this prompt suite."
   ]
 }

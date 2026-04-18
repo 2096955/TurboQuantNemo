@@ -1,156 +1,128 @@
 {
   "model": "qwen3.6-35b-a3b:q8_0",
   "config": "A (Q8_0 GGUF on Ollama)",
+  "endpoint": "/api/chat",
+  "think": false,
+  "scorer": "eval_quality_gate.evaluate_response",
   "settings": {
     "temperature": 0.0,
     "seed": 42,
     "max_tokens": 512
   },
-  "passed": 11,
-  "total": 12,
+  "n_pass": 10,
+  "n_total": 12,
   "results": [
     {
       "name": "Code Generation",
       "passed": true,
-      "checks": [
-        "OK: 259 tokens (min 15)",
-        "OK: contains 'def '",
-        "OK: contains 'return'",
-        "OK: no degenerate repetition"
-      ],
-      "tok_per_sec": 18.25,
-      "response_preview": "<think>\nThinking Process:\n1.  **Analyze User Input:**\n   - **Task:** Write a Python function to compute the nth Fibonacci number.\n   - **Constraint:** Output *only* the function, no explanation.\n   - "
+      "failures": [],
+      "response": "<think>\nThinking Process:\n1.  **Analyze User Input:**\n   - **Task:** Write a Python function to compute the nth Fibonacci number.\n   - **Constraint:** Output *only* the function, no explanation.\n   - **Input:** `n` (integer, presumably non-negative)\n   - **Output:** Fibonacci number at index `n` (usually F(0)=0, F(1)=1, F(2)=1, etc.)\n\n2.  **Determine Implementation:**\n   - Need a standard, efficient implementation. Iterative is best for simplicity and O(n) time, O(1) space.\n   - Handle edge cases: n=0 -> 0, n=1 -> 1.\n   - Function signature: `def fibonacci(n: int) -> int:`\n   - Code:\n     ```python\n     def fibonacci(n):\n         if n <= 0:\n             return 0\n         elif n == 1:\n             return 1\n         a, b = 0, 1\n         for _ in range(2, n + 1):\n             a, b = b, a + b\n         return b\n     ```\n   - Alternatively, a more concise version:\n     ```python\n     def fibonacci(n):\n         a, b = 0, 1\n         for _ in range(n):\n             a, b = b, a + b\n         return a\n     ```\n     Let's trace: n=0 -> loop doesn't run, returns a=0. Correct.\n     n=1 -> loop runs once, a becomes 1, returns 1. Correct.\n     n=2 -> loop runs twice, a becomes 1, then 2. Returns 2. Correct.\n     This is clean and standard.\n\n3.  **Check Constraints:**\n   - \"Output only the function, no explanation.\" -> I will strictly output just the code block or just the function text.\n\n4.  **Draft Output:**\n   ```python\n   def fibonacci(n):\n       a, b = 0, 1\n       for _ in range(n):\n           a, b = b, a + b\n       return a\n   ```\n   Wait, should I include type hints? Not strictly necessary, but good practice. I'll stick to simple Python.\n   I will output exactly the",
+      "response_words": 259,
+      "tok_per_sec": 42.73,
+      "latency_s": 19.045
     },
     {
       "name": "Instruction Following",
       "passed": true,
-      "checks": [
-        "OK: 325 tokens (min 30)",
-        "OK: no degenerate repetition"
-      ],
-      "tok_per_sec": 30.39,
-      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Analyze User Request:**\n   - **Topic:** Theory of Relativity\n   - **Target Audience:** 5-year-old\n   - **Goal:** Explain a complex scientific theory in simple"
+      "failures": [],
+      "response": "<think>\nHere's a thinking process:\n\n1.  **Analyze User Request:**\n   - **Topic:** Theory of Relativity\n   - **Target Audience:** 5-year-old\n   - **Goal:** Explain a complex scientific theory in simple, age-appropriate terms\n\n2.  **Identify Key Concepts of Relativity:**\n   - Special Relativity: Speed of light is constant, time slows down at high speeds, space and time are connected (spacetime), mass and energy are related (E=mc\u00b2)\n   - General Relativity: Gravity is not a force but a curvature of spacetime caused by mass/energy, objects follow curved paths\n   - Core idea: Everything depends on how fast you're moving and where you are in a gravitational field\n\n3.  **Filter for 5-Year-Old Appropriateness:**\n   - Avoid: Math, equations, technical jargon, abstract concepts like \"spacetime curvature\" without analogy\n   - Keep: Simple analogies, relatable experiences, focus on one main idea (time/space changing with speed/gravity)\n   - Use: Playful language, concrete examples, short sentences, interactive/imaginative framing\n\n4.  **Brainstorm Analogies/Examples:**\n   - Time slowing down: Like when you're having fun and time flies, but actually it's about moving super fast\n   - Gravity bending space: Like a heavy ball on a trampoline making it dip, and smaller balls roll toward it\n   - Speed of light: Like a super-fast race car that never speeds up or slows down\n   - Combine: Focus on the \"trampoline\" idea for gravity and the \"fast movement changes time\" idea for special relativity, but keep it very simple\n\n5.  **Draft - Mental Refinement (Iterative):**\n   *Imagine you\u2019re on a super-duper fast slide. The faster you go, the slower your watch ticks! And if you put a big heavy ball on a trampoline, it makes a dip. If you roll a marble near it, the marble curves toward the big ball. That\u2019s how gravity works\u2014it\u2019s not a magic pull, it\u2019s just space bending like the trampoline! Einstein figured out that time, space, and gravity are all connected, and how fast you move or where you are changes how things feel. Pretty cool, right?*\n\n6.  **Check Against Criteria:**\n   - Age-appropriate? Yes, uses",
+      "response_words": 325,
+      "tok_per_sec": 42.49,
+      "latency_s": 12.466
     },
     {
       "name": "Basic Reasoning",
       "passed": true,
-      "checks": [
-        "OK: 43 tokens (min 15)",
-        "OK: contains '2'",
-        "OK: no degenerate repetition"
-      ],
-      "tok_per_sec": 28.26,
-      "response_preview": "Here's the step-by-step breakdown:\n\n1. You start with **3 apples**.\n2. You eat **1 apple**, which means you remove 1 from your total.\n3. Subtract the eaten apple from the starting amount: **3 - 1 = 2*"
+      "failures": [],
+      "response": "<think>\nHere's a thinking process:\n\n1.  **Analyze User Input:**\n   - Initial quantity: 3 apples\n   - Action: eat 1 apple\n   - Question: how many apples do I have left?\n   - Instruction: Think step by step.\n\n2.  **Identify Key Mathematical Operation:**\n   - This is a simple subtraction problem: 3 - 1 = ?\n\n3.  **Step-by-Step Reasoning:**\n   - Start with 3 apples.\n   - Eat 1 apple, which means removing 1 from the total.\n   - Subtract 1 from 3: 3 - 1 = 2.\n   - Therefore, 2 apples are left.\n\n4.  **Check for Traps/Wordplay:**\n   - Sometimes these questions have tricks (e.g., \"how many do you have left?\" could mean in your possession vs. in your stomach, but standard interpretation is remaining in your possession).\n   - The phrasing is straightforward. No hidden tricks detected.\n   - Standard math applies.\n\n5.  **Formulate Response:**\n   - Follow the \"think step by step\" instruction.\n   - State the initial amount.\n   - State the action/subtraction.\n   - Give the final result.\n   - Keep it clear and concise.\n\n   Draft:\n   1. You start with 3 apples.\n   2. You eat 1 apple, which means you remove 1 from your total.\n   3. Subtract 1 from 3: 3 - 1 = 2.\n   So, you have 2 apples left.\n\n6.  **Final Review:**\n   - Matches user request? Yes.\n   - Step-by-step? Yes.\n   - Correct? Yes.\n   - Ready.\u2705\n</think>\n\nHere's the step-by-step breakdown:\n\n1. You start with **3 apples**.\n2. You eat **1 apple**, which means you remove 1 from your total.\n3. Subtract the eaten apple from the starting amount: **3 - 1 = 2**.\n\nSo, you have **2 apples left**.",
+      "response_words": 43,
+      "tok_per_sec": 42.52,
+      "latency_s": 11.337
     },
     {
       "name": "List Generation",
       "passed": true,
-      "checks": [
-        "OK: 285 tokens (min 30)",
-        "OK: no degenerate repetition"
-      ],
-      "tok_per_sec": 23.79,
-      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Analyze User Request:**\n   - **Task:** List 5 programming languages\n   - **Requirement:** Include one strength for each language\n   - **Format:** Clear, conci"
+      "failures": [],
+      "response": "<think>\nHere's a thinking process:\n\n1.  **Analyze User Request:**\n   - **Task:** List 5 programming languages\n   - **Requirement:** Include one strength for each language\n   - **Format:** Clear, concise list\n\n2.  **Select 5 Programming Languages:**\n   I need to pick well-known, widely-used languages with distinct strengths to make the list informative and balanced.\n   - Python\n   - JavaScript\n   - C++\n   - Rust\n   - SQL\n\n3.  **Identify One Strength for Each:**\n   - **Python:** Readability and simplicity (great for beginners, rapid development, extensive libraries)\n   - **JavaScript:** Ubiquity in web development (runs natively in browsers, essential for frontend/backend via Node.js)\n   - **C++:** High performance and low-level memory control (ideal for system software, game engines, performance-critical applications)\n   - **Rust:** Memory safety without garbage collection (prevents common bugs like null pointer dereferences and buffer overflows)\n   - **SQL:** Standardized data querying and manipulation (universally used for relational databases, efficient for complex data operations)\n\n4.  **Format the Output:**\n   Present the list clearly, matching each language with its strength concisely.\n\n   Example format:\n   1. **Python** - Strength: [strength]\n   2. **JavaScript** - Strength: [strength]\n   3. **C++** - Strength: [strength]\n   4. **Rust** - Strength: [strength]\n   5. **SQL** - Strength: [strength]\n\n5.  **Review and Refine:**\n   - Check against requirements: 5 languages? Yes. One strength each? Yes.\n   - Are the strengths accurate and distinct? Yes.\n   - Is the language clear and professional? Yes.\n   - Any improvements? Keep it concise as requested.\n\n   Final check of the content:\n   1. **Python** \u2013 Strength: Exceptional readability and a vast ecosystem of libraries, making it ideal for rapid development and data science.\n   2. **JavaScript** \u2013 Strength: Native browser support, enabling it to power interactive web interfaces and full-stack applications.\n   3. **C++** \u2013 Strength: High performance and fine-grained memory control, making it the go-to for system software, game",
+      "response_words": 285,
+      "tok_per_sec": 41.8,
+      "latency_s": 12.663
     },
     {
       "name": "Math",
       "passed": true,
-      "checks": [
-        "OK: 245 tokens (min 10)",
-        "OK: contains '408'",
-        "OK: no degenerate repetition"
-      ],
-      "tok_per_sec": 22.02,
-      "response_preview": "To calculate $17 \\times 24$, we can use the standard multiplication algorithm or break the numbers down using the distributive property. Here, I will demonstrate the **distributive property** method a"
+      "failures": [],
+      "response": "<think>\n\n</think>\n\nTo calculate $17 \\times 24$, we can use the standard multiplication algorithm or break the numbers down using the distributive property. Here, I will demonstrate the **distributive property** method as it clearly shows the logical steps.\n\n### Step 1: Break down the numbers\nWe can split $17$ into $10 + 7$ and $24$ into $20 + 4$. However, a simpler breakdown for mental or written calculation is often splitting one number into tens and ones. Let's split $24$ into $20 + 4$.\n\n$$ 17 \\times 24 = 17 \\times (20 + 4) $$\n\n### Step 2: Apply the distributive property\nMultiply $17$ by each part separately:\n\n$$ 17 \\times 24 = (17 \\times 20) + (17 \\times 4) $$\n\n### Step 3: Calculate the partial products\n\n**First part:** $17 \\times 20$\n$$ 17 \\times 2 = 34 $$\n$$ 34 \\times 10 = 340 $$\n\n**Second part:** $17 \\times 4$\n$$ 10 \\times 4 = 40 $$\n$$ 7 \\times 4 = 28 $$\n$$ 40 + 28 = 68 $$\n\n### Step 4: Add the partial products together\n$$ 340 + 68 $$\n\nLet's add them:\n$$ 340 + 60 = 400 $$\n$$ 400 + 8 = 408 $$\n\n---\n\n### Alternative Method: Standard Vertical Multiplication\n\n$$\n\\begin{array}{r@{\\quad}l}\n  17 & \\\\\n\\times 24 & \\\\\n\\hline\n  68 & (4 \\times 17) \\\\\n+340 & (20 \\times 17) \\\\\n\\hline\n 408 &\n\\end{array}\n$$\n\n### Final Conclusion\n$$ 17 \\times 24 = 408 $$",
+      "response_words": 245,
+      "tok_per_sec": 39.04,
+      "latency_s": 12.864
     },
     {
       "name": "Bugfix (off-by-one)",
       "passed": true,
-      "checks": [
-        "OK: 267 tokens (min 25)",
-        "OK: contains 'return'",
-        "OK: contains 'items'",
-        "OK: no degenerate repetition"
-      ],
-      "tok_per_sec": 24.04,
-      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Analyze the User Input:**\n   - **Input Code:**\n     ```python\n     def slice_last_n(items, n):\n         return items[len(items) - n : len(items) - 1]\n     ```"
+      "failures": [],
+      "response": "<think>\nHere's a thinking process:\n\n1.  **Analyze the User Input:**\n   - **Input Code:**\n     ```python\n     def slice_last_n(items, n):\n         return items[len(items) - n : len(items) - 1]\n     ```\n   - **Goal:** Fix the bug so it returns the last `n` items.\n   - **Constraint:** Output only the corrected function.\n\n2.  **Identify the Bug:**\n   - The function is supposed to return the last `n` items from a list/sequence `items`.\n   - Current slice: `items[len(items) - n : len(items) - 1]`\n   - Let's test with an example: `items = [1, 2, 3, 4, 5]`, `n = 3`\n     - `len(items) = 5`\n     - Start index: `5 - 3 = 2`\n     - Stop index: `5 - 1 = 4`\n     - Slice: `items[2:4]` -> `[3, 4]` (length 2, not 3)\n   - The bug is in the stop index. To get the last `n` items, the slice should go from `len(items) - n` to the end. In Python, omitting the stop index or using `None` or `len(items)` will include up to the end.\n   - Correct slice: `items[len(items) - n :]` or `items[-n:]`\n\n3.  **Formulate the Fix:**\n   - Option 1: `return items[len(items) - n :]`\n   - Option 2: `return items[-n:]` (more Pythonic)\n   - Both work. I'll stick close to the original style but fix the bug, or use the Pythonic version. The prompt says \"Fix the bug\", so I'll provide the corrected version. `items[-n:]` is standard, but `items[len(items) - n:]` directly fixes the original. I'll go with `items[-n:]` for simplicity and correctness, or keep the explicit length calculation if preferred. Actually, `items[-n:]` is best. Let's just output the corrected function.\n\n   Let's verify edge cases:\n   - `n = 0`: `items[-0:]",
+      "response_words": 267,
+      "tok_per_sec": 25.71,
+      "latency_s": 20.65
     },
     {
       "name": "Traceback interpretation",
       "passed": true,
-      "checks": [
-        "OK: 295 tokens (min 40)",
-        "OK: contains 'str'",
-        "OK: contains 'int'",
-        "OK: no degenerate repetition"
-      ],
-      "tok_per_sec": 25.23,
-      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Error Message:** `TypeError: unsupported operand type(s) for +: 'int' and 'str'`\n   - **Request:** Explain what it means and how "
+      "failures": [],
+      "response": "<think>\nHere's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Error Message:** `TypeError: unsupported operand type(s) for +: 'int' and 'str'`\n   - **Request:** Explain what it means and how to fix it.\n\n2.  **Deconstruct the Error Message:**\n   - `TypeError`: A type-related error in Python. It occurs when an operation or function is applied to an object of an inappropriate type.\n   - `unsupported operand type(s) for +`: The `+` operator is being used, but Python doesn't know how to handle the combination of types provided.\n   - `'int' and 'str'`: The two operands being added are an integer (`int`) and a string (`str`).\n\n3.  **Explain the Meaning:**\n   - In Python, the `+` operator behaves differently based on the types of its operands:\n     - For numbers (`int`, `float`), it performs arithmetic addition.\n     - For strings, it performs concatenation.\n     - Python is strictly typed and does *not* automatically convert between types for operations like this. So, trying to add an integer and a string directly (e.g., `5 + \"hello\"`) raises this error.\n   - The error means you're trying to use the `+` operator to combine a number and a text string, which Python doesn't allow directly.\n\n4.  **Identify Common Causes:**\n   - Direct addition: `result = 10 + \"5\"`\n   - String formatting issues: `print(\"Score: \" + score)` where `score` is an integer.\n   - User input: `age = input(\"Enter age: \")` (returns string) then `age + 1`\n   - Data from files/APIs: Often returns strings that need conversion.\n\n5.  **Provide Solutions/Fixes:**\n   - **Option 1: Convert string to int** (if you want arithmetic addition)\n     - `result = 10 + int(\"5\")`\n   - **Option 2: Convert int to string** (if you want concatenation)\n     - `result = \"Score: \" + str(10)`\n   - **Option 3: Use f-strings or format()** (best practice for string formatting)\n     - `print(f\"Score: {10",
+      "response_words": 295,
+      "tok_per_sec": 39.61,
+      "latency_s": 13.349
     },
     {
       "name": "Multi-file style refactor",
       "passed": true,
-      "checks": [
-        "OK: 270 tokens (min 50)",
-        "OK: contains 'rename'",
-        "OK: contains 'import'",
-        "OK: no degenerate repetition"
-      ],
-      "tok_per_sec": 25.79,
-      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Understand User Goal**: The user wants to rename a function `fetch` to `load_data` across two Python files: `a.py` (which defines it) and `b.py` (which import"
+      "failures": [],
+      "response": "<think>\nHere's a thinking process:\n\n1.  **Understand User Goal**: The user wants to rename a function `fetch` to `load_data` across two Python files: `a.py` (which defines it) and `b.py` (which imports it). They want concrete steps and verification methods (tests or grep).\n\n2.  **Identify Key Components**:\n   - Files: `a.py`, `b.py`\n   - Function: `fetch` in `a.py`\n   - Import: `b.py` imports `fetch` from `a`\n   - Goal: Rename to `load_data`\n   - Verification: Tests or grep commands\n\n3.  **Determine Concrete Steps**:\n   - Step 1: Locate all occurrences of `fetch` in both files.\n   - Step 2: Update `a.py`: Change the function definition `def fetch():` to `def load_data():`.\n   - Step 3: Update `b.py`: Change the import statement (e.g., `from a import fetch` \u2192 `from a import load_data`) and any direct calls to `fetch()` \u2192 `load_data()`.\n   - Step 4: Handle edge cases: aliases, wildcard imports, comments, docstrings, type hints, etc.\n   - Step 5: Verify using grep and/or tests.\n\n4.  **Draft Steps (Mental Refinement)**:\n   *Preparation*: Ensure you're in the correct directory and have version control (git) if possible.\n   *Step 1: Find all references*: Use `grep -rn \"fetch\" a.py b.py` to see exact locations.\n   *Step 2: Update a.py*: \n     - Change `def fetch(...):` to `def load_data(...):`\n     - Update any internal references to `fetch` within `a.py`\n     - Update docstrings/comments if they mention `fetch`\n   *Step 3: Update b.py*:\n     - Change import: `from a import fetch` \u2192 `from a import load_data`\n     - If using `import a`, change `a.fetch()` \u2192 `a.load_data()`\n     - Update any direct calls or references\n   *Step 4: Handle aliases*: If `b.py` has `from a import fetch as f`, change to `from a import load_data as f` (or rename alias if needed).",
+      "response_words": 270,
+      "tok_per_sec": 37.2,
+      "latency_s": 14.239
     },
     {
       "name": "Write a minimal test",
       "passed": true,
-      "checks": [
-        "OK: 313 tokens (min 5)",
-        "OK: contains 'def '",
-        "OK: contains 'assert'",
-        "OK: contains 'add'",
-        "OK: no degenerate repetition"
-      ],
-      "tok_per_sec": 27.16,
-      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Understand User Request:**\n   - Need a pytest test for a function `add(a, b)`\n   - The test should assert that `add(2, 3) == 5`\n   - Must show the complete te"
+      "failures": [],
+      "response": "<think>\nHere's a thinking process:\n\n1.  **Understand User Request:**\n   - Need a pytest test for a function `add(a, b)`\n   - The test should assert that `add(2, 3) == 5`\n   - Must show the complete test file including imports\n   - Language: Python\n   - Framework: pytest\n\n2.  **Identify Key Components:**\n   - Import pytest (though not strictly necessary for basic assertions, it's good practice to include it or at least mention it)\n   - Define the `add` function (or assume it's imported from another module; I'll provide a self-contained example with the function defined in the same file for completeness, but also show how it would look if imported)\n   - Write the test function with `test_` prefix\n   - Use `assert` statement\n   - Make sure it's a valid pytest test file\n\n3.  **Draft the Code (Mental):**\n   ```python\n   import pytest\n\n   def add(a, b):\n       return a + b\n\n   def test_add():\n       assert add(2, 3) == 5\n   ```\n\n4.  **Refine According to Best Practices:**\n   - In pytest, you don't strictly need `import pytest` for basic `assert` statements, but it's commonly included.\n   - It's better to separate the function under test from the test file in real projects, but for a complete self-contained example, I'll include both. I'll also show the standard structure where the function is imported.\n   - I'll provide a clean, minimal, and correct test file.\n\n   Let's stick to the simplest, most direct answer as requested:\n   ```python\n   import pytest\n\n   def add(a, b):\n       return a + b\n\n   def test_add():\n       assert add(2, 3) == 5\n   ```\n\n   Actually, the prompt says \"Write a pytest test for a function `add(a,b)`\". It doesn't specify if `add` is in the same file or imported. I'll provide a standard test file structure where `add` is imported from a module (e.g., `math_utils.py`), but I'll also include the function definition for completeness. I'll make it clear and self-contained.\n\n   Better approach: Provide the test file assuming `add` is in a separate",
+      "response_words": 313,
+      "tok_per_sec": 31.51,
+      "latency_s": 16.727
     },
     {
       "name": "Implement LRU cache get",
       "passed": true,
-      "checks": [
-        "OK: 315 tokens (min 5)",
-        "OK: contains 'key'",
-        "OK: contains 'return'",
-        "OK: contains 'None'",
-        "OK: no degenerate repetition"
-      ],
-      "tok_per_sec": 28.47,
-      "response_preview": "<think>\nThe user wants a class method `get(self, key)` for an LRU (Least Recently Used) cache.\nThe cache has a fixed capacity.\nThe implementation should use `self._order` and `self._data`.\n- `self._da"
+      "failures": [],
+      "response": "<think>\nThe user wants a class method `get(self, key)` for an LRU (Least Recently Used) cache.\nThe cache has a fixed capacity.\nThe implementation should use `self._order` and `self._data`.\n- `self._data` likely stores the key-value pairs.\n- `self._order` likely stores the order of keys to track usage (e.g., a list or deque).\n\nRequirements:\n1.  **On miss**: Return `None`.\n2.  **On hit**: Move the key to the most-recent position.\n3.  **Output**: Only plain code, no markdown fences.\n\nLet's assume standard implementations for `_order` and `_data`.\n- `_data`: A dictionary mapping keys to values.\n- `_order`: A list or deque representing the order of access. Usually, the end is the most recent, or the beginning is the most recent. Let's assume a common convention: appending to the end means most recent, popping from the beginning means least recent. Or using `collections.deque`.\n\nHowever, the prompt doesn't specify the exact data structure type for `_order`, just that it exists. I need to write code that manipulates it.\nIf `_order` is a list:\n- Hit: Remove key from list, append to end.\n- Miss: Return None.\n\nIf `_order` is a deque:\n- Hit: Remove key, append to right.\n\nLet's write generic code assuming `_order` supports removal and appending. A list is the safest assumption for a generic \"order\" list in Python unless specified otherwise, though `deque` is more efficient. Given the constraint \"Output only the plain code\", I should probably stick to standard list operations or assume `deque` if implied by \"LRU\". But usually, in interview questions or simple implementations, a list is used for `_order`.\n\nLet's refine the logic:\n1. Check if `key` is in `self._data`.\n2. If not, return `None`.\n3. If yes, retrieve value.\n4. Update `_order` to reflect the key is now most recently used.\n   - If `_order` is a list: `self._order.remove(key)` then `self._order.append(key)`.\n   - If `_order` is a deque: `self._order.remove(key)` then `self._order.append(key)`.\n5. Return the",
+      "response_words": 315,
+      "tok_per_sec": 27.48,
+      "latency_s": 19.342
     },
     {
       "name": "Race condition explanation",
-      "passed": true,
-      "checks": [
-        "OK: 260 tokens (min 45)",
-        "OK: contains 'lock'",
-        "OK: contains 'thread'",
-        "OK: no degenerate repetition"
+      "passed": false,
+      "failures": [
+        "Malformed fenced code blocks (unbalanced ```)"
       ],
-      "tok_per_sec": 30.92,
-      "response_preview": "# The Classic Race Condition: Two Threads Incrementing a Shared Counter\n\n## The Problem\n\nWhen two threads increment a shared counter without synchronization, a **race condition** occurs. The increment"
+      "response": "<think>\n\n</think>\n\n# The Classic Race Condition: Two Threads Incrementing a Shared Counter\n\n## The Problem\n\nWhen two threads increment a shared counter without synchronization, a **race condition** occurs. The increment operation (`counter += 1`) is **not atomic** \u2014 it involves three steps:\n\n1. **Read** the current value of `counter`\n2. **Add 1** to that value\n3. **Write** the new value back\n\nIf both threads interleave these steps, one increment can be lost.\n\n### Example of the Race\n\n```\nInitial counter = 0\n\nThread A: reads counter (0)\nThread B: reads counter (0)   \u2190 both read the same stale value!\nThread A: writes counter = 1\nThread B: writes counter = 1  \u2190 Thread A's increment is lost!\n```\n\nExpected result after 100,000 increments per thread: **200,000**\nActual result without locking: **often less** (e.g., 150,000\u2013190,000)\n\n## Broken Code (Race Condition)\n\n```python\nimport threading\n\ncounter = 0\nNUM_INCREMENTS = 100_000\n\ndef increment_without_lock():\n    \"\"\"Unsafe: race condition can cause lost updates.\"\"\"\n    global counter\n    for _ in range(NUM_INCREMENTS):\n        # This is NOT atomic \u2014 read, add, write can interleave\n        temp = counter\n        temp += 1\n        counter = temp\n\n# Launch two threads\nt1 = threading.Thread(target=increment_without_lock)\nt2 = threading.Thread(target=increment_without_lock)\n\nt1.start()\nt2.start()\nt1.join()\nt2.join()\n\nprint(f\"Counter: {counter}\")  # Often < 200,000 \u2014 race condition!\n```\n\n## Fixed Code (Using `threading.Lock`)\n\n```python\nimport threading\n\ncounter = 0\nNUM_INCREMENTS = 100_000\n\n# Create a lock to protect the shared counter\nlock = threading.Lock()\n\ndef increment_with_lock():\n    \"\"\"Safe: lock ensures only one thread increments at a time.\"\"\"\n    global counter\n    for _ in range(NUM_INCREMENTS):\n        with lock:  # Acquire lock before reading, release after writing",
+      "response_words": 260,
+      "tok_per_sec": 22.9,
+      "latency_s": 23.065
     },
     {
       "name": "Long decode soak (1K+ tokens)",
       "passed": false,
-      "checks": [
-        "OK: 974 tokens (min 200)",
-        "OK: contains 'class'",
-        "OK: contains 'def get'",
-        "OK: contains 'def put'",
-        "OK: contains 'Lock'",
-        "FAIL: missing 'def test_'",
-        "OK: no degenerate repetition"
+      "failures": [
+        "Missing expected substring: 'def test_'"
       ],
-      "tok_per_sec": 29.57,
-      "response_preview": "<think>\nHere's a thinking process:\n\n1.  **Understand User Requirements:**\n   - **Language:** Python\n   - **Module:** Thread-safe LRU cache\n   - **Features:**\n     1. Generic type support with `TypeVar"
+      "response": "<think>\nHere's a thinking process:\n\n1.  **Understand User Requirements:**\n   - **Language:** Python\n   - **Module:** Thread-safe LRU cache\n   - **Features:**\n     1. Generic type support with `TypeVar`\n     2. Methods: `get()`, `put()`, `delete()`\n     3. TTL (time-to-live) expiration per entry\n     4. Thread safety with `threading.Lock`\n     5. Statistics tracking (hits, misses, evictions)\n     6. Complete `pytest` test suite at the bottom\n   - **Additional Requirements:** Docstrings, type hints, at least 5 test functions.\n\n2.  **Design the LRU Cache:**\n   - Need a doubly-linked list for O(1) LRU operations, or use `collections.OrderedDict` which is standard and efficient in Python. I'll use `OrderedDict` for simplicity and reliability, but I'll implement the LRU logic manually if needed. Actually, `OrderedDict` is perfect for LRU: `move_to_end()` and `popitem(last=False)`.\n   - Need to store TTL per entry. I'll store tuples: `(value, expiry_time)`.\n   - Need thread safety: `threading.Lock` around all public methods.\n   - Need statistics: `hits`, `misses`, `evictions` counters.\n   - Generic types: `K = TypeVar('K')`, `V = TypeVar('V')`\n   - Methods: `get(key)`, `put(key, value, ttl)`, `delete(key)`\n   - TTL handling: When getting, check if current time > expiry. If so, treat as miss, remove, increment eviction/miss stats. When putting, set expiry. When evicting due to capacity, increment eviction stat.\n\n3.  **Implementation Details:**\n   - Class: `LRUCache[K, V]`\n   - `__init__(self, max_size: int, default_ttl: float = None)`\n   - Internal state:\n     - `self._cache: OrderedDict[K, Tuple[V, float]]`\n     - `self._lock: threading.Lock`\n     - `self._max_size: int`\n     - `self._default_ttl: float`\n     - `self._stats: dict` (hits, misses, evictions)\n   - `get(self, key: K) -> Optional[V]`\n     - Acquire lock\n     - Check if key exists\n     - If exists, check TTL\n     - If expired: remove, increment miss/eviction, return None\n     - If valid: move to end, increment hit, return value\n     - If not exists: increment miss, return None\n   - `put(self, key: K, value: V, ttl: float = None) -> None`\n     - Acquire lock\n     - Calculate expiry: `ttl if ttl is not None else self._default_ttl`\n     - If key exists: update value and expiry, move to end\n     - If key doesn't exist:\n       - If at capacity: evict LRU (oldest), increment eviction\n       - Add new entry\n   - `delete(self, key: K) -> bool`\n     - Acquire lock\n     - Try to pop, return True/False\n   - Stats: property or method to get stats\n   - Type hints: Use `typing` module, `Optional`, `Tuple`, `Dict`, `Any` if needed.\n   - Docstrings: Comprehensive for class and methods.\n\n4.  **Refine Implementation (Mental Walkthrough & Edge Cases):**\n   - TTL: Should handle `None` (no expiration) or use a sentinel. I'll use `float('inf')` for no TTL.\n   - Thread safety: All public methods acquire the lock. Internal helper methods don't need it if called within locked context.\n   - Stats: Need to be careful with eviction vs miss. When TTL expires on get, it's a miss. When capacity is exceeded, it's an eviction. I'll track them separately.\n   - `OrderedDict` behavior: `popitem(last=False)` removes the first inserted item (LRU). `move_to_end(key, last=True)` marks as recently used.\n   - Let's draft the code structure:\n\n   ```python\n   import threading\n   import time\n   from typing import TypeVar, Optional, Tuple, Dict, Any\n   from collections import OrderedDict\n\n   K = TypeVar('K')\n   V = TypeVar('V')\n\n   class LRUCache:\n       \"\"\"Thread-safe LRU cache with TTL and statistics tracking.\"\"\"\n       def __init__(self, max_size: int, default_ttl: Optional[float] = None):\n           ...\n       def get(self, key: K) -> Optional[V]:\n           ...\n       def put(self, key: K, value: V, ttl: Optional[float] = None) -> None:\n           ...\n       def delete(self, key: K) -> bool:\n           ...\n       @property\n       def stats(self) -> Dict[str, int]:\n           ...\n   ```\n\n   Wait, `OrderedDict` is in `collections`. I'll import it.\n   For TTL, I'll store `(value, expiry_time)`. `expiry_time = time.time() + ttl` if ttl else `float('inf')`.\n   When checking expiration: `if time.time() > expiry: expired = True`\n   Stats tracking: `hits`, `misses`, `evictions`. I'll use a simple dict or `collections.defaultdict(int)`.\n\n   Let's write it out carefully.\n\n   ```python\n   import threading\n   import time\n   from typing import TypeVar, Optional, Tuple, Dict, Any\n   from collections import OrderedDict\n\n   K = TypeVar('K')\n   V = TypeVar('V')\n\n   class LRUCache:\n       \"\"\"\n       A thread-safe Least Recently Used (LRU) cache with TTL expiration and statistics.\n\n       Supports generic types for keys and values, tracks hits/misses/evictions,\n       and ensures thread safety via a threading.Lock.\n       \"\"\"\n       def __init__(self, max_size: int, default_ttl: Optional[float] = None):\n           if max_size <= 0:\n               raise ValueError(\"max_size must be a positive integer\")\n           self._max_size = max_size\n           self._default_ttl = default_ttl\n           self._cache: OrderedDict[K, Tuple[V, float]] = OrderedDict()\n           self._lock = threading.Lock()\n           self._hits = 0\n           self._misses = 0\n           self._evictions = 0\n\n       def get(self, key: K) -> Optional[V]:\n           with self._lock:\n               if key in self._cache:\n                   value, expiry = self._cache[key]\n                   if time.time() > expiry:\n                       # Expired\n                       del self._cache[key]\n                       self._misses += 1\n                       self._evictions += 1\n                       return None\n                   # Valid\n                   self._cache.move_to_end(key)\n                   self._hits += 1\n                   return value\n               else:\n                   self._misses += 1\n                   return None\n\n       def put(self, key: K, value: V, ttl: Optional[float] = None) -> None:\n           with self._lock:\n               expiry = time.time() + ttl if ttl is not None else (time.time() + self._default_ttl if self._default_ttl is not None else float('inf'))\n\n               if key in self._cache:\n                   self._cache[key] = (value, expiry)\n                   self._cache.move_to_end(key)\n               else:\n                   if len(self._cache) >= self._max_size:\n                       # Evict LRU\n                       self._cache.popitem(last=False)\n                       self._evictions += 1\n                   self._cache[key] = (value, expiry)\n\n       def delete(self, key: K) -> bool:\n           with self._lock:\n               if key in self._cache:\n                   del self._cache[key]\n                   return True\n               return False\n\n       @property\n       def stats(self) -> Dict[str, int]:\n           with self._lock:\n               return {\n                   \"hits\": self._hits,\n                   \"misses\": self._misses,\n                   \"evictions\": self._evictions,\n                   \"size\": len(self._cache)\n               }\n   ```\n\n   Wait, there's a subtle issue with TTL expiration tracking. The prompt says \"TTL (time-to-live) expiration per entry\". It doesn't specify whether expired entries should count as evictions or misses. Typically, TTL expiration is a miss, but sometimes counted as eviction. I'll count it as a miss, and maybe not increment eviction, or I'll increment eviction for capacity, and miss for TTL. I'll stick to: TTL expiration -> miss. Capacity overflow -> eviction. I'll adjust the stats to reflect this clearly. Actually, I'll keep it simple: TTL expiration counts as a miss. I won't count it as eviction to avoid confusion, or I will count it as eviction if preferred. I'll stick to miss for TTL, eviction for capacity. I'll document it.\n\n   Let's refine the stats tracking to be precise:\n   - `hits`: successful get before TTL\n   - `misses`: key",
+      "response_words": 974,
+      "tok_per_sec": 28.37,
+      "latency_s": 73.49
     }
   ]
 }

@@ -1,31 +1,32 @@
 """Run the same 12-prompt quality suite against Ollama Q8_0 baseline.
 
-Uses the Ollama /api/generate endpoint with deterministic settings
-(temperature 0, seed 42) and applies the same pass/fail criteria
-from eval_quality_gate.py.
+Uses the Ollama /api/chat endpoint (chat template, thinking disabled)
+with deterministic settings and the EXACT same evaluate_response()
+scorer from eval_quality_gate.py — no reimplemented checker.
 """
 
 import json
-import re
-import subprocess
 import sys
 import time
-from collections import Counter
 from pathlib import Path
 
-# Import the same prompt suite and checking logic
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from eval_quality_gate import (
+    evaluate_response,
     prompt_suite,
+    strip_thinking,
 )
 
 
-def run_ollama_prompt(model: str, prompt_text: str, max_tokens: int = 512) -> dict:
-    """Run a single prompt through Ollama API."""
+def run_ollama_chat(model: str, prompt_text: str, max_tokens: int = 512) -> dict:
+    """Run a single prompt through Ollama /api/chat (chat template)."""
+    import subprocess
+
     payload = {
         "model": model,
-        "prompt": prompt_text,
+        "messages": [{"role": "user", "content": prompt_text}],
         "stream": False,
+        "think": False,
         "options": {
             "temperature": 0.0,
             "seed": 42,
@@ -38,13 +39,13 @@ def run_ollama_prompt(model: str, prompt_text: str, max_tokens: int = 512) -> di
         [
             "curl",
             "-s",
-            "http://localhost:11434/api/generate",
+            "http://localhost:11434/api/chat",
             "-d",
             json.dumps(payload),
         ],
         capture_output=True,
         text=True,
-        timeout=300,
+        timeout=600,
     )
     elapsed = time.time() - start
 
@@ -56,11 +57,10 @@ def run_ollama_prompt(model: str, prompt_text: str, max_tokens: int = 512) -> di
     except json.JSONDecodeError:
         return {"error": f"Invalid JSON: {proc.stdout[:200]}", "elapsed": elapsed}
 
-    response = result.get("response", "")
-    total_duration = result.get("total_duration", 0)
+    message = result.get("message", {})
+    response = message.get("content", "")
     eval_count = result.get("eval_count", 0)
     eval_duration = result.get("eval_duration", 1)
-
     tok_per_sec = eval_count / (eval_duration / 1e9) if eval_duration > 0 else 0
 
     return {
@@ -68,66 +68,7 @@ def run_ollama_prompt(model: str, prompt_text: str, max_tokens: int = 512) -> di
         "elapsed": elapsed,
         "eval_count": eval_count,
         "tok_per_sec": round(tok_per_sec, 2),
-        "total_duration_s": round(total_duration / 1e9, 2) if total_duration else None,
     }
-
-
-def strip_thinking(text: str) -> str:
-    """Strip <think>...</think> blocks from model output."""
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-
-
-def check_repetition(text: str, threshold: float = 0.35) -> bool:
-    """Return True if text has excessive repetition (same as eval_quality_gate)."""
-    words = text.lower().split()
-    if len(words) < 10:
-        return False
-    counts = Counter(words)
-    # Check if any non-trivial word dominates
-    for word, count in counts.most_common(10):
-        if len(word) <= 2:
-            continue
-        ratio = count / len(words)
-        if ratio > threshold:
-            return True
-    return False
-
-
-def evaluate_prompt(prompt: dict, response_text: str) -> dict:
-    """Apply the same pass/fail criteria as eval_quality_gate."""
-    clean = strip_thinking(response_text)
-    result = {
-        "name": prompt["name"],
-        "passed": True,
-        "checks": [],
-    }
-
-    # Min tokens check
-    min_tokens = prompt.get("min_tokens", 10)
-    skip_min = prompt.get("skip_min_tokens", False)
-    token_count = len(clean.split())
-    if not skip_min and token_count < min_tokens:
-        result["passed"] = False
-        result["checks"].append(f"FAIL: {token_count} tokens < min {min_tokens}")
-    else:
-        result["checks"].append(f"OK: {token_count} tokens (min {min_tokens})")
-
-    # Expected substrings
-    for sub in prompt.get("expected_substr", []):
-        if sub.lower() in clean.lower():
-            result["checks"].append(f"OK: contains '{sub}'")
-        else:
-            result["passed"] = False
-            result["checks"].append(f"FAIL: missing '{sub}'")
-
-    # Repetition check
-    if check_repetition(clean):
-        result["passed"] = False
-        result["checks"].append("FAIL: excessive repetition detected")
-    else:
-        result["checks"].append("OK: no degenerate repetition")
-
-    return result
 
 
 def main():
@@ -135,7 +76,9 @@ def main():
     prompts = prompt_suite("all", harness_version="v2")
 
     print(f"Running {len(prompts)} prompts against Ollama {model}")
+    print("Endpoint: /api/chat (chat template, think=false)")
     print("Settings: temp=0.0, seed=42, max_tokens=512")
+    print("Scorer: eval_quality_gate.evaluate_response (identical to MLX gate)")
     print("=" * 60)
 
     results = []
@@ -145,7 +88,7 @@ def main():
         max_tokens = prompt.get("max_tokens", 512)
         print(f"\n[{i + 1}/{len(prompts)}] {prompt['name']}...")
 
-        ollama_result = run_ollama_prompt(model, prompt["text"], max_tokens=max_tokens)
+        ollama_result = run_ollama_chat(model, prompt["text"], max_tokens=max_tokens)
 
         if "error" in ollama_result:
             print(f"  ERROR: {ollama_result['error'][:200]}")
@@ -153,26 +96,34 @@ def main():
                 {
                     "name": prompt["name"],
                     "passed": False,
-                    "error": ollama_result["error"][:500],
+                    "failures": [f"Ollama error: {ollama_result['error'][:200]}"],
+                    "response": "",
                 }
             )
             continue
 
-        response = ollama_result["response"]
-        eval_result = evaluate_prompt(prompt, response)
-        eval_result["tok_per_sec"] = ollama_result["tok_per_sec"]
-        eval_result["response_preview"] = strip_thinking(response)[:200]
+        raw_response = ollama_result["response"]
+        passed, failures = evaluate_response(prompt, raw_response)
 
-        if eval_result["passed"]:
+        entry = {
+            "name": prompt["name"],
+            "passed": passed,
+            "failures": failures,
+            "response": raw_response,
+            "response_words": len(strip_thinking(raw_response).split()),
+            "tok_per_sec": ollama_result["tok_per_sec"],
+            "latency_s": round(ollama_result["elapsed"], 3),
+        }
+
+        if passed:
             passed_count += 1
             print(f"  PASS ({ollama_result['tok_per_sec']} tok/s)")
         else:
             print(f"  FAIL ({ollama_result['tok_per_sec']} tok/s)")
-            for check in eval_result["checks"]:
-                if "FAIL" in check:
-                    print(f"    {check}")
+            for f in failures:
+                print(f"    {f}")
 
-        results.append(eval_result)
+        results.append(entry)
 
     print("\n" + "=" * 60)
     print(f"Result: {passed_count}/{len(prompts)} passed")
@@ -180,9 +131,12 @@ def main():
     artifact = {
         "model": model,
         "config": "A (Q8_0 GGUF on Ollama)",
+        "endpoint": "/api/chat",
+        "think": False,
+        "scorer": "eval_quality_gate.evaluate_response",
         "settings": {"temperature": 0.0, "seed": 42, "max_tokens": 512},
-        "passed": passed_count,
-        "total": len(prompts),
+        "n_pass": passed_count,
+        "n_total": len(prompts),
         "results": results,
     }
 
