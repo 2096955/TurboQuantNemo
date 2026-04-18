@@ -7,6 +7,15 @@ import mlx.core as mx
 from mlx.utils import tree_flatten
 
 
+_repack_supported_types = {
+    "nemotron_h",
+    "gemma4_text",
+    "gemma4",
+    "qwen3_moe",
+    "qwen3_5_moe",
+}
+
+
 def _build_repacked_weights_for_shard(
     *,
     shard: str,
@@ -81,6 +90,42 @@ def _build_repacked_weights_for_gemma4_shard(
     return new_weights
 
 
+def _build_repacked_weights_for_qwen3_shard(
+    *,
+    shard: str,
+    keys: list[str],
+    weights: dict[str, mx.array],
+    num_experts: int,
+) -> dict[str, mx.array]:
+    """Split stacked SwitchGLU tensors into individual per-expert tensors for Qwen3.
+
+    Handles key prefix:
+      - model.layers.{L}.mlp.switch_mlp.{proj}.{suffix}
+    """
+    new_weights: dict[str, mx.array] = {}
+    for k in keys:
+        if ".switch_mlp." not in k:
+            new_weights[k] = weights.pop(k)
+            continue
+
+        pre, post = k.split(".switch_mlp.")
+        proj_suffix = post.split(".")
+        proj = proj_suffix[0]
+        suffix = proj_suffix[1]
+
+        stacked_tensor = weights.pop(k)
+        n = stacked_tensor.shape[0]
+        if n != num_experts:
+            raise ValueError(
+                f"Tensor {k} has {n} experts, expected {num_experts} from config."
+            )
+
+        for e in range(num_experts):
+            expert_key = f"{pre}.experts.{e}.{proj}.{suffix}"
+            new_weights[expert_key] = stacked_tensor[e]
+    return new_weights
+
+
 def repack_checkpoint(model_path: Path) -> None:
     model_path = Path(model_path)
     if not model_path.is_dir():
@@ -94,7 +139,6 @@ def repack_checkpoint(model_path: Path) -> None:
         config = json.load(f)
 
     model_type = config.get("model_type")
-    _repack_supported_types = {"nemotron_h", "gemma4_text", "gemma4"}
     if model_type not in _repack_supported_types:
         raise ValueError(
             f"Expert repacking supports model types {sorted(_repack_supported_types)}, "
@@ -102,14 +146,16 @@ def repack_checkpoint(model_path: Path) -> None:
         )
 
     is_gemma4 = model_type in ("gemma4_text", "gemma4")
+    is_qwen3 = model_type in ("qwen3_moe", "qwen3_5_moe")
 
     if is_gemma4:
-        # gemma4 (multimodal) stores MoE config in text_config; gemma4_text at top level
         text_cfg = config.get("text_config", config)
-        n_routed_experts = text_cfg.get("num_experts") or text_cfg.get(
-            "num_local_experts"
-        )
+        n_routed_experts = text_cfg.get("num_experts") or text_cfg.get("num_local_experts")
         stacked_marker = ".switch_glu."
+    elif is_qwen3:
+        text_cfg = config.get("text_config", config)
+        n_routed_experts = text_cfg.get("num_experts")
+        stacked_marker = ".switch_mlp."
     else:
         n_routed_experts = config.get("n_routed_experts")
         stacked_marker = ".switch_mlp."
@@ -117,7 +163,7 @@ def repack_checkpoint(model_path: Path) -> None:
     if n_routed_experts is None:
         raise ValueError(
             "Missing expert count in config.json "
-            "(need 'num_experts'/'num_local_experts' for gemma4/gemma4_text "
+            "(need 'num_experts'/'num_local_experts' for gemma4/gemma4_text/qwen3_moe "
             "or 'n_routed_experts' for nemotron_h)"
         )
 
@@ -130,7 +176,6 @@ def repack_checkpoint(model_path: Path) -> None:
 
     weight_map = index.get("weight_map", {})
 
-    # Group keys by the shard they belong to
     shards_to_keys: dict[str, list[str]] = {}
     for key, shard in weight_map.items():
         shards_to_keys.setdefault(shard, []).append(key)
@@ -143,7 +188,6 @@ def repack_checkpoint(model_path: Path) -> None:
         shard_file = model_path / shard
 
         if not has_switch:
-            # Keep shard mapping unchanged
             for k in keys:
                 new_weight_map[k] = shard
             continue
@@ -152,6 +196,13 @@ def repack_checkpoint(model_path: Path) -> None:
         weights = dict(mx.load(str(shard_file)).items())
         if is_gemma4:
             repacked = _build_repacked_weights_for_gemma4_shard(
+                shard=shard,
+                keys=keys,
+                weights=weights,
+                num_experts=n_routed_experts,
+            )
+        elif is_qwen3:
+            repacked = _build_repacked_weights_for_qwen3_shard(
                 shard=shard,
                 keys=keys,
                 weights=weights,

@@ -56,8 +56,11 @@ def load_non_expert_weights(
     # Group keys by shard for batched open
     shard_to_keys: dict[str, list] = defaultdict(list)
     for key, shard in weight_map.items():
-        is_expert = is_expert_weight_key(key, model_type="nemotron_h") or is_expert_weight_key(
-            key, model_type="gemma4_text"
+        is_expert = (
+            is_expert_weight_key(key, model_type="nemotron_h")
+            or is_expert_weight_key(key, model_type="gemma4_text")
+            or is_expert_weight_key(key, model_type="qwen3_moe")
+            or is_expert_weight_key(key, model_type="qwen3_5_moe")
         )
         if not is_expert and not key.startswith("mtp."):
             shard_to_keys[shard].append(key)

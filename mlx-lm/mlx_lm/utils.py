@@ -302,7 +302,13 @@ def load_model(
         config.update(model_config)
 
     model_path = Path(model_path)
-    _offload_supported_types = {"nemotron_h", "gemma4_text", "gemma4"}
+    _offload_supported_types = {
+        "nemotron_h",
+        "gemma4_text",
+        "gemma4",
+        "qwen3_moe",
+        "qwen3_5_moe",
+    }
     requested_expert_offload = bool(config.get("expert_offload"))
     if (
         requested_expert_offload
@@ -336,7 +342,7 @@ def load_model(
         wm = resolve_weight_map(ckpt_root)
         _mt = config.get("model_type", "nemotron_h")
 
-        if _mt in ("gemma4_text", "gemma4"):
+        if _mt in ("gemma4_text", "gemma4", "qwen3_moe", "qwen3_5_moe"):
             from .expert_offload import is_expert_weight_key
 
             has_repacked_experts = any(
@@ -344,7 +350,7 @@ def load_model(
             )
             if not has_repacked_experts:
                 raise ValueError(
-                    "expert_offload for gemma4_text requires repacked per-expert "
+                    f"expert_offload for {_mt} requires repacked per-expert "
                     "weights. You must run `python -m mlx_lm.repack_experts` on "
                     "this checkpoint first to split stacked SwitchGLU tensors."
                 )
@@ -474,6 +480,20 @@ def load_model(
 
         model.update_modules(leaves)
 
+    # Expert offload: replace SwitchGLU with the correct offload variant
+    # AFTER quantization (so we know whether children are QuantizedSwitchLinear).
+    # Dense checkpoints → OffloadSwitchGLU (gather_mm)
+    # Quantized checkpoints → OffloadQuantizedSwitchGLU (gather_qmm)
+    if expert_offload:
+        _mt = config.get("model_type", "")
+        _is_quantized = bool(
+            config.get("quantization") or config.get("quantization_config")
+        )
+        if _mt in ("qwen3_moe", "qwen3_5_moe"):
+            _swap_qwen3_offload_modules(model, _is_quantized, config)
+        elif _mt in ("gemma4_text", "gemma4"):
+            _swap_gemma4_offload_modules(model, _is_quantized, config)
+
     model.eval()
     # Expert offload: for models with stacked expert parameters (e.g. Gemma 4
     # SwitchGLU), the model defines switch_glu.{proj}.weight as parameters but
@@ -485,10 +505,13 @@ def load_model(
 
     if expert_offload:
         from .expert_offload import (
+            DedeKimiObserver,
             ExpertOffloadManager,
+            SimulatedAttnResPredictor,
             attach_expert_offload_manager,
             build_gemma4_expert_key_table,
             build_nemotron_expert_key_table,
+            build_qwen3_expert_key_table,
         )
 
         assert wm is not None
@@ -496,22 +519,263 @@ def load_model(
         if _model_type in ("gemma4_text", "gemma4"):
             expert_table = build_gemma4_expert_key_table(wm)
             projections = ("gate", "up", "down")
+        elif _model_type in ("qwen3_moe", "qwen3_5_moe"):
+            expert_table = build_qwen3_expert_key_table(wm)
+            projections = ("gate", "up", "down")
         else:
             expert_table = build_nemotron_expert_key_table(wm)
             projections = ("fc1", "fc2")
+
+        # Calculate sensible default for max_resident_experts if not provided.
+        # Goal: enough for a few layers of unique experts + prefetch headroom,
+        # NOT every expert that could ever be active (that defeats offloading).
+        # Cap at 64 to stay within ~16GB-class memory budgets.
+        default_max_experts = 16
+        if _model_type in ("qwen3_moe", "qwen3_5_moe"):
+            top_k = config.get("num_experts_per_tok", 2)
+            # 4 layers worth of unique experts is generous headroom
+            default_max_experts = min(top_k * 4, 64)
+
+        # Auto-tune shard cache: each cached shard is ~4-5 GB of mmap'd
+        # safetensors data.  For 16GB-class targets, max_cached_shards=4
+        # (the default) consumes ~16 GB of shard cache alone, leaving no room
+        # for expert weights or KV.  Use max_resident_experts as a proxy:
+        # low resident count implies memory-constrained environment.
+        max_res = int(config.get("max_resident_experts", default_max_experts))
+        if max_res <= 64:
+            default_max_shards = 1
+        elif max_res <= 256:
+            default_max_shards = 2
+        else:
+            default_max_shards = 4
+
         manager = ExpertOffloadManager(
             base_path=ckpt_root,
             weight_map=wm,
             expert_key_table=expert_table,
-            max_resident_experts=int(config.get("max_resident_experts", 16)),
+            max_resident_experts=int(
+                config.get("max_resident_experts", default_max_experts)
+            ),
+            max_cached_shards=int(config.get("max_cached_shards", default_max_shards)),
             projections=projections,
         )
+
+        def _iter_model_layers():
+            root = getattr(model, "model", model)
+            return getattr(root, "layers", [])
+
+        def _infer_hidden_and_experts() -> tuple[int, int]:
+            inferred_hidden = int(config.get("hidden_size", 2048))
+            inferred_experts = int(config.get("num_local_experts", 64))
+            for layer in _iter_model_layers():
+                # Qwen3 MoE path
+                mlp = getattr(layer, "mlp", None)
+                switch_mlp = (
+                    getattr(mlp, "switch_mlp", None) if mlp is not None else None
+                )
+                gate_proj = (
+                    getattr(switch_mlp, "gate_proj", None)
+                    if switch_mlp is not None
+                    else None
+                )
+                if gate_proj is not None and hasattr(gate_proj, "input_dims"):
+                    inferred_hidden = int(gate_proj.input_dims)
+                    if hasattr(gate_proj, "num_experts"):
+                        inferred_experts = int(gate_proj.num_experts)
+                    break
+
+                # Gemma4 MoE path
+                experts_mod = getattr(layer, "experts", None)
+                switch_glu = (
+                    getattr(experts_mod, "switch_glu", None)
+                    if experts_mod is not None
+                    else None
+                )
+                gate_proj = (
+                    getattr(switch_glu, "gate_proj", None)
+                    if switch_glu is not None
+                    else None
+                )
+                if gate_proj is not None and hasattr(gate_proj, "input_dims"):
+                    inferred_hidden = int(gate_proj.input_dims)
+                    if hasattr(gate_proj, "num_experts"):
+                        inferred_experts = int(gate_proj.num_experts)
+                    break
+            return inferred_hidden, inferred_experts
+
+        # Optional predictor wiring for dynamic prefetch/eviction experiments.
+        if config.get("use_predictor", False):
+            num_layers = len(_iter_model_layers())
+            if num_layers <= 0:
+                num_layers = int(config.get("num_hidden_layers", 1))
+            hidden_dim, num_experts = _infer_hidden_and_experts()
+            num_blocks = max(1, min(8, num_layers))
+            manager.predictor = SimulatedAttnResPredictor(
+                num_blocks=num_blocks,
+                num_experts=num_experts,
+                num_layers=num_layers,
+                hidden_dim=hidden_dim,
+            )
+
+        # Observer-only DedeKimi integration (no control path here).
+        if config.get("use_dedekimi_observer", False):
+            num_layers = len(_iter_model_layers())
+            if num_layers <= 0:
+                num_layers = int(config.get("num_hidden_layers", 1))
+            _, num_experts = _infer_hidden_and_experts()
+            manager.dedekimi_observer = DedeKimiObserver(
+                num_layers=num_layers,
+                num_experts=num_experts,
+            )
+
+        # Optional task->clique prepopulation map for task-aware pinning.
+        task_cliques = config.get("task_expert_cliques", None)
+        if isinstance(task_cliques, dict):
+            for task_name, layer_map in task_cliques.items():
+                if isinstance(task_name, str) and isinstance(layer_map, dict):
+                    manager.pre_populate_task_clique(task_name, layer_map)
+
         attach_expert_offload_manager(model, manager, model_type=_model_type)
 
     if not lazy:
         mx.eval(model.parameters())
 
     return model, config
+
+
+def _swap_qwen3_offload_modules(model, is_quantized: bool, config: dict) -> None:
+    """Replace SwitchGLU with OffloadSwitchGLU or OffloadQuantizedSwitchGLU in Qwen3 MoE layers.
+
+    Must be called AFTER quantization so we know the correct offload variant.
+    For layer-aware checkpoints, per-layer quantization overrides are resolved
+    from the config so each OffloadQuantizedSwitchGLU gets the correct bits.
+    """
+    from .models.switch_layers import (
+        OffloadQuantizedSwitchGLU,
+        OffloadSwitchGLU,
+        SwitchGLU,
+    )
+
+    quant_cfg = config.get("quantization", {})
+    default_group_size = quant_cfg.get("group_size", 64)
+    default_bits = quant_cfg.get("bits", 4)
+    default_mode = quant_cfg.get("mode", "affine")
+
+    model_root = getattr(model, "model", model)
+    layers = getattr(model_root, "layers", [])
+    for layer_idx, layer in enumerate(layers):
+        mlp = getattr(layer, "mlp", None)
+        if mlp is None:
+            continue
+        switch_mlp = getattr(mlp, "switch_mlp", None)
+        if switch_mlp is None or not isinstance(switch_mlp, SwitchGLU):
+            continue
+
+        dim = switch_mlp.gate_proj.input_dims
+        hidden = switch_mlp.gate_proj.output_dims
+        n_experts = switch_mlp.gate_proj.num_experts
+
+        if is_quantized:
+            # Resolve per-layer quant overrides for layer-aware checkpoints.
+            layer_bits, layer_gs, layer_mode = (
+                default_bits,
+                default_group_size,
+                default_mode,
+            )
+            for prefix in (
+                f"model.layers.{layer_idx}.mlp.switch_mlp.gate_proj",
+                f"layers.{layer_idx}.mlp.switch_mlp.gate_proj",
+            ):
+                override = quant_cfg.get(prefix)
+                if isinstance(override, dict):
+                    layer_bits = override.get("bits", default_bits)
+                    layer_gs = override.get("group_size", default_group_size)
+                    layer_mode = override.get("mode", default_mode)
+                    break
+
+            replacement = OffloadQuantizedSwitchGLU(
+                dim,
+                hidden,
+                n_experts,
+                group_size=layer_gs,
+                bits=layer_bits,
+                mode=layer_mode,
+            )
+        else:
+            replacement = OffloadSwitchGLU(dim, hidden, n_experts)
+
+        mlp.switch_mlp = replacement
+
+
+def _swap_gemma4_offload_modules(model, is_quantized: bool, config: dict) -> None:
+    """Replace SwitchGLU with OffloadSwitchGLU or OffloadQuantizedSwitchGLU in Gemma4 expert layers.
+
+    Must be called AFTER quantization so we know the correct offload variant.
+    For layer-aware checkpoints, per-layer quantization overrides are resolved
+    from the config so each OffloadQuantizedSwitchGLU gets the correct bits.
+    """
+    from .models.switch_layers import (
+        OffloadQuantizedSwitchGLU,
+        OffloadSwitchGLU,
+        SwitchGLU,
+    )
+
+    quant_cfg = config.get("quantization", {})
+    default_group_size = quant_cfg.get("group_size", 64)
+    default_bits = quant_cfg.get("bits", 4)
+    default_mode = quant_cfg.get("mode", "affine")
+
+    lang_model = getattr(model, "language_model", None)
+    if lang_model is not None:
+        model_root = getattr(lang_model, "model", lang_model)
+    else:
+        model_root = getattr(model, "model", model)
+    layers = getattr(model_root, "layers", [])
+    for layer_idx, layer in enumerate(layers):
+        if not getattr(layer, "enable_moe", False):
+            continue
+        experts = getattr(layer, "experts", None)
+        if experts is None:
+            continue
+        switch_glu = getattr(experts, "switch_glu", None)
+        if switch_glu is None or not isinstance(switch_glu, SwitchGLU):
+            continue
+
+        dim = switch_glu.gate_proj.input_dims
+        hidden = switch_glu.gate_proj.output_dims
+        n_experts = switch_glu.gate_proj.num_experts
+
+        if is_quantized:
+            # Resolve per-layer quant overrides for layer-aware checkpoints.
+            # Check any projection key — all share the same bits within a layer.
+            layer_bits, layer_gs, layer_mode = (
+                default_bits,
+                default_group_size,
+                default_mode,
+            )
+            for prefix in (
+                f"language_model.model.layers.{layer_idx}.experts.switch_glu.gate_proj",
+                f"model.layers.{layer_idx}.experts.switch_glu.gate_proj",
+            ):
+                override = quant_cfg.get(prefix)
+                if isinstance(override, dict):
+                    layer_bits = override.get("bits", default_bits)
+                    layer_gs = override.get("group_size", default_group_size)
+                    layer_mode = override.get("mode", default_mode)
+                    break
+
+            replacement = OffloadQuantizedSwitchGLU(
+                dim,
+                hidden,
+                n_experts,
+                group_size=layer_gs,
+                bits=layer_bits,
+                mode=layer_mode,
+            )
+        else:
+            replacement = OffloadSwitchGLU(dim, hidden, n_experts)
+
+        experts.switch_glu = replacement
 
 
 def load_adapters(model: nn.Module, adapter_path: str) -> nn.Module:

@@ -32,6 +32,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import mlx.core as mx
 
 # ---------------------------------------------------------------------------
@@ -56,11 +57,20 @@ _GEMMA4_EXPERT_KEY_RE = re.compile(
     r"^(?:language_model\.)?model\.layers\.(\d+)\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|scales|biases)$"
 )
 
+# Qwen3: individual per-expert tensors (after repack_experts.py)
+_QWEN3_EXPERT_KEY_RE = re.compile(
+    r"^(?:language_model\.)?model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|scales|biases)$"
+)
+
 # Supported model types for expert offloading
-EXPERT_OFFLOAD_MODEL_TYPES = frozenset({"nemotron_h", "gemma4_text", "gemma4"})
+EXPERT_OFFLOAD_MODEL_TYPES = frozenset(
+    {"nemotron_h", "gemma4_text", "gemma4", "qwen3_moe", "qwen3_5_moe"}
+)
 
 # Model types with known MoE architectures (for future extensibility)
-MOE_MODEL_TYPES = frozenset({"nemotron_h", "gemma4_text", "gemma4"})
+MOE_MODEL_TYPES = frozenset(
+    {"nemotron_h", "gemma4_text", "gemma4", "qwen3_moe", "qwen3_5_moe"}
+)
 
 # Legacy alias — kept for backward compatibility
 _EXPERT_KEY_RE = _NEMOTRON_EXPERT_KEY_RE
@@ -120,6 +130,11 @@ def parse_expert_key(
         return parse_nemotron_expert_key(key)
     elif model_type in ("gemma4_text", "gemma4"):
         m = _GEMMA4_EXPERT_KEY_RE.match(key)
+        if m is None:
+            return None
+        return int(m.group(1)), int(m.group(2)), m.group(3), m.group(4)
+    elif model_type in ("qwen3_moe", "qwen3_5_moe"):
+        m = _QWEN3_EXPERT_KEY_RE.match(key)
         if m is None:
             return None
         return int(m.group(1)), int(m.group(2)), m.group(3), m.group(4)
@@ -279,6 +294,97 @@ def build_gemma4_expert_key_table(
     return table
 
 
+def build_qwen3_expert_key_table(
+    weight_map: dict[str, str],
+) -> dict[tuple[int, int], dict[str, str]]:
+    """Map (layer_idx, expert_id) -> {'gate_weight': key, 'up_weight': ..., 'down_weight': ...}.
+
+    Expects repacked individual per-expert keys (post repack_experts.py):
+      model.layers.{L}.mlp.experts.{E}.{gate_proj|up_proj|down_proj}.{weight|scales|biases}
+    """
+    table: dict[tuple[int, int], dict[str, str]] = {}
+    for key in weight_map.keys():
+        m = _QWEN3_EXPERT_KEY_RE.match(key)
+        if m is None:
+            continue
+        layer_idx, expert_id = int(m.group(1)), int(m.group(2))
+        proj = m.group(3)
+        suffix = m.group(4)
+        short = proj.replace("_proj", "")
+        slot = table.setdefault((layer_idx, expert_id), {})
+        slot[f"{short}_{suffix}"] = key
+    return table
+
+
+class DedeKimiObserver:
+    """Pure observer for expert activation logging + entropy tracking (Phase 1.6).
+
+    No control hooks — logs EMA activations and per-layer entropy for offline
+    clique building and collapse detection. Does **not** prefetch or evict.
+    """
+
+    def __init__(self, num_layers: int, num_experts: int, decay: float = 0.99):
+        self.num_layers = num_layers
+        self.num_experts = num_experts
+        self.decay = decay
+        self.activation_ema = np.zeros((num_layers, num_experts))
+        self.lock = threading.Lock()
+
+    def record_activation(self, layer: int, expert_ids: list[int]):
+        with self.lock:
+            indicator = np.zeros(self.num_experts)
+            if hasattr(expert_ids, "tolist"):
+                expert_ids = expert_ids.tolist()
+
+            for eid in expert_ids:
+                indicator[eid] = 1.0
+
+            self.activation_ema[layer] = (
+                self.decay * self.activation_ema[layer] + (1 - self.decay) * indicator
+            )
+
+    def get_layer_entropy(self, layer: int) -> float:
+        with self.lock:
+            probs = self.activation_ema[layer]
+            probs = probs / (probs.sum() + 1e-9)
+            entropy = -np.sum(probs * np.log(probs + 1e-9))
+            return float(entropy)
+
+    def layers_below_entropy(self, min_entropy: float) -> list[tuple[int, float]]:
+        """Layers whose routing distribution entropy is below ``min_entropy`` (collapse risk)."""
+        out: list[tuple[int, float]] = []
+        for layer in range(self.num_layers):
+            h = self.get_layer_entropy(layer)
+            if h < min_entropy:
+                out.append((layer, h))
+        return out
+
+    def expert_collapse_risk(
+        self, min_entropy: float = 0.5, min_active_mass: float = 1e-3
+    ) -> bool:
+        """Heuristic: True if any layer looks collapsed (low entropy or one-hot-ish EMA)."""
+        for layer in range(self.num_layers):
+            if self.get_layer_entropy(layer) < min_entropy:
+                return True
+            with self.lock:
+                row = self.activation_ema[layer]
+            if float(np.max(row)) > 1.0 - min_active_mass and float(np.sum(row)) > 0:
+                return True
+        return False
+
+    def health_summary(self, min_entropy: float = 0.5) -> dict[str, Any]:
+        """Structured snapshot for JSONL logging (no I/O here)."""
+        risky = self.layers_below_entropy(min_entropy)
+        return {
+            "min_entropy_threshold": min_entropy,
+            "layers_below_entropy": [{"layer": a, "entropy": b} for a, b in risky],
+            "collapse_risk": self.expert_collapse_risk(min_entropy=min_entropy),
+            "mean_entropy": float(
+                np.mean([self.get_layer_entropy(i) for i in range(self.num_layers)])
+            ),
+        }
+
+
 class ExpertOffloadManager:
     """LRU-backed resident set for routed expert weights; thread-safe bookkeeping."""
 
@@ -308,6 +414,11 @@ class ExpertOffloadManager:
         self._expert_importance: dict[tuple[int, int], float] = {}
 
         self.predictor = None
+        self.prefetch_top_k = (
+            2  # conservative default; was 16 which crashed at low max_resident
+        )
+        self._pinned_tasks = {}
+        self.dedekimi_observer = None
 
         # Persistent shard file handles — avoid repeated open/close
         self._shard_handles: OrderedDict[str, Any] = OrderedDict()
@@ -327,6 +438,16 @@ class ExpertOffloadManager:
         self.prefetch_already_cached = 0
 
         self._phase: str = "decode"
+
+    def pre_populate_task_clique(
+        self, task_name: str, layer_expert_map: dict[int, list[int]]
+    ):
+        """Asynchronously pre-populate LRU with likely experts for a specific task."""
+        with self._lock:
+            self._pinned_tasks[task_name] = layer_expert_map
+
+        for layer, experts in layer_expert_map.items():
+            self.prefetch(layer, experts)
 
     def set_phase(self, phase: str) -> None:
         """Hint for prefetch / metrics: prefill vs decode (autoregressive) phases."""
@@ -903,6 +1024,31 @@ def attach_expert_offload_manager(
         _attach_nemotron_h(model, manager)
     elif model_type in ("gemma4_text", "gemma4"):
         _attach_gemma4(model, manager)
+    elif model_type in ("qwen3_moe", "qwen3_5_moe"):
+        _attach_qwen3_moe(model, manager)
+
+
+def _attach_qwen3_moe(model: Any, manager: ExpertOffloadManager) -> None:
+    model_root = getattr(model, "model", model)
+    layers = getattr(model_root, "layers", None)
+    if layers is None:
+        raise ValueError("_attach_qwen3_moe failed: model.model.layers not found")
+
+    attached = 0
+    for i, layer in enumerate(layers):
+        mlp = getattr(layer, "mlp", None)
+        if mlp is None:
+            continue
+        switch_mlp = getattr(mlp, "switch_mlp", None)
+        if switch_mlp is not None and hasattr(switch_mlp, "set_expert_manager"):
+            switch_mlp.set_expert_manager(manager, i)
+            attached += 1
+
+    if attached == 0:
+        print(
+            "[WARN] _attach_qwen3_moe: no SwitchGLU modules with set_expert_manager found. "
+            "Expert offloading requires OffloadSwitchGLU modules."
+        )
 
 
 def _attach_nemotron_h(model: Any, manager: ExpertOffloadManager) -> None:
