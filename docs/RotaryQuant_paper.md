@@ -134,7 +134,13 @@ Sparse MoE changes not the bit-width but the number of parameters that must be a
 
 ### 2.2 Key-Value Cache Compression
 
-During autoregressive decoding, each layer stores for every past position $j$ the key and value vectors $k_j$ and $v_j$ rather than recomputing them for every new query. The cache turns naive quadratic recomputation into a linear append-and-read process, but its memory grows directly with context length. For batch size $B$, $L$ layers, $H_{kv}$ key/value heads, head dimension $d$, and context length $T$, per-request KV memory is $B \times L \times H_{kv} \times d \times T \times 2 \times \text{dtype\_bytes}$. At long context, especially once $T \geq 32$ K, that term can rival or exceed resident weight memory.
+During autoregressive decoding, each layer stores for every past position $j$ the key and value vectors $k_j$ and $v_j$ rather than recomputing them for every new query. The cache turns naive quadratic recomputation into a linear append-and-read process, but its memory grows directly with context length. For batch size $B$, $L$ layers, $H_{kv}$ key/value heads, head dimension $d$, context length $T$, and bytes-per-element $b$ (so $b = 2$ at FP16, $b = 4$ at FP32), per-request KV memory is
+
+$$
+M_{KV} \;=\; B \times L \times H_{kv} \times d \times T \times 2 \times b.
+$$
+
+At long context, especially once $T \geq 32$ K, this term can rival or exceed resident weight memory.
 
 KIVI compresses keys and values asymmetrically: keys are quantised per channel and values per token, both at 2-bit, reflecting the claim that key outliers are more channel-stable whereas value outliers are more position-dependent [3]. Its appeal is simplicity, but the method remains tied to that asymmetry assumption.
 
