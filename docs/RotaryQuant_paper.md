@@ -7,7 +7,7 @@
 
 ## Abstract
 
-Large MoE LLMs remain prohibitively expensive to operate on consumer devices with 16-32 GB unified memory because resident weights, KV state, and buffers exceed both capacity and bandwidth budgets. This paper presents RotaryQuant, a structured-rotation KV-compression stack that replaces dense per-head rotations with a Walsh-Hadamard pre-mix followed by blockwise isoclinic SO(4) rotations, preserving the isotropy benefits of rotation-based quantisation while storing 64x fewer rotation parameters than dense baselines. The method adds a deferred-prefill protocol that preserves FP16 KV during prefill and bulk-compresses only at the prefill-to-decode boundary, a fused decode pipeline that attends directly in rotated space without repeated materialisation, and end-to-end composition with low-bit weight quantisation and expert offloading as three independent compression axes. Across the main fidelity pathways, structured rotation matches dense rotation quality at fractional storage and compute cost: at 2,048 context, Qwen-3 PPL shifts by only +0.0009 under RotaryQuant (versus +0.0405 under TurboQuant) and Nemotron-H by +0.0012 (versus +0.0039), with the deltas inside the practical noise band on these architectures; the Gemma-4 row is effectively a no-op because only 5 of 30 layers engage the compressor. End-to-end pathway proofs reach 12.85 tok/s for Gemma-4-26B inside a 16 GB-constrained envelope and 14.85 tok/s for Nemotron-H 120B inside a 32 GB-constrained envelope. The stack is conditionally beneficial: when a model already fits in RAM, expert offload can impose an approximately 100x decode penalty, so the full composition should be used only where memory pressure genuinely forces offload.
+Large MoE LLMs remain prohibitively expensive to operate on consumer devices with 16-32 GB unified memory because resident weights, KV state, and buffers exceed both capacity and bandwidth budgets. This paper presents RotaryQuant, a structured-rotation KV-compression stack that replaces dense per-head rotations with a Walsh-Hadamard pre-mix followed by blockwise isoclinic SO(4) rotations, preserving the isotropy benefits of rotation-based quantisation while storing 64× fewer rotation parameters than dense baselines. The method adds a deferred-prefill protocol that preserves FP16 KV during prefill and bulk-compresses only at the prefill-to-decode boundary, a fused decode pipeline that attends directly in rotated space without repeated materialisation, and end-to-end composition with low-bit weight quantisation and expert offloading as three independent compression axes. Across the main fidelity pathways, structured rotation matches dense rotation quality at fractional storage and compute cost: at 2,048 context, Qwen-3 PPL shifts by only +0.0009 under RotaryQuant (versus +0.0405 under TurboQuant) and Nemotron-H by +0.0012 (versus +0.0039), with the deltas inside the practical noise band on these architectures; the Gemma-4 row is effectively a no-op because only 5 of 30 layers engage the compressor. End-to-end pathway proofs reach 12.85 tok/s for Gemma-4-26B inside a 16 GB-constrained envelope and 14.85 tok/s for Nemotron-H 120B inside a 32 GB-constrained envelope. The stack is conditionally beneficial: when a model already fits in RAM, expert offload can impose an approximately 100× decode penalty, so the full composition should be used only where memory pressure genuinely forces offload.
 
 ---
 
@@ -114,11 +114,11 @@ The literature addresses this deployment gap through several partially complemen
 
 ### 1.5 Where existing methods fall short
 
-Despite substantial progress, the rotation-quantisation pipeline most relevant to this paper still leaves three concrete inefficiencies unresolved. First, TurboQuant stores a dense rotation matrix per head, so both parameter storage and application cost scale as O(d^2), requiring dense per-head transforms and O(d^2) FMA work at decode time [1]. Secondly, in existing rotation-quantisation pipelines, the prefill-to-decode boundary is handled only after sequence positions have already accumulated dependence on one another, so quantisation error introduced at that boundary is subsequently propagated through later attention steps instead of being confined to newly appended tokens [1]. Thirdly, current fused attention paths continue to materialise K and V during decode, so inverse rotation and reconstruction scale as O(T*d^2) over sequence length T rather than remaining a fixed overhead [1]. We stress that these are not universal defects of KV compression as a category; they are the specific TurboQuant-side weaknesses that this paper addresses.
+Despite substantial progress, the rotation-quantisation pipeline most relevant to this paper still leaves three concrete inefficiencies unresolved. First, TurboQuant stores a dense rotation matrix per head, so both parameter storage and application cost scale as $O(d^2)$, requiring dense per-head transforms and $O(d^2)$ FMA work at decode time [1]. Secondly, in existing rotation-quantisation pipelines, the prefill-to-decode boundary is handled only after sequence positions have already accumulated dependence on one another, so quantisation error introduced at that boundary is subsequently propagated through later attention steps instead of being confined to newly appended tokens [1]. Thirdly, current fused attention paths continue to materialise K and V during decode, so inverse rotation and reconstruction scale as $O(T \times d^2)$ over sequence length $T$ rather than remaining a fixed overhead [1]. We stress that these are not universal defects of KV compression as a category; they are the specific TurboQuant-side weaknesses that this paper addresses.
 
 ### 1.6 Our contribution
 
-This paper advances RotaryQuant as a structured alternative to dense rotation-based KV compression. A Walsh-Hadamard pre-mix followed by blockwise isoclinic SO(4) rotations addresses the storage and compute burden of dense rotations by replacing 16,384 stored entries per head with 256 structured entries and reducing application cost to O(d log d) FMAs rather than O(d^2) [6]. A deferred-prefill protocol addresses boundary error by retaining FP16 KV throughout prefill and bulk-compressing only once at the transition to decode. A fused decode pipeline addresses materialisation cost by performing attention in rotated space rather than reconstructing K and V at every step. These mechanisms are integrated end-to-end with weight quantisation and expert offloading as three independent compression axes, then validated on real consumer hardware. Section 4 presents the method, and Section 5 reports the empirical evidence.
+This paper advances RotaryQuant as a structured alternative to dense rotation-based KV compression. A Walsh-Hadamard pre-mix followed by blockwise isoclinic SO(4) rotations addresses the storage and compute burden of dense rotations by replacing 16,384 stored entries per head with 256 structured entries and reducing application cost to $O(d \log d)$ FMAs rather than $O(d^2)$ [6]. A deferred-prefill protocol addresses boundary error by retaining FP16 KV throughout prefill and bulk-compressing only once at the transition to decode. A fused decode pipeline addresses materialisation cost by performing attention in rotated space rather than reconstructing K and V at every step. These mechanisms are integrated end-to-end with weight quantisation and expert offloading as three independent compression axes, then validated on real consumer hardware. Section 4 presents the method, and Section 5 reports the empirical evidence.
 
 ---
 
@@ -250,7 +250,7 @@ Sections 1-4 set out the problem, surveyed prior compression work, and presented
 
 ### 5.1 Pathway proofs (does the full stack run end-to-end?)
 
-Section 10.1.1 is a smoke test, not a benchmark leaderboard: can the combined stack of mixed-precision weights, expert offload, and compressed KV state run end-to-end on the target pathways? The bar table below restores the source paper's pathway-proof view [18].
+The pathway-proof view is a smoke test, not a benchmark leaderboard: can the combined stack of mixed-precision weights, expert offload, and compressed KV state run end-to-end on the target pathways? The numbers in the table below are reproduced from the project's prior end-to-end runs [18].
 
 | Model | Quality | tok/s | Peak Memory | Budget | 2 h Soak | Status |
 |---|---|---|---|---|---|---|
@@ -301,7 +301,7 @@ The 14.85 tok/s Nemotron-H result is therefore driven mainly by expert offload a
 
 ### 5.4 Variance across independent runs
 
-Inter-run variance was measured on `gemma4-layer-aware`, profile A, with three independent runs per configuration, seed 42, and a full model reload between runs. Under `--expert-offload`, the default KV path reaches 1.048 +- 0.056 tok/s with a mean peak of 2,445 MB, while RotaryQuant reaches 1.054 +- 0.003 tok/s with a mean peak of 2,804 MB. The reported coefficients of variation are 5.4% and 0.3% respectively, so both settings are stable enough that the single-run headline numbers lie inside a small noise floor [18].
+Inter-run variance was measured on `gemma4-layer-aware`, profile A, with three independent runs per configuration, seed 42, and a full model reload between runs. Under `--expert-offload`, the default KV path reaches $1.048 \pm 0.056$ tok/s with a mean peak of 2,445 MB, while RotaryQuant reaches $1.054 \pm 0.003$ tok/s with a mean peak of 2,804 MB. The reported coefficients of variation are 5.4% and 0.3% respectively, so both settings are stable enough that the single-run headline numbers lie inside a small noise floor [18].
 
 The important point is what does not change: the means differ by only 0.006 tok/s in a regime where both settings have already collapsed to roughly 1 tok/s because expert offload dominates runtime. What does change is memory, with RotaryQuant adding about 359 MB of peak usage. Because the model can fit without offload on the measurement host, that overhead appears without any compensating decode gain. The low variance matters because it rules out the easy objection that the memory delta is just run-to-run noise. The call is therefore no change in throughput and worse peak memory for RotaryQuant in this small-model-with-offload configuration [18].
 
@@ -316,7 +316,7 @@ The ablation on `gemma4-layer-aware` holds the mixed-precision weight checkpoint
 | No | RotaryQuant | 20.6 | 10,748 |
 | No | Default | **109.8** | **10,649** |
 
-Two conclusions follow. First, `--expert-offload` is extraordinarily expensive on a model that already fits in RAM: relative to the no-offload default path, throughput falls from 109.8 tok/s to about 1 tok/s, roughly a two-orders-of-magnitude penalty, while peak memory drops from about 10.6 GB to 2.4-2.8 GB. Secondly, RotaryQuant on the no-offload path is a net loss in this Gemma-4 measurement: throughput falls from 109.8 tok/s to 20.6 tok/s, a 5.3x slowdown, while peak memory is slightly higher at 10,748 MB versus 10,649 MB [18].
+Two conclusions follow. First, `--expert-offload` is extraordinarily expensive on a model that already fits in RAM: relative to the no-offload default path, throughput falls from 109.8 tok/s to about 1 tok/s, roughly a two-orders-of-magnitude penalty, while peak memory drops from about 10.6 GB to 2.4-2.8 GB. Secondly, RotaryQuant on the no-offload path is a net loss in this Gemma-4 measurement: throughput falls from 109.8 tok/s to 20.6 tok/s, a 5.3× slowdown, while peak memory is slightly higher at 10,748 MB versus 10,649 MB [18].
 
 Within the offload rows, RotaryQuant changes throughput only from 1.01 tok/s to 1.05 tok/s, effectively no change, but raises peak memory by about 359 MB. The call is therefore mixed but explicit: RotaryQuant is worse on the no-offload Gemma-4 path, no change in throughput and worse in memory on the offload path, and better only when the memory budget genuinely forces the full stack [18].
 
@@ -346,7 +346,7 @@ The zeroes matter too. `decompress_calls = 0`, `read_keys_calls = 0`, and `read_
 
 ### 5.10 Prior validations
 
-This subsection preserves earlier validation work as context rather than making a new net performance claim. The quantitative result retained in the current source is the kurtosis split used to justify the mixed-precision weight schedule: shared experts have excess kurtosis 10.10, routed experts 0.41, a 24.6x gap. That supports keeping shared experts at the higher-precision tier while quantising routed experts more aggressively [18].
+This subsection preserves earlier validation work as context rather than making a new net performance claim. The quantitative result retained in the current source is the kurtosis split used to justify the mixed-precision weight schedule: shared experts have excess kurtosis 10.10, routed experts 0.41, a 24.6× gap. That supports keeping shared experts at the higher-precision tier while quantising routed experts more aggressively [18].
 
 Earlier TurboQuant baselines, the IsoQuant v1-to-v2-to-RotaryQuant evolution, and the codebook precomputation pipeline are also prior validations on which the present work depends; their numerical outputs are documented in the original implementation artefacts rather than restated here. The call is therefore no new performance claim: these are precondition validations, with only the kurtosis evidence quantified in this section [18].
 
@@ -356,12 +356,12 @@ Table 5.11 gives the go/no-go disposition as of April 2026 [18].
 
 | Component | Decision | Rationale |
 |---|---|---|
-| RotaryQuant (WHT + SO(4)) | **Go** | Quality parity with default (delta PPL <= 0.001 @ 2048 on Qwen3/Nemotron), 64x fewer stored rotation parameters |
+| RotaryQuant (WHT + SO(4)) | **Go** | Quality parity with default ($\Delta$ PPL $\leq 0.001$ @ 2048 on Qwen3/Nemotron), 64× fewer stored rotation parameters |
 | Fused Metal pipeline (MLX) | **Go** | Verified by 9 correctness tests, eliminated materialisation |
 | RotaryQuant (llama.cpp) | **Active — open correctness question** | Fused `kernel_turbo_wht_so4` recovers near-`turbo3` throughput but has $O(1)$ numerical divergence vs composed F32 path (RMSE 0.95, 7/10 top-10 overlap) — see §4.6 (open issue 1). |
 | Deferred prefill | **Go** | Eliminates compounding error; transient FP16 buffer is small (≈230 MB at $L=28$, $H_{kv}=8$, $d=128$, $T_{\text{prefill}}=2048$ — see §4.3) and manageable within 16-32 GB envelopes |
-| Gemma4 pathway | **Go** | All gates pass at 12.85 tok/s within 16GB budget |
-| Nemotron-120B pathway | **Go** | All gates pass at 14.85 tok/s within 32GB budget |
+| Gemma4 pathway | **Go** | All gates pass at 12.85 tok/s within 16 GB budget |
+| Nemotron-120B pathway | **Go** | All gates pass at 14.85 tok/s within 32 GB budget |
 | Qwen3 pathway | **Blocked** | Quality issues (8/12) — model/checkpoint limitation |
 | AttnRes predictor | **No-go** | 10.6–11.2% throughput regression with no hit-rate improvement |
 | Task-aware pinning | **No-go** | 0% hit-rate improvement over baseline LRU |
@@ -383,7 +383,7 @@ The second net-new result is that the three-axis composition works end-to-end on
 
 ### 6.3 Operational ordering and the conditional value of expert offload
 
-The third net-new result is operational rather than purely algorithmic: the value of the stack depends on ordering and on whether memory pressure is real. Section 4.1 argues that weight quantisation, KV compression, and expert offload do not commute operationally; the order weight quantisation $\rightarrow$ KV compression $\rightarrow$ expert offload must therefore be treated as part of the experimental configuration rather than as an incidental implementation detail. Section 5.5 shows why. On Gemma-4 in the no-offload default path, throughput is 109.8 tok/s; enabling `--expert-offload` on the same default KV path collapses decode to 1.01 tok/s, roughly a hundred-fold penalty, while peak memory falls from 10,649 MB to 2,445 MB [18]. RotaryQuant does not rescue the no-offload case: throughput falls from 109.8 tok/s to 20.6 tok/s, a 5.3x slowdown, for negligible memory relief; on the offload path it is essentially throughput-neutral at 1.05 versus 1.01 tok/s, but adds about 359 MB of peak memory [18]. The practical takeaway is therefore conditional. The combined stack is better only when the target budget genuinely forces offload; when the model already fits comfortably in RAM, the same machinery becomes an avoidable systems cost rather than a win.
+The third net-new result is operational rather than purely algorithmic: the value of the stack depends on ordering and on whether memory pressure is real. Section 4.1 argues that weight quantisation, KV compression, and expert offload do not commute operationally; the order weight quantisation $\rightarrow$ KV compression $\rightarrow$ expert offload must therefore be treated as part of the experimental configuration rather than as an incidental implementation detail. Section 5.5 shows why. On Gemma-4 in the no-offload default path, throughput is 109.8 tok/s; enabling `--expert-offload` on the same default KV path collapses decode to 1.01 tok/s, roughly a hundred-fold penalty, while peak memory falls from 10,649 MB to 2,445 MB [18]. RotaryQuant does not rescue the no-offload case: throughput falls from 109.8 tok/s to 20.6 tok/s, a 5.3× slowdown, for negligible memory relief; on the offload path it is essentially throughput-neutral at 1.05 versus 1.01 tok/s, but adds about 359 MB of peak memory [18]. The practical takeaway is therefore conditional. The combined stack is better only when the target budget genuinely forces offload; when the model already fits comfortably in RAM, the same machinery becomes an avoidable systems cost rather than a win.
 
 ### 6.4 Per-step instrumentation closes a long-standing observability gap
 
@@ -429,10 +429,11 @@ arXiv: [2401.18079](https://arxiv.org/abs/2401.18079).
 arXiv preprint, 2024.
 arXiv: [2403.05527](https://arxiv.org/abs/2403.05527).
 
-[6] Ji, Z.
-*IsoQuant: Hardware-Aligned SO(4) Isoclinic Rotations for LLM KV Cache Compression.*
-arXiv preprint, 2026.
+[6] IsoQuant authors.
+*IsoQuant: Structured-Rotation KV Cache Compression for LLMs.*
+arXiv preprint 2603.28430, 2026.
 arXiv: [2603.28430](https://arxiv.org/abs/2603.28430).
+*Note:* Author names and final canonical title to be confirmed against the upstream record before publication; the arXiv ID itself is the authoritative identifier.
 
 [7] Ashkboos, C., Mohtashami, S., and co-authors.
 *QuaRot: Outlier-Free 4-Bit Inference in Rotated LLMs.*
