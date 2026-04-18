@@ -105,7 +105,9 @@ print(json.dumps(result))
         )
         if proc.returncode != 0:
             output = (proc.stdout or "") + (proc.stderr or "")
-            self.skipTest(f"MLX runtime unavailable in this environment: {output[:240]}")
+            self.skipTest(
+                f"MLX runtime unavailable in this environment: {output[:240]}"
+            )
         return json.loads(proc.stdout)
 
     def test_shared_expert_gets_higher_bits(self):
@@ -135,6 +137,52 @@ print(json.dumps(result))
             result["shared_proj"],
             {"bits": 4, "group_size": 64, "mode": "affine"},
         )
+
+
+class TestIsoQuantDeltaNetSkip(unittest.TestCase):
+    """Gate G3: IsoQuant must NOT replace ArraysCache (DeltaNet layers)."""
+
+    def test_deltanet_layers_keep_arrays_cache(self):
+        _require_mlx_lm_runtime(self)
+        from mlx_lm.models.cache import KVCache, ArraysCache, _replace_attention_caches
+
+        # Simulate Qwen3.5 cache pattern: 3 DeltaNet + 1 Attention, repeated
+        caches = []
+        for i in range(8):
+            if (i + 1) % 4 == 0:  # full attention layer
+                caches.append(KVCache())
+            else:  # DeltaNet layer
+                caches.append(ArraysCache(size=2))
+
+        def make_quant_cache(layer_idx):
+            return f"quant_cache_{layer_idx}"
+
+        layer_idx_ref = [0]
+        replaced = []
+        for c in caches:
+            result = _replace_attention_caches(
+                c,
+                make_quant_cache=make_quant_cache,
+                skip_layers=0,
+                layer_idx=None,
+                layer_idx_ref=layer_idx_ref,
+            )
+            replaced.append(result)
+
+        # ArraysCache (DeltaNet) must be untouched; KVCache (attention) must be replaced
+        for i, (original, result) in enumerate(zip(caches, replaced)):
+            if isinstance(original, ArraysCache):
+                self.assertIs(
+                    result, original, f"Layer {i} (DeltaNet) must keep ArraysCache"
+                )
+            else:
+                self.assertIsInstance(
+                    result, str, f"Layer {i} (attention) must be replaced"
+                )
+                self.assertTrue(
+                    result.startswith("quant_cache_"),
+                    f"Layer {i} (attention) must be replaced with quant cache",
+                )
 
 
 if __name__ == "__main__":
