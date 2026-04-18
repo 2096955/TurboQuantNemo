@@ -1,9 +1,27 @@
+import json
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
 
+def _require_mlx_lm_runtime(test_case):
+    proc = subprocess.run(
+        [sys.executable, "-c", "import mlx_lm"],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        output = (proc.stdout or "") + (proc.stderr or "")
+        test_case.skipTest(
+            f"MLX runtime unavailable in this environment: {output[:240]}"
+        )
+
+
 class TestQwen35MoeRepacking(unittest.TestCase):
     def test_repack_accepts_qwen3_5_moe_model_type(self):
+        _require_mlx_lm_runtime(self)
         from mlx_lm.repack_experts import _repack_supported_types
 
         self.assertIn("qwen3_5_moe", _repack_supported_types)
@@ -11,12 +29,14 @@ class TestQwen35MoeRepacking(unittest.TestCase):
 
 class TestQwen35MoeOffload(unittest.TestCase):
     def test_offload_type_sets_include_qwen3_5_moe(self):
+        _require_mlx_lm_runtime(self)
         from mlx_lm.expert_offload import EXPERT_OFFLOAD_MODEL_TYPES, MOE_MODEL_TYPES
 
         self.assertIn("qwen3_5_moe", EXPERT_OFFLOAD_MODEL_TYPES)
         self.assertIn("qwen3_5_moe", MOE_MODEL_TYPES)
 
     def test_parse_expert_key_qwen3_5_moe(self):
+        _require_mlx_lm_runtime(self)
         from mlx_lm.expert_offload import parse_expert_key
 
         result = parse_expert_key(
@@ -31,6 +51,7 @@ class TestQwen35MoeOffload(unittest.TestCase):
         self.assertEqual(suffix, "weight")
 
     def test_is_expert_weight_key_qwen3_5_moe(self):
+        _require_mlx_lm_runtime(self)
         from mlx_lm.expert_offload import is_expert_weight_key
 
         self.assertTrue(
@@ -51,6 +72,69 @@ class TestQwen35MoeUtils(unittest.TestCase):
     def test_offload_supported_types_in_utils(self):
         src = (Path(__file__).resolve().parents[1] / "mlx_lm" / "utils.py").read_text()
         self.assertIn('"qwen3_5_moe"', src)
+
+
+class TestSharedExpertQuantPredicate(unittest.TestCase):
+    def _run_shared_predicate_case(self, shared_expert_bits):
+        script = f"""
+import json
+import mlx.nn as nn
+from mlx_lm.convert import _build_mixed_expert_quant_predicate
+
+predicate = _build_mixed_expert_quant_predicate(
+    mixed_expert_bits=2,
+    shared_expert_bits={shared_expert_bits!r},
+    default_bits=4,
+    default_group_size=64,
+    mode="affine",
+)
+
+result = {{
+    "shared_proj": predicate("model.layers.0.mlp.shared_expert.gate_proj", nn.Linear(16, 16)),
+    "mlp_gate": predicate("model.layers.0.mlp.gate", nn.Linear(16, 8)),
+    "shared_gate": predicate("model.layers.0.mlp.shared_expert_gate", nn.Linear(16, 8)),
+    "dense_proj": predicate("model.layers.0.mlp.down_proj", nn.Linear(16, 16)),
+}}
+print(json.dumps(result))
+"""
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            output = (proc.stdout or "") + (proc.stderr or "")
+            self.skipTest(f"MLX runtime unavailable in this environment: {output[:240]}")
+        return json.loads(proc.stdout)
+
+    def test_shared_expert_gets_higher_bits(self):
+        result = self._run_shared_predicate_case(8)
+
+        self.assertEqual(
+            result["shared_proj"],
+            {"bits": 8, "group_size": 64, "mode": "affine"},
+        )
+        self.assertEqual(
+            result["mlp_gate"],
+            {"bits": 8, "group_size": 64, "mode": "affine"},
+        )
+        self.assertEqual(
+            result["shared_gate"],
+            {"bits": 8, "group_size": 64, "mode": "affine"},
+        )
+        self.assertEqual(
+            result["dense_proj"],
+            {"bits": 4, "group_size": 64, "mode": "affine"},
+        )
+
+    def test_shared_expert_bits_defaults_to_default_bits(self):
+        result = self._run_shared_predicate_case(None)
+
+        self.assertEqual(
+            result["shared_proj"],
+            {"bits": 4, "group_size": 64, "mode": "affine"},
+        )
 
 
 if __name__ == "__main__":

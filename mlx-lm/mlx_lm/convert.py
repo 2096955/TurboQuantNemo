@@ -102,17 +102,40 @@ def _resolve_quant_defaults(
 def _build_mixed_expert_quant_predicate(
     *,
     mixed_expert_bits: int,
+    shared_expert_bits: Optional[int] = None,
     default_bits: int,
     default_group_size: int,
     mode: str,
 ) -> Callable[[str, nn.Module], Union[bool, dict]]:
     if mixed_expert_bits < 1 or mixed_expert_bits > 8:
         raise ValueError("--mixed-expert-bits must be an integer in [1, 8].")
+    resolved_shared_bits = (
+        shared_expert_bits if shared_expert_bits is not None else default_bits
+    )
 
     def _predicate(path: str, module: nn.Module) -> Union[bool, dict]:
+        if ".shared_expert." in path and isinstance(module, nn.Linear):
+            return {
+                "bits": resolved_shared_bits,
+                "group_size": default_group_size,
+                "mode": mode,
+            }
+
+        if path.endswith("mlp.gate") or path.endswith("shared_expert_gate"):
+            return {"bits": 8, "group_size": default_group_size, "mode": mode}
+
         # Route lower-bit quantization only to routed expert projections.
+        # SwitchLinear is the leaf module at paths like .switch_mlp.fc1,
+        # .switch_glu.gate_proj, .switch_mlp.gate_proj etc.
         is_routed_switch = isinstance(module, SwitchLinear) and (
-            ".mixer.switch_mlp.fc1" in path or ".mixer.switch_mlp.fc2" in path
+            ".mixer.switch_mlp.fc1" in path
+            or ".mixer.switch_mlp.fc2" in path
+            or ".switch_glu.gate_proj" in path
+            or ".switch_glu.up_proj" in path
+            or ".switch_glu.down_proj" in path
+            or ".switch_mlp.gate_proj" in path
+            or ".switch_mlp.up_proj" in path
+            or ".switch_mlp.down_proj" in path
         )
         if is_routed_switch:
             return {
@@ -250,8 +273,16 @@ def _build_apex_expert_quant_predicate(
                 layer_idx = int(p)
                 break
 
+        # SwitchLinear is the leaf module at all routed expert projection paths
         is_routed = isinstance(module, SwitchLinear) and (
-            ".mixer.switch_mlp.fc1" in path or ".mixer.switch_mlp.fc2" in path
+            ".mixer.switch_mlp.fc1" in path
+            or ".mixer.switch_mlp.fc2" in path
+            or ".switch_glu.gate_proj" in path
+            or ".switch_glu.up_proj" in path
+            or ".switch_glu.down_proj" in path
+            or ".switch_mlp.gate_proj" in path
+            or ".switch_mlp.up_proj" in path
+            or ".switch_mlp.down_proj" in path
         )
 
         is_shared = ".mixer.shared_experts." in path and isinstance(module, nn.Linear)
@@ -295,6 +326,7 @@ def convert(
         Union[Callable[[str, nn.Module, dict], Union[bool, dict]], str]
     ] = None,
     mixed_expert_bits: Optional[int] = None,
+    shared_expert_bits: Optional[int] = None,
     expert_recipe: Optional[str] = None,
     trust_remote_code: bool = False,
 ):
@@ -306,7 +338,7 @@ def convert(
         raise ValueError(
             f"Cannot save to the path {mlx_path} as it already exists."
             " Please delete the file/directory or specify a new path to save to."
-    )
+        )
 
     print("[INFO] Loading")
     model, tokenizer, config = load(
@@ -351,6 +383,7 @@ def convert(
 
         quant_predicate = _build_mixed_expert_quant_predicate(
             mixed_expert_bits=mixed_expert_bits,
+            shared_expert_bits=shared_expert_bits,
             default_bits=resolved_q_bits,
             default_group_size=resolved_q_group_size,
             mode=q_mode,
@@ -468,6 +501,12 @@ def configure_parser() -> argparse.ArgumentParser:
         help="Mixed-precision quantization for routed experts. If set, experts get this bit width (e.g. 2) and everything else gets the default q-bits.",
         type=int,
         default=None,
+    )
+    parser.add_argument(
+        "--shared-expert-bits",
+        type=int,
+        default=None,
+        help="Bit-width for shared expert projections (default: same as --q-bits). Use 8 for maximum quality on always-active shared experts.",
     )
     parser.add_argument(
         "--expert-recipe",
