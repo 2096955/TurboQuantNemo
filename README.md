@@ -78,12 +78,12 @@ This repo:
 |--------|----------|-------------------|-------------|---------------|
 | TurboQuant | Dense random | Yes (reconstruct) | O(d^2) | 16,384 |
 | SpinQuant | Learned dense | Yes | O(d^2) | 16,384 |
-| RotorQuant | Geometric algebra | No (claimed) | O(d log d) | ~256 |
-| **IsoQuant (this work)** | **WHT + SO(4)** | **No (fused Metal)** | **O(d log d)** | **256** |
+| RotorQuant (our v1) | Clifford Cl(3,0) rotors | No | O(d log d) | ~256 |
+| **IsoQuant (our v2, this work)** | **WHT + SO(4)** | **No (fused Metal)** | **O(d log d)** | **256** |
 
-**TurboQuant** works today but pays O(d^2) decode cost and reconstructs tensors.
-**RotorQuant** has better asymptotics but lacks production-grade fused kernels.
-**IsoQuant** is the first systems-realised version: O(d log d) decode, fully fused Metal implementation, running on real models today.
+**TurboQuant** and **SpinQuant** pay O(d^2) decode cost and reconstruct full K/V tensors before attention.
+**RotorQuant** was our first attempt at O(d log d) decode without materialisation, using Clifford algebra rotors. It works (`--kv-cache-type rotorquant`) but the rotors are harder to fuse into Metal kernels efficiently.
+**IsoQuant** is the production version: same O(d log d) asymptotics, but WHT + SO(4) block-diagonal structure enables a fully fused 4-kernel Metal pipeline with zero K/V materialisation.
 
 ---
 
