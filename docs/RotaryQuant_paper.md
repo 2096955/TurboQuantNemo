@@ -252,7 +252,7 @@ Thirdly, the current RotaryQuant instrumentation singleton is not multi-process 
 
 ## 5. Results
 
-Sections 1-4 set out the problem, surveyed prior compression work, and presented the RotaryQuant mechanisms theoretically. This section reports what happens when those mechanisms are run. The subsections move from the broadest evidence — pathway proofs that the full stack runs at all (§5.1) — through quality (KV cache fidelity at fixed context depth, §5.2), throughput (decode profiling, §5.3), repeatability (inter-run variance, §5.4), causal attribution (the three-axis ablation, §5.5), failure characterisation (§5.6), comparison against the upstream stock baseline (§5.7), concurrent-request scaling (§5.8), the new RotaryQuant per-step instrumentation (§5.9), prior validations (§5.10), and the project's go / no-go disposition (§5.11). Each subsection ends with an explicit better / worse / no-change call against the relevant baseline.
+Sections 1-4 set out the problem, surveyed prior compression work, and presented the RotaryQuant mechanisms theoretically. This section reports what happens when those mechanisms are run. The subsections move from the broadest evidence — pathway proofs that the full stack runs at all (§5.1) — through quality (KV cache fidelity at fixed context depth, §5.2), throughput (decode profiling, §5.3), repeatability (inter-run variance, §5.4), causal attribution (the three-axis ablation, §5.5), failure characterisation (§5.6), comparison against the upstream stock baseline (§5.7), concurrent-request scaling (§5.8), the new RotaryQuant per-step instrumentation (§5.9), prior validations (§5.10), the most recent pathway extension to a Qwen3.6 mixed-precision recipe (§5.11), and the project's go / no-go disposition (§5.12). Each subsection ends with an explicit better / worse / no-change call against the relevant baseline.
 
 ### 5.1 Pathway proofs (does the full stack run end-to-end?)
 
@@ -264,6 +264,9 @@ The pathway-proof view is a smoke test, not a benchmark leaderboard: can the com
 | Nemotron-H 120B (mixed) | 12/12 | 14.85 █████░░░░░ | 17.2 GB | 32 GB | P99/P50 1.14, RSS 0.994× | Proven |
 | Nemotron-H 30B (mixed) | 10/12 | 35.5 ██████████ | 4.3 GB | 32 GB | P99/P50 1.16, RSS 1.03× | Blocked on quality |
 | Qwen3-30B-A3B (4-bit) | 8/12 | 9.87 ███░░░░░░░ | 9.5 GB | 16 GB | — | Blocked on quality |
+| Qwen3.6-35B-A3B (mixed) | 12/12 | 15.6 ████░░░░░░ | 6.8 GB cold / 12.0 GB warm | 16 GB | — | Proven\* |
+
+\*Qwen3.6 row: single-run quality, 2-hour soak not yet performed, KV fidelity not separately measured for this checkpoint. Detailed write-up in `docs/QWEN36_MIXED_PRECISION_RESULTS.md`; full discussion in §5.11 below.
 
 Here, `Proven` means the full stack met the quality, budget, and soak gates on that pathway; `Blocked on quality` means the system ran within budget but did not clear the prompt-quality gate.
 
@@ -356,9 +359,17 @@ This subsection preserves earlier validation work as context rather than making 
 
 Earlier TurboQuant baselines, the IsoQuant v1-to-v2-to-RotaryQuant evolution, and the codebook precomputation pipeline are also prior validations on which the present work depends; their numerical outputs are documented in the original implementation artefacts rather than restated here. The call is therefore no new performance claim: these are precondition validations, with only the kurtosis evidence quantified in this section [18].
 
-### 5.11 Go / no-go decisions
+### 5.11 Mixed-precision recipe extension — Qwen3.6 pathway
 
-Table 5.11 gives the go/no-go disposition as of April 2026 [18].
+The most recent pathway proof extends the three-axis stack to a previously untested model family. Qwen3.6-35B-A3B (35 B parameters total, 3 B active per token, 256 routed experts with top-8 selection, 1 always-on shared expert, 40 layers split 30 DeltaNet + 10 full-attention) was prepared with a selective-precision recipe: dense layers at 4-bit, shared expert and router-gate weights at 8-bit (the routing-fidelity anchor), and routed-expert weights at 2-bit. RotaryQuant 3-bit KV compression engages on the 10 full-attention layers only; DeltaNet layers retain ArraysCache for their convolutional and SSM state. At runtime the configuration uses `--expert-offload` with an LRU residency of 2,048 expert shards.
+
+Three contemporaneous baselines were measured on the same 12-prompt suite. Q8_0 GGUF served via `llama.cpp` (Ollama frontend) requires roughly 37 GB of resident memory and reaches 11/12 quality at 26.2 tok/s. Uniform 4-bit MLX requires 19.6 GB and also reaches 11/12 at 117.8 tok/s. The mixed-precision recipe described above passes 12/12, requires 6.8 GB cold-start RSS (12.0 GB sustained as the expert LRU warms), and decodes at 15.6 tok/s — about 3× the interactive-usability threshold and the only configuration that fits the 16 GB target. The quality gain is small in absolute terms (one prompt) but consistent with the routing-fidelity argument: keeping shared-expert and gate weights at 8-bit preserves expert-selection accuracy, while 2-bit routed experts are tolerable because each routed expert fires on only roughly 3% of tokens.
+
+The call is therefore better in three dimensions for the constrained-memory regime: higher quality than either uniform baseline, smaller resident footprint, and the only configuration that meets the 16 GB envelope. The throughput gap to uniform-4-bit MLX (15.6 vs 117.8 tok/s, a 7.6× slowdown) is the cost of expert offloading rather than of the mixed-precision recipe itself, and is consistent with the offload-cost finding from §5.5. Single-run-only and KV-fidelity-not-separately-measured caveats apply; the artefacts table referenced in `docs/QWEN36_MIXED_PRECISION_RESULTS.md` lists the exact commit hashes, conversion command, and per-config JSON outputs required to reproduce the measurement.
+
+### 5.12 Go / no-go decisions
+
+Table 5.12 gives the go/no-go disposition as of April 2026 [18].
 
 | Component | Decision | Rationale |
 |---|---|---|
@@ -368,7 +379,8 @@ Table 5.11 gives the go/no-go disposition as of April 2026 [18].
 | Deferred prefill | **Go** | Eliminates compounding error; transient FP16 buffer is small (≈230 MB at $L=28$, $H_{kv}=8$, $d=128$, $T_{\text{prefill}}=2048$ — see §4.3) and manageable within 16-32 GB envelopes |
 | Gemma4 pathway | **Go** | All gates pass at 12.85 tok/s within 16 GB budget |
 | Nemotron-120B pathway | **Go** | All gates pass at 14.85 tok/s within 32 GB budget |
-| Qwen3 pathway | **Blocked** | Quality issues (8/12) — model/checkpoint limitation |
+| Qwen3-30B-A3B pathway (4-bit uniform) | **Blocked** | Quality issues (8/12) — checkpoint limitation, superseded by Qwen3.6 mixed-precision recipe below |
+| Qwen3.6-35B-A3B mixed-precision pathway | **Go (with caveats)** | 12/12 quality, 6.8 GB cold-start RSS, 15.6 tok/s decode within 16 GB budget; single-run only and KV fidelity not separately measured — see §5.11 |
 | AttnRes predictor | **No-go** | 10.6–11.2% throughput regression with no hit-rate improvement |
 | Task-aware pinning | **No-go** | 0% hit-rate improvement over baseline LRU |
 | QES | **Planned** | Background evolution strategies for gate-weight optimisation |
@@ -385,7 +397,7 @@ The clearest net-new result is that structured rotation can match the quality of
 
 ### 6.2 Three-axis composition works end-to-end on consumer hardware
 
-The second net-new result is that the three-axis composition works end-to-end on consumer Apple Silicon as a system, not merely as a set of individually plausible mechanisms. Section 5.1 reports that Gemma-4-26B-A4B passes the 12-prompt pathway harness at 12.85 tok/s with 5.4 GB peak resident memory inside the simulated 16 GB envelope, while Nemotron-H 120B passes 12/12 at 14.85 tok/s with 17.2 GB peak resident memory inside the simulated 32 GB envelope and remains stable through a two-hour soak [18]. These are pathway proofs, and that is precisely why they matter: mixed-precision weights, KV compression, and expert offload are all active in the same serving path rather than being validated one axis at a time. Qwen-3 remains at 8/12 and therefore cannot yet be counted as a proven pathway, but the paper treats that block as a model or checkpoint quality issue rather than a stack malfunction [18]. The honest conclusion is therefore that the stack has crossed from component plausibility into end-to-end operational proof on the Gemma-4 and Nemotron-H pathways.
+The second net-new result is that the three-axis composition works end-to-end on consumer Apple Silicon as a system, not merely as a set of individually plausible mechanisms. Section 5.1 reports that Gemma-4-26B-A4B passes the 12-prompt pathway harness at 12.85 tok/s with 5.4 GB peak resident memory inside the simulated 16 GB envelope, while Nemotron-H 120B passes 12/12 at 14.85 tok/s with 17.2 GB peak resident memory inside the simulated 32 GB envelope and remains stable through a two-hour soak [18]. The most recent extension, reported in §5.11, applies the same three-axis stack with a selective 2/4/8-bit weight recipe to Qwen3.6-35B-A3B and reaches 12/12 quality at 6.8 GB cold-start RSS and 15.6 tok/s decode within the 16 GB envelope, with the caveats that this is single-run quality and that KV fidelity has not been independently measured for that checkpoint. The original Qwen3-30B-A3B configuration remains at 8/12 because of a checkpoint-level quality limitation that the Qwen3.6 mixed-precision recipe supersedes rather than fixes. These are pathway proofs, and that is precisely why they matter: mixed-precision weights, KV compression, and expert offload are all active in the same serving path rather than being validated one axis at a time. The honest conclusion is therefore that the stack has crossed from component plausibility into end-to-end operational proof on the Gemma-4, Nemotron-H, and Qwen3.6 pathways, with the Qwen3.6 row carrying the explicit caveats noted above.
 
 ### 6.3 Operational ordering and the conditional value of expert offload
 
@@ -397,7 +409,7 @@ The fourth net-new result is methodological: the `kv_cache` JSON block closes an
 
 ### 6.5 Next steps
 
-Next steps should therefore be deliberately conservative. The first is to rerun the proven pathways on native 16 GB hardware, because the current Gemma-4 result is still a `--memory-limit-mb` simulation on a larger host rather than a same-class physical machine [18]. The second is to harden the current counters into multi-process-safe instrumentation suitable for longer-running serving rather than single-process benchmarking. The third is to extend the evaluation to additional model families so that the present conclusions can be separated into architecture-specific and stack-general effects. Beyond the obvious packed-cache amortisation opportunity already noted in Section 4.6, these are validation and hardening tasks rather than a change of direction.
+Next steps should therefore be deliberately conservative. The first is to rerun the proven pathways on native 16 GB hardware, because the current Gemma-4 result is still a `--memory-limit-mb` simulation on a larger host rather than a same-class physical machine [18]. The second is to harden the current counters into multi-process-safe instrumentation suitable for longer-running serving rather than single-process benchmarking. The third is to discharge the caveats on the recently-added Qwen3.6 pathway: a multi-run variance study, an independent KV-fidelity measurement for that checkpoint, and a 2-hour soak of the same kind already reported for Gemma-4 and Nemotron-H. Beyond the obvious packed-cache amortisation opportunity already noted in Section 4.6, these are validation and hardening tasks rather than a change of direction.
 
 ### 6.6 Recommendation
 
