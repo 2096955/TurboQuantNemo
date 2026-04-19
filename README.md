@@ -8,7 +8,14 @@
 
 **Video:** [AI & the Yum Cha Kitchen](docs/AI_&_the_Yum_Cha_Kitchen.mp4) (download to watch)
 
-> **Naming guide.** This repo is called **RotaryQuant** (the project). The core method is **IsoQuant** -- a fused KV cache compression pipeline using WHT + SO(4) structured rotations. **TurboQuant** (Frantar et al., ICLR 2026) is the baseline we compare against; it uses dense random rotations and reconstructs K/V tensors before attention. When you see "IsoQuant" in this README, that is the method you would run. When you see "TurboQuant", that is what we replace.
+> **Naming guide.** Four names appear in this repo — they are not interchangeable.
+>
+> | Name | What it is |
+> |------|-----------|
+> | **RotaryQuant** | The project/repo name. Not a method. |
+> | **IsoQuant** | The core method — WHT + SO(4) fused KV cache compression. This is what you run (`--kv-cache-type isoquant`). |
+> | **RotorQuant** | An earlier iteration using Clifford Cl(3,0) geometric algebra rotors (`--kv-cache-type rotorquant`). Still in the codebase but superseded by IsoQuant. |
+> | **TurboQuant** | The baseline we compare against (Frantar et al., ICLR 2026). Dense random rotations, reconstructs K/V before attention. This is what IsoQuant replaces. |
 
 ![The Tiny Kitchen: Fitting 1 Trillion Parameters on Consumer Hardware](docs/images/kitchen-overview.png)
 
