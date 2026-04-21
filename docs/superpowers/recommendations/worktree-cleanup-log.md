@@ -142,3 +142,32 @@ Last commit: 2026-04-06 23:28:27 +0100 fix: prompt cache trimming on exact and s
 **Recovery:** `git update-ref refs/heads/feature/qwen3-wiring a8dd2ed2ae9f8fec42eb203fd7d49ee941a513cc` would restore the original branch tip. **The 9 unsalvaged uncommitted files are LOST** — recovery only restores the branch SHA, not the dirty working tree state. Acceptable per triage (those files conflict with main's progression).
 
 **Process note:** During investigation I ran `git stash push` once without explicit user approval to inspect main's uncommitted state. Stash was popped immediately and no work was lost; flagged in real-time for transparency.
+
+### USER GATE 13 — feature/qwen3-deferred-dedekimi-impl — 2026-04-21
+
+**State:** DIRTY working tree (1 untracked file `test_deferred_prefill.py`), 1 commit ahead of main (`c7c5b57 feat: implement Qwen3 offload plumbing and wiring`), 65 commits behind main. Branch base 13 days stale.
+
+**Per-element triage of c7c5b57 + untracked file:**
+
+| Element | Status on main | Outcome |
+|---|---|---|
+| `convert.py` changes | Superseded by main commits `41b1a26`, `d4b2a84` (--shared-expert-bits) | obsolete |
+| `expert_offload.py` changes | Superseded by main commits `2b5a31a` (qwen3_5_moe), `1fbc63e` (build_expert_importance_from_router) | obsolete |
+| `expert_weight_loader.py` changes | Superseded by main commits `2b5a31a`, `d7f5653` (security audit) | obsolete |
+| `repack_experts.py` changes | Superseded by main commit `2b5a31a` (qwen3_5_moe support) | obsolete |
+| `utils.py` changes | Superseded by main commits `2b5a31a`, `532e956` (quant prefix) | obsolete |
+| `qwen3_moe.py` predictor wiring (layer_idx, predictor.compute_proxy_alpha, prefetch) | Already on main as uncommitted (identical) | already on main |
+| `test_qwen3_wiring.py` (added in c7c5b57) | Already on main as untracked file (identical content) | already on main |
+| `test_models.py` partial_rotary_factor fixes (1.0/0.5 + rope_theta) | Already on main as uncommitted (identical) | already on main |
+| `test_hybrid_cache.py` `pytest.skip` guard | Main has uncommitted **better** version (conditional skip via `os.path.isdir(MODEL_PATH)` instead of unconditional skip) | superseded |
+| `test_deferred_prefill.py` (untracked in worktree) | Main has untracked file (byte-identical) | already on main |
+
+**Verdict:** **DELETE.** Nothing unique remains. The c7c5b57 commit's contributions have either been re-implemented better on main, are pending in main's uncommitted state, or were duplicated as untracked files. No salvage operation needed.
+
+**Action taken:**
+- Removed worktree at `.worktrees/qwen3-deferred-dedekimi-impl`
+- Deleted branch `feature/qwen3-deferred-dedekimi-impl` (was at `c7c5b57c6419e5764978312f20b4c5a90ddc9fd9`)
+
+**Recovery:** `git update-ref refs/heads/feature/qwen3-deferred-dedekimi-impl c7c5b57c6419e5764978312f20b4c5a90ddc9fd9` would restore the original branch tip. The untracked `test_deferred_prefill.py` is byte-identical to the copy still present on main, so no content is lost even without explicit recovery.
+
+**Process note:** Once main commits its current uncommitted modifications (qwen3_moe.py, test_hybrid_cache.py, test_models.py, test_qwen3_wiring.py, test_deferred_prefill.py), the work originally done in c7c5b57 will be fully captured in main's history under different SHAs.
