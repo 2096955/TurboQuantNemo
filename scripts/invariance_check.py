@@ -73,10 +73,40 @@ def _diff_first_chars(a: str, b: str) -> dict[str, Any]:
     return {}
 
 
+_GENERATION_DELIMITER = "=========="
+
+
+def _extract_generated_text(stdout: str) -> str:
+    """Pull only the generated text from `mlx_lm.generate` stdout.
+
+    `mlx_lm.generate` brackets the actual completion with `==========` lines and
+    follows it with timing stats (`Prompt: X tokens, Y tokens-per-sec`,
+    `Peak memory: ...`) that vary every run. Hashing raw stdout would always
+    differ even when the model produced identical text. Strip everything
+    outside the first delimited block.
+
+    Raises ValueError if delimiters are missing — fail loud rather than hash
+    timing noise on a format change.
+    """
+    parts = stdout.split(_GENERATION_DELIMITER)
+    if len(parts) < 3:
+        raise ValueError(
+            "mlx_lm.generate stdout missing expected '==========' delimiters; "
+            "format may have changed. Raw stdout (first 400 chars): "
+            + repr(stdout[:400])
+        )
+    return parts[1].strip()
+
+
 def run_generation(
     model: str, prompt: str, max_tokens: int, extra_args: list[str]
 ) -> str:
-    """Run `mlx_lm.generate` with deterministic settings; return stdout."""
+    """Run `mlx_lm.generate` with deterministic settings; return generated text only.
+
+    Returns the text between mlx_lm.generate's `==========` delimiters,
+    stripped. Excludes timing stats, peak memory, and runtime warnings — only
+    the model's actual output is hashed downstream.
+    """
     cmd = [
         sys.executable,
         "-m",
@@ -94,7 +124,7 @@ def run_generation(
         *extra_args,
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return proc.stdout
+    return _extract_generated_text(proc.stdout)
 
 
 def check_invariance(

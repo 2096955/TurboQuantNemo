@@ -37,3 +37,27 @@ class TestDiffFirstChars:
     def test_length_mismatch_when_one_is_prefix(self):
         result = ic._diff_first_chars("abc", "abcdef")
         assert result["length_mismatch"] == [3, 6]
+
+
+class TestExtractGeneratedText:
+    def test_extracts_text_between_delimiters(self):
+        stdout = (
+            "Fetching files: 100%\n"
+            "==========\n"
+            "Paris.\n"
+            "==========\n"
+            "Prompt: 40 tokens, 268.751 tokens-per-sec\n"
+            "Peak memory: 1.840 GB\n"
+        )
+        assert ic._extract_generated_text(stdout) == "Paris."
+
+    def test_strips_timing_footer_invariant_to_perf_jitter(self):
+        run1 = "==========\nHello\n==========\nPrompt: 5 tokens, 268 tps\n"
+        run2 = "==========\nHello\n==========\nPrompt: 5 tokens, 497 tps\n"
+        assert ic._extract_generated_text(run1) == ic._extract_generated_text(run2)
+
+    def test_raises_when_delimiters_missing(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="missing expected"):
+            ic._extract_generated_text("just plain text, no delimiters")
