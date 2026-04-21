@@ -238,6 +238,14 @@ class TestModels(unittest.TestCase):
         )
         self.assertTrue(isinstance(rope, rope_utils.Llama3RoPE))
 
+        rope = rope_utils.initialize_rope(
+            32,
+            base=100,
+            traditional=False,
+            scaling_config={"rope_type": "proportional"},
+        )
+        self.assertTrue(isinstance(rope, rope_utils.ProportionalRoPE))
+
     def test_quantized_sdpa(self):
         cache = KVCache()
 
@@ -1105,6 +1113,38 @@ class TestModels(unittest.TestCase):
             model, args.model_type, args.vocab_size, args.num_hidden_layers
         )
 
+    def test_gemma4_text(self):
+        from mlx_lm.models import gemma4_text
+
+        args = gemma4_text.ModelArgs(
+            model_type="gemma4_text",
+            hidden_size=128,
+            num_hidden_layers=4,
+            intermediate_size=256,
+            moe_intermediate_size=64,
+            num_attention_heads=4,
+            num_key_value_heads=1,
+            num_global_key_value_heads=1,
+            head_dim=32,
+            global_head_dim=32,
+            rms_norm_eps=1e-4,
+            vocab_size=1024,
+            max_position_embeddings=128,
+            sliding_window=32,
+            num_kv_shared_layers=0,
+            enable_moe_block=False,
+            layer_types=[
+                "full_attention",
+                "sliding_attention",
+                "full_attention",
+                "sliding_attention",
+            ],
+        )
+        model = gemma4_text.Model(args)
+        self.model_test_runner(
+            model, args.model_type, args.vocab_size, args.num_hidden_layers
+        )
+
     def test_gpt_bigcode(self):
         from mlx_lm.models import gpt_bigcode
 
@@ -1585,7 +1625,7 @@ class TestModels(unittest.TestCase):
                 "rms_norm_eps": 1e-5,
                 "vocab_size": 1000,
                 "num_key_value_heads": 2,
-                "partial_rotary_factor": 0,
+                "partial_rotary_factor": 1.0,
                 "rope_theta": 1000,
             },
             {
@@ -1613,7 +1653,7 @@ class TestModels(unittest.TestCase):
                 "use_qk_norm": True,
                 "tie_word_embeddings": False,
                 "attention_bias": False,
-                "partial_rotary_factor": 0.0,
+                "partial_rotary_factor": 1.0,
             },
             {
                 "model_type": "glm4_moe_lite",
@@ -2035,6 +2075,8 @@ class TestModels(unittest.TestCase):
                 "vocab_size": 1000,
                 "head_dim": 32,
                 "num_key_value_heads": 2,
+                "partial_rotary_factor": 0.5,
+                "rope_theta": 10000.0,
             },
             {
                 "model_type": "llama4_text",
@@ -2565,6 +2607,55 @@ class TestModels(unittest.TestCase):
                 y = y[:, s:e]
                 self.assertTrue(mx.allclose(y, y_gt, rtol=1e-4, atol=1e-4))
                 self.assertTrue(mx.allclose(st, st_gt, rtol=1e-4, atol=1e-3))
+
+
+class TestIsoQuantIntegration(unittest.TestCase):
+    """Verify IsoQuant fused attention is wired through the model forward pass."""
+
+    def _check_model_isoquant_wiring(self, model_name, model_cls, config_dict):
+        from mlx_lm.models.cache import make_prompt_cache
+        from mlx_lm.models.mlx_isoquant import IsoQuantKVCache
+
+        config = model_cls.ModelArgs(**config_dict)
+        model = model_cls.Model(config)
+        model.eval()
+
+        cache = make_prompt_cache(model, kv_cache_type="isoquant")
+        has_isoquant = any(isinstance(c, IsoQuantKVCache) for c in cache)
+        self.assertTrue(
+            has_isoquant, f"{model_name}: no IsoQuantKVCache in prompt cache"
+        )
+
+        x = mx.array([[0]])
+        logits = model(x, cache=cache)
+        mx.eval(logits)
+
+        self.assertTrue(
+            mx.isfinite(logits).all().item(),
+            f"{model_name}: non-finite logits with IsoQuant cache",
+        )
+        self.assertEqual(logits.shape[0], 1)
+
+    def test_qwen2_isoquant_wiring(self):
+        from mlx_lm.models import qwen2
+
+        # num_hidden_layers > TURBOQUANT_SKIP_LAYERS (default 2) so at least
+        # one layer gets an IsoQuantKVCache instead of the default KVCache.
+        self._check_model_isoquant_wiring(
+            "qwen2",
+            qwen2,
+            {
+                "model_type": "qwen2",
+                "hidden_size": 256,
+                "num_hidden_layers": 4,
+                "intermediate_size": 512,
+                "num_attention_heads": 4,
+                "num_key_value_heads": 2,
+                "rms_norm_eps": 1e-6,
+                "vocab_size": 1000,
+                "tie_word_embeddings": False,
+            },
+        )
 
 
 if __name__ == "__main__":
