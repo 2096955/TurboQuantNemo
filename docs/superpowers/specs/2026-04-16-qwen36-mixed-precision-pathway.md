@@ -1,7 +1,7 @@
 # Qwen3.6-35B-A3B Mixed-Precision Pathway — 16 GB Target
 
 **Date:** 2026-04-16
-**Status:** Design approved, pending implementation
+**Status:** DONE — superseded by `2026-04-20-research-reality-program-design.md`. Mixed-precision Qwen3.6-35B-A3B converted and validated; serves as B-γ baseline in the new program.
 **Approach:** A — Direct MLX convert from BF16
 
 ## Objective

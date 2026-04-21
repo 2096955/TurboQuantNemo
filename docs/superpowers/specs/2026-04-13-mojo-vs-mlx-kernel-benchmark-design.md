@@ -1,6 +1,7 @@
 # Mojo vs MLX Kernel Benchmark — Design Spec
 
 **Date**: 2026-04-13
+**Status**: DONE — superseded by `2026-04-20-research-reality-program-design.md`. Kernel-level work merged to main 2026-04-2X (see Task 5 of `2026-04-20-phase-0-cleanup-and-invariance.md`).
 **Goal**: Publication-quality kernel-level benchmark comparing Mojo GPU (via Metal) against MLX Metal on Apple Silicon, for inclusion in `docs/FROM_ATTENTION_TO_CONSUMER_HARDWARE.md`.
 **Hardware**: M4 Max, 128 GB unified memory, 40 GPU cores
 
