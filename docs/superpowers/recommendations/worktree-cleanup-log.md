@@ -78,4 +78,34 @@ Last commit: 2026-04-06 23:28:27 +0100 fix: prompt cache trimming on exact and s
 
 ## Decisions
 
-(Filled in as Tasks 7–14 execute)
+### USER GATE 7 — 2026-04-21
+
+**ABANDONED candidates (4 worktrees, all clean, 0 commits ahead of main):**
+- `feature/attnres-expert-management` — SHA `a74f64bfdf777282fe9ba6ea6efd66bead84149e`
+- `feature/gemma-nemotron-val` — SHA `a8dd2ed2ae9f8fec42eb203fd7d49ee941a513cc`
+- `feature/qwen3-deferred-dedekimi` — SHA `a8dd2ed2ae9f8fec42eb203fd7d49ee941a513cc`
+- `feature/rotorquant` — SHA `a8dd2ed2ae9f8fec42eb203fd7d49ee941a513cc`
+
+**Verdict:** **DEFERRED — keep for now.** User chose to retain all four pending later review. Phase 0 exit gate impact: Task 8 deletion step is intentionally skipped; revisit before Phase 0 sign-off.
+
+**Recovery (when revisited):** if deletion is later approved, the SHAs above are sufficient to recreate any branch via `git update-ref refs/heads/<branch> <sha>`. No data is at risk while the worktrees remain on disk.
+
+### feature/nemotron-gemma-eval — 2026-04-21
+
+**State:** clean working tree, 4 commits ahead of main, 11 days stale, 12k LoC behind main.
+
+**Unique commits:**
+- `7f263b5` test: skip non-deterministic tests and fix glm4 config
+- `59a59a1` test: revise quality gate harness token limits
+- `62c871b` chore: add Gemma 4 validation pathway script
+- `9e10a91` chore: add Nemotron 120B validation pathway script
+
+**Verdict:** **CHERRY-PICK then DELETE.** The two `chore:` commits add useful smoke-wrappers (`scripts/validate_gemma4_pathway.sh`, `scripts/validate_nemotron_pathway.sh`) that did not exist on main. The two `test:` commits target a stale tree state and were dropped.
+
+**Action taken:**
+- Cherry-picked `62c871b` → main as `1c78ef4`
+- Cherry-picked `9e10a91` → main as `13b98e1`
+- Removed worktree at `.worktrees/nemotron-gemma-eval`
+- Deleted branch `feature/nemotron-gemma-eval` (was at `9e10a91da524d24f31f52451a7b51966d00a8dcd`)
+
+**Recovery:** `git update-ref refs/heads/feature/nemotron-gemma-eval 9e10a91da524d24f31f52451a7b51966d00a8dcd` would restore the original branch tip if needed.
