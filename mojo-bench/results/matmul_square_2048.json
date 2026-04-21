@@ -1,0 +1,38 @@
+{
+  "framework": "mojo",
+  "framework_version": "0.26.3",
+  "compilation": {
+    "mode": "ahead_of_time",
+    "optimization": "--release",
+    "graph_compilation": "N/A"
+  },
+  "kernel": "matmul",
+  "shape": "2048x2048x2048",
+  "dtype": "float32",
+  "stats": {
+    "mean_us": 54447.98,
+    "median_us": 54804.0,
+    "std_us": 1950.2399485024127,
+    "p5_us": 50479.3,
+    "p95_us": 56706.7,
+    "p99_us": 56871.61,
+    "ci95_lo": 53901.9,
+    "ci95_hi": 54958.76,
+    "n_iterations": 50,
+    "dw_statistic": 0.06927885296207005
+  },
+  "throughput": {
+    "tflops": 0.3134783808481133,
+    "gbs": 0.0,
+    "roofline_pct": 2.2075942313247414
+  },
+  "provenance": {
+    "mojo_version": "Mojo 0.26.3.0.dev2026040805 (c200c78a)",
+    "hostname": "Anthonys-MacBook-Pro-128.local",
+    "chip": "Apple M4 Max",
+    "macos_version": "26.3.1",
+    "pixi_lock_sha256": "f4c72f6aaa325a499426f77e53ff3d1488b42f58793f95cba2e51541e104b496",
+    "run_timestamp_utc": "2026-04-21T08:54:54Z",
+    "run_uuid": "b14dfeeb6eca41eeb540acca51249554"
+  }
+}

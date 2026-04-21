@@ -1,0 +1,29 @@
+{
+  "framework": "mojo",
+  "framework_version": "0.26.3",
+  "compilation": {
+    "mode": "ahead_of_time",
+    "optimization": "--release",
+    "graph_compilation": "N/A"
+  },
+  "kernel": "matmul",
+  "shape": "1x16384x6144",
+  "dtype": "float32",
+  "stats": {
+    "mean_us": 13087.44,
+    "median_us": 12886.5,
+    "std_us": 668.1753454332912,
+    "p5_us": 12466.45,
+    "p95_us": 14445.95,
+    "p99_us": 14950.649999999998,
+    "ci95_lo": 12913.6,
+    "ci95_hi": 13281.0,
+    "n_iterations": 50,
+    "dw_statistic": 0.042924228049746584
+  },
+  "throughput": {
+    "tflops": 0.015623062274473286,
+    "gbs": 0.0,
+    "roofline_pct": 0.11002156531319217
+  }
+}
