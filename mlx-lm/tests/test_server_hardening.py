@@ -36,6 +36,7 @@ def make_cli_args(**overrides):
         "top_p": 1.0,
         "top_k": 0,
         "min_p": 0.0,
+        "timeout": None,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -61,6 +62,10 @@ def make_handler(
         worker_alive=worker_alive,
         _worker_error=worker_error,
         requests=Queue(maxsize=2),
+        metric_requests_total=3,
+        metric_prompt_tokens_total=128,
+        metric_completion_tokens_total=64,
+        metric_duration_seconds_total=1.5,
     )
 
     handler = object.__new__(APIHandler)
@@ -237,6 +242,174 @@ class TestServerHardening(unittest.TestCase):
             handler.sent_headers,
         )
         self.assertIn(("Vary", "Origin"), handler.sent_headers)
+
+    def test_metrics_json_includes_counters_when_requested(self):
+        handler = make_handler(headers={"Accept": "application/json"})
+
+        handler.handle_metrics_request()
+
+        self.assertEqual(handler.status_code, 200)
+        payload = json.loads(handler.wfile.getvalue().decode())
+        self.assertEqual(payload["queue_depth"], 0)
+        self.assertEqual(payload["counters"]["requests_total"], 3)
+        self.assertEqual(payload["counters"]["prompt_tokens_total"], 128)
+        self.assertIn(("Content-type", "application/json"), handler.sent_headers)
+
+    def test_metrics_prometheus_format_is_default(self):
+        handler = make_handler(headers={})
+
+        handler.handle_metrics_request()
+
+        body = handler.wfile.getvalue().decode()
+        self.assertIn("# HELP mlx_lm_requests_total", body)
+        self.assertIn("mlx_lm_requests_total 3", body)
+        self.assertIn("mlx_lm_queue_depth 0", body)
+        self.assertIn(
+            ("Content-type", "text/plain; version=0.0.4; charset=utf-8"),
+            handler.sent_headers,
+        )
+
+    def test_post_accepts_timeout_override(self):
+        body = {
+            "prompt": "hi",
+            "max_tokens": 4,
+            "timeout": 1.25,
+        }
+        payload = json.dumps(body).encode()
+        handler = make_handler(
+            path="/v1/completions",
+            headers={"Content-Length": str(len(payload))},
+        )
+        handler.rfile = io.BytesIO(payload)
+        captured = {}
+
+        def fake_handle_completion(request, stop_words):
+            captured["timeout"] = handler.timeout
+
+        handler.handle_completion = fake_handle_completion
+
+        handler.do_POST()
+
+        self.assertEqual(captured["timeout"], 1.25)
+
+    def test_post_rejects_negative_timeout(self):
+        body = {
+            "prompt": "hi",
+            "max_tokens": 4,
+            "timeout": -1,
+        }
+        payload = json.dumps(body).encode()
+        handler = make_handler(
+            path="/v1/completions",
+            headers={"Content-Length": str(len(payload))},
+        )
+        handler.rfile = io.BytesIO(payload)
+        handler.handle_completion = lambda request, stop_words: self.fail(
+            "handle_completion should not be reached"
+        )
+
+        handler.do_POST()
+
+        self.assertEqual(handler.status_code, 400)
+        error = json.loads(handler.wfile.getvalue().decode())["error"]
+        self.assertIn("timeout must be a non-negative number", error)
+
+    def test_stream_disconnect_calls_ctx_stop(self):
+        handler = make_handler(path="/v1/completions", headers={})
+        handler.stream = True
+        handler.timeout = None
+        handler.logit_bias = None
+        handler.repetition_penalty = None
+        handler.repetition_context_size = 20
+        handler.max_tokens = 10
+        handler.num_draft_tokens = 0
+        handler.logprobs = False
+        handler.top_logprobs = 0
+        handler.seed = None
+        handler.chat_template_kwargs = None
+        handler.temperature = 0.0
+        handler.top_p = 1.0
+        handler.top_k = -1
+        handler.min_p = 0.0
+        handler.xtc_probability = 0.0
+        handler.xtc_threshold = 0.0
+        handler.requested_model = "test"
+        handler.requested_draft_model = None
+        handler.adapter = None
+        handler.request_id = "test-id"
+        handler.object_type = "chat.completion"
+        handler.created = 12345
+        handler.system_fingerprint = "fp"
+
+        ctx = SimpleNamespace(
+            stop=lambda: setattr(ctx, "stopped", True),
+            prompt=[1],
+            has_thinking=False,
+            has_tool_calling=False,
+            prompt_cache_count=0,
+            eos_token_ids=set(),
+            stop_token_sequences=[]
+        )
+        ctx.stopped = False
+
+        def fake_generate(*args, **kwargs):
+            yield SimpleNamespace(text="test", finish_reason=None, token=1, logprob=0.0)
+            raise BrokenPipeError()
+
+        handler.response_generator.generate = lambda *args, **kwargs: (ctx, fake_generate())
+
+        handler.handle_completion(CompletionRequest("", "", [], None, None), [])
+
+        self.assertTrue(ctx.stopped)
+
+    def test_generation_timeout_calls_ctx_stop(self):
+        handler = make_handler(path="/v1/completions", headers={})
+        handler.stream = False
+        handler.timeout = 0.001
+        handler.logit_bias = None
+        handler.repetition_penalty = None
+        handler.repetition_context_size = 20
+        handler.max_tokens = 10
+        handler.num_draft_tokens = 0
+        handler.logprobs = False
+        handler.top_logprobs = 0
+        handler.seed = None
+        handler.chat_template_kwargs = None
+        handler.temperature = 0.0
+        handler.top_p = 1.0
+        handler.top_k = -1
+        handler.min_p = 0.0
+        handler.xtc_probability = 0.0
+        handler.xtc_threshold = 0.0
+        handler.requested_model = "test"
+        handler.requested_draft_model = None
+        handler.adapter = None
+        handler.request_id = "test-id"
+        handler.object_type = "chat.completion"
+        handler.created = 12345
+        handler.system_fingerprint = "fp"
+
+        ctx = SimpleNamespace(
+            stop=lambda: setattr(ctx, "stopped", True),
+            prompt=[1],
+            has_thinking=False,
+            has_tool_calling=False,
+            prompt_cache_count=0,
+            eos_token_ids=set(),
+            stop_token_sequences=[]
+        )
+        ctx.stopped = False
+
+        import time
+        def fake_generate(*args, **kwargs):
+            time.sleep(0.01) # exceed timeout
+            yield SimpleNamespace(text="test", finish_reason=None, token=1, logprob=0.0)
+
+        handler.response_generator.generate = lambda *args, **kwargs: (ctx, fake_generate())
+
+        handler.handle_completion(CompletionRequest("", "", [], None, None), [])
+
+        self.assertTrue(ctx.stopped)
 
 
 if __name__ == "__main__":
