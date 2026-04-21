@@ -113,7 +113,8 @@ deer-flow requires additional API keys in `.env` -- see `deer-flow/.env.example`
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `TURBOQUANT_CODEBOOK_DIR` | `turboquant_codebooks/` | Path to precomputed `.npz` codebook files |
-| `TURBOQUANT_BITS` | `2` | Quantization bit-width for KV cache |
+| `TURBOQUANT_BITS` | `3` | Quantization bit-width for KV cache (TurboQuant) |
+| `ISOQUANT_BITS` | (falls back to `TURBOQUANT_BITS`) | Quantization bit-width for IsoQuant KV cache |
 | `TURBOQUANT_SKIP_LAYERS` | (none) | Comma-separated layer indices to skip compression |
 
 ## MCP Tool Surface

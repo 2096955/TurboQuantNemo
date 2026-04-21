@@ -9,6 +9,27 @@ from mlx.utils import tree_flatten, tree_map, tree_unflatten
 from .base import create_causal_mask
 
 
+def _get_turboquant_bits() -> int:
+    import os
+
+    try:
+        return int(os.environ.get("TURBOQUANT_BITS", 3))
+    except ValueError:
+        return 3
+
+
+def _get_isoquant_bits() -> int:
+    import os
+
+    iso_bits = os.environ.get("ISOQUANT_BITS")
+    if iso_bits is not None:
+        try:
+            return int(iso_bits)
+        except ValueError:
+            pass
+    return _get_turboquant_bits()
+
+
 def make_prompt_cache(
     model: nn.Module,
     max_kv_size: Optional[int] = None,
@@ -55,10 +76,8 @@ def make_prompt_cache(
         import os
 
         codebook_path = get_default_codebook_dir()
-        try:
-            bits = int(os.environ.get("TURBOQUANT_BITS", 3))
-        except ValueError:
-            bits = 3
+        tq_bits = _get_turboquant_bits()
+        iso_bits = _get_isoquant_bits()
         try:
             skip_layers = int(os.environ.get("TURBOQUANT_SKIP_LAYERS", 2))
         except ValueError:
@@ -68,7 +87,7 @@ def make_prompt_cache(
             if kv_cache_type == "rotorquant":
                 return RotorQuantKVCache(
                     head_dim=head_dim,
-                    bit_width=bits,
+                    bit_width=tq_bits,
                     codebook_dir=codebook_path,
                     seed=42,
                 )
@@ -76,7 +95,7 @@ def make_prompt_cache(
                 return IsoQuantKVCache(
                     num_heads=n_kv,
                     head_dim=head_dim,
-                    bit_width=bits,
+                    bit_width=iso_bits,
                     layer_idx=layer_idx,
                     codebook_dir=codebook_path,
                     seed=42,
@@ -84,7 +103,7 @@ def make_prompt_cache(
             return TurboQuantKVCache(
                 num_heads=n_kv,
                 head_dim=head_dim,
-                bit_width=bits,
+                bit_width=tq_bits,
                 layer_idx=layer_idx,
                 codebook_dir=codebook_path,
                 seed=42,

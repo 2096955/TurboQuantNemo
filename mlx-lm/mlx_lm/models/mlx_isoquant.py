@@ -49,6 +49,7 @@ class IsoQuantStats:
         "packed_cache_hits",
         "packed_cache_misses",
         "fallback_invocations",
+        "unfused_fallback_calls",
     )
 
     def __init__(self) -> None:
@@ -725,6 +726,15 @@ class IsoQuantKVCache(TurboQuantKVCache):
             output: (B, num_heads, 1, head_dim) — attention output
         """
         if not self.supports_fused_attention:
+            import warnings
+
+            if self.bit_width != 3:
+                warnings.warn(
+                    f"IsoQuant fused path unavailable: bit_width={self.bit_width} "
+                    f"(only 3-bit supported). Using unfused O(T*d^2) path.",
+                    stacklevel=2,
+                )
+            _GLOBAL_STATS.unfused_fallback_calls += 1
             keys = self.reconstruct_keys()
             values = self.get_values()
             from .base import scaled_dot_product_attention
