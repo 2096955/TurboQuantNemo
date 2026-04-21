@@ -4,6 +4,7 @@ import copy
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import mlx.core as mx
 
@@ -687,6 +688,54 @@ class TestPromptCache(unittest.TestCase):
         self.assertIsInstance(caches[3], KVCache)
         for c in caches:
             self.assertNotIsInstance(c, TurboQuantKVCache)
+
+    def test_quantized_cache_forwards_kv_cache_type_to_custom_make_cache(self):
+        class _CustomStub:
+            def __init__(self):
+                self.seen = None
+
+            def make_cache(self, kv_cache_type="default", **kwargs):
+                self.seen = kv_cache_type
+                if kv_cache_type == "rotorquant":
+                    return [RotatingKVCache(max_size=4)]
+                return [KVCache()]
+
+        with patch.dict("os.environ", {"TURBOQUANT_SKIP_LAYERS": "0"}):
+            stub = _CustomStub()
+            caches = make_prompt_cache(stub, kv_cache_type="rotorquant")
+
+        self.assertEqual(stub.seen, "rotorquant")
+        self.assertEqual(len(caches), 1)
+        self.assertIsInstance(caches[0], RotatingKVCache)
+
+
+class TestIsoQuantPromptCachePersistence(unittest.TestCase):
+    def test_isoquant_cache_save_load_roundtrip(self):
+        """Verify IsoQuantKVCache survives save/load via globals() lookup."""
+        from mlx_lm.models.mlx_isoquant import IsoQuantKVCache
+        from mlx_lm.models.cache import save_prompt_cache, load_prompt_cache
+        import tempfile
+        import os
+
+        cache = IsoQuantKVCache(
+            num_heads=2,
+            head_dim=128,
+            bit_width=3,
+            codebook_dir=None,
+        )
+        keys = mx.random.normal((1, 2, 4, 128))
+        values = mx.random.normal((1, 2, 4, 128))
+        cache.update_and_fetch(keys, values)
+        cache.finalize_deferred_prefill()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test_iso_cache.safetensors")
+            save_prompt_cache(path, [cache])
+            loaded = load_prompt_cache(path)
+
+        self.assertEqual(len(loaded), 1)
+        self.assertIsInstance(loaded[0], IsoQuantKVCache)
+        self.assertTrue(loaded[0].supports_fused_attention)
 
 
 if __name__ == "__main__":

@@ -53,9 +53,16 @@ def pack_indices(indices_mx: mx.array) -> Any:
 
 
 def unpack_indices(packed_indices: Any, original_shape: tuple) -> mx.array:
-    if not HAS_TQ_STORAGE or isinstance(packed_indices, mx.array):
+    if not HAS_TQ_STORAGE:
         return packed_indices
-    flat = packed_indices.flatten()
+    if math.prod(packed_indices.shape) == math.prod(original_shape):
+        return packed_indices
+
+    if isinstance(packed_indices, mx.array):
+        flat = np.array(packed_indices).flatten()
+    else:
+        flat = packed_indices.flatten()
+
     original_len = math.prod(original_shape)
     unpacked = turboquant_storage.unpack_3bit(flat, original_len)
     return mx.array(unpacked.reshape(original_shape))
@@ -82,6 +89,137 @@ def quantize_scalar(
     indices = mx.reshape(indices, x.shape)
     x_quant = centroids[indices]
     return indices, x_quant
+
+
+class RotorQuantCompressor:
+    """
+    RotorQuant Compressor using Clifford $Cl(3,0)$ rotors.
+    """
+
+    def __init__(
+        self,
+        bit_width: int,
+        head_dim: int,
+        codebook_dir: str | None = None,
+        seed: int = 42,
+    ):
+        self.head_dim = head_dim
+        self.bits = bit_width
+        self.codebook_dir = os.path.abspath(codebook_dir or get_default_codebook_dir())
+        self.centroids, self.boundaries = load_codebook(
+            head_dim, bit_width, self.codebook_dir
+        )
+
+        # We need head_dim to be a multiple of 3 for exactly mapping 3D chunks.
+        # Pad with zeros if necessary during runtime.
+        self.padded_dim = ((head_dim + 2) // 3) * 3
+        self.num_chunks = self.padded_dim // 3
+
+    def _sandwich_product(self, x: mx.array, rotors: mx.array) -> mx.array:
+        """
+        Applies R * x * R_tilde using 4 non-zero components of Cl(3,0) rotors.
+        x: [..., num_chunks, 3]
+        rotors: [num_chunks, 4]  -> (scalar, bivector_xy, bivector_yz, bivector_zx)
+        """
+        # Expand rotors to match batch/seq dims of x
+        R = mx.expand_dims(rotors, tuple(range(x.ndim - 2)))
+
+        # Rotor components: R0 (scalar), R12, R23, R31 (bivectors)
+        # Note: mapping corresponds to (w, z, x, y) in standard quaternion/rotor notation
+        w = R[..., 0]
+        x_rot = R[..., 2]  # R23
+        y_rot = R[..., 3]  # R31
+        z_rot = R[..., 1]  # R12
+
+        # Vector components
+        v1 = x[..., 0]
+        v2 = x[..., 1]
+        v3 = x[..., 2]
+
+        # Rodrigues formula for Cl(3,0) sandwich: v' = v + 2s(u × v) + 2u × (u × v)
+        # where R = s + u (scalar + bivector dual vector)
+        # u × v (NOT v × u — sign matters)
+        cross1 = y_rot * v3 - z_rot * v2
+        cross2 = z_rot * v1 - x_rot * v3
+        cross3 = x_rot * v2 - y_rot * v1
+
+        # 2s(u × v)
+        term1_1 = 2 * w * cross1
+        term1_2 = 2 * w * cross2
+        term1_3 = 2 * w * cross3
+
+        # u × (u × v)
+        cross2_1 = y_rot * cross3 - z_rot * cross2
+        cross2_2 = z_rot * cross1 - x_rot * cross3
+        cross2_3 = x_rot * cross2 - y_rot * cross1
+
+        term2_1 = 2 * cross2_1
+        term2_2 = 2 * cross2_2
+        term2_3 = 2 * cross2_3
+
+        out1 = v1 + term1_1 + term2_1
+        out2 = v2 + term1_2 + term2_2
+        out3 = v3 + term1_3 + term2_3
+
+        return mx.stack([out1, out2, out3], axis=-1)
+
+    def compress(self, x: mx.array, rotors: mx.array) -> dict:
+        x_f32 = x.astype(mx.float32)
+        x_norm = mx.linalg.norm(x_f32, axis=-1, keepdims=True)
+        x_unit = x_f32 / mx.maximum(x_norm, mx.array(1e-8))
+
+        # Pad to multiple of 3
+        pad_len = self.padded_dim - self.head_dim
+        if pad_len > 0:
+            zeros = mx.zeros(x_unit.shape[:-1] + (pad_len,))
+            x_unit = mx.concatenate([x_unit, zeros], axis=-1)
+
+        x_chunked = mx.reshape(x_unit, (*x_unit.shape[:-1], self.num_chunks, 3))
+
+        # Apply rotor rotation
+        x_rot_chunked = self._sandwich_product(x_chunked, rotors)
+
+        # Flatten back — quantize ALL dims including padding so decompress
+        # can inverse-rotate cleanly (truncating before quantization loses
+        # rotated padding info that leaks into other dimensions on inverse).
+        x_rot = mx.reshape(x_rot_chunked, (*x_rot_chunked.shape[:-2], self.padded_dim))
+
+        indices, x_rot_quant = quantize_scalar(x_rot, self.centroids, self.boundaries)
+
+        return {
+            "indices": indices,
+            "x_rot_quant": x_rot_quant,
+            "x_norm": x_norm,
+        }
+
+    def decompress(
+        self,
+        packed_indices: Any,
+        original_shape: tuple,
+        x_norm: mx.array,
+        rotors: mx.array,
+    ) -> mx.array:
+        indices = unpack_indices(packed_indices, original_shape)
+        x_rot_quant = self.centroids[indices]
+
+        # Indices are stored at padded_dim width (divisible by 3).
+        # Reshape into 3D chunks, inverse-rotate, then truncate to head_dim.
+        x_chunked = mx.reshape(
+            x_rot_quant, (*x_rot_quant.shape[:-1], self.num_chunks, 3)
+        )
+
+        # Inverse rotation (conjugate of rotor)
+        inv_rotors = mx.concatenate([rotors[..., :1], -rotors[..., 1:]], axis=-1)
+        x_unrot_chunked = self._sandwich_product(x_chunked, inv_rotors)
+
+        x_hat_unit = mx.reshape(
+            x_unrot_chunked, (*x_unrot_chunked.shape[:-2], self.padded_dim)
+        )
+        # Truncate padding after inverse rotation (padding was part of the rotation)
+        if self.padded_dim > self.head_dim:
+            x_hat_unit = x_hat_unit[..., : self.head_dim]
+
+        return x_hat_unit * x_norm
 
 
 class TurboQuantCompressor:
@@ -273,35 +411,72 @@ class TurboQuantKVCache:
         self.layer_idx = layer_idx
         self.seed = seed
         self.codebook_dir = os.path.abspath(codebook_dir or get_default_codebook_dir())
-
-        # Fixed per-head rotation matrices (deterministic, generated once)
-        self.compressor = TurboQuantCompressor(
-            bit_width=bit_width,
-            head_dim=head_dim,
-            codebook_dir=self.codebook_dir,
-            seed=seed,
-        )
-
-        # Initialize fixed rotations (use deterministic seed per layer/head)
-        rng = np.random.default_rng(seed + (layer_idx or 0) * 1000)  # reproducible
-
-        rotations = []
-        for h in range(num_heads):
-            A = rng.normal(size=(head_dim, head_dim)).astype(np.float32)
-            Q, _ = np.linalg.qr(A)
-            rotations.append(Q)
-
-        # Batched rotation matrices: (num_heads, head_dim, head_dim)
-        self.rotation_matrices = mx.array(np.stack(rotations), dtype=mx.float32)
-
-        # Storage for compressed keys and values (batched across heads)
+        self.compressor = None
+        self.rotation_matrices = None
         self.compressed_keys: dict[str, Any] = {}
         self.compressed_values: dict[str, Any] = {}
         self.uncompressed_values: mx.array = None  # kept for backward compat
-
+        self._fallback_cache = None
+        self._warned_fallback = False
         self._seq_len = 0
         self._dtype = mx.float16  # or whatever base dtype
         self.offset = 0
+
+        try:
+            self._reconfigure_runtime_shape(num_heads, head_dim)
+        except Exception:
+            self._activate_fallback_cache(num_heads, head_dim)
+
+    def _activate_fallback_cache(self, n_kv_heads: int, head_dim: int) -> None:
+        from .cache import KVCache
+
+        self._fallback_cache = KVCache()
+        self.num_heads = int(n_kv_heads)
+        self.head_dim = int(head_dim)
+        if not self._warned_fallback:
+            print(
+                f"[{type(self).__name__}] fallback to KVCache for heads={n_kv_heads}, dim={head_dim}"
+            )
+            self._warned_fallback = True
+
+    def _sync_fallback_offset(self) -> None:
+        if self._fallback_cache is None:
+            return
+        self.offset = self._fallback_cache.offset
+        self._seq_len = self._fallback_cache.offset
+
+    def _get_fallback_keys(self) -> mx.array:
+        if self._fallback_cache is None or self._fallback_cache.keys is None:
+            return None
+        return self._fallback_cache.keys[..., : self._fallback_cache.offset, :]
+
+    def _get_fallback_values(self) -> mx.array:
+        if self._fallback_cache is None or self._fallback_cache.values is None:
+            return None
+        return self._fallback_cache.values[..., : self._fallback_cache.offset, :]
+
+    def _reconfigure_runtime_shape(self, n_kv_heads: int, head_dim: int) -> None:
+        if (
+            self.compressor is not None
+            and n_kv_heads == self.num_heads
+            and head_dim == self.head_dim
+        ):
+            return
+        self.num_heads = int(n_kv_heads)
+        self.head_dim = int(head_dim)
+        self.compressor = TurboQuantCompressor(
+            bit_width=self.bit_width,
+            head_dim=self.head_dim,
+            codebook_dir=self.codebook_dir,
+            seed=self.seed,
+        )
+        rng = np.random.default_rng(self.seed + (self.layer_idx or 0) * 1000)
+        rotations = []
+        for _ in range(self.num_heads):
+            A = rng.normal(size=(self.head_dim, self.head_dim)).astype(np.float32)
+            Q, _ = np.linalg.qr(A)
+            rotations.append(Q)
+        self.rotation_matrices = mx.array(np.stack(rotations), dtype=mx.float32)
 
     def update_and_fetch(
         self, keys: mx.array, values: mx.array, offset: int | None = None
@@ -315,6 +490,15 @@ class TurboQuantKVCache:
             keys.shape
         )  # usually batch=1 in generation
         assert batch_size == 1, "TurboQuantKVCache currently assumes batch=1"
+        if self._fallback_cache is None:
+            try:
+                self._reconfigure_runtime_shape(n_kv_heads, int(k_head_dim))
+            except Exception:
+                self._activate_fallback_cache(n_kv_heads, int(k_head_dim))
+        if self._fallback_cache is not None:
+            out = self._fallback_cache.update_and_fetch(keys, values)
+            self._sync_fallback_offset()
+            return out
 
         new_seq_len = seq_len
         if offset is not None:
@@ -333,7 +517,7 @@ class TurboQuantKVCache:
         new_v_indices = []
         new_v_norms = []
 
-        for h in range(self.num_heads):
+        for h in range(n_kv_heads):
             Q = self.rotation_matrices[h]
             # Compress keys (full TQ with residuals stored in compress but we only keep MSE)
             compressed_head = self.compressor.compress(k_batch[h], rotation=Q)
@@ -382,6 +566,8 @@ class TurboQuantKVCache:
     def get_values(self) -> mx.array:
         """Decompress values on-the-fly from compressed storage.
         Returns shape (1, num_kv_heads, seq_len, head_dim) in model dtype."""
+        if self._fallback_cache is not None:
+            return self._get_fallback_values()
         if self.compressed_values:
             indices = self.compressed_values["indices"]  # (H, S, D) uint8
             x_rot_quant = self.compressor.centroids[indices]  # (H, S, D) float32
@@ -393,6 +579,8 @@ class TurboQuantKVCache:
     def reconstruct_keys(self) -> mx.array:
         """Decompress keys on-the-fly: indices -> centroids -> rotate back -> scale by norm.
         Returns shape (1, num_kv_heads, seq_len, head_dim) in model dtype."""
+        if self._fallback_cache is not None:
+            return self._get_fallback_keys()
         indices = self.compressed_keys["indices"]  # (H, S, D) uint8
         if HAS_TQ_STORAGE and not isinstance(indices, mx.array):
             indices = unpack_indices(indices, self.compressed_keys["indices_shape"])
@@ -526,18 +714,25 @@ class TurboQuantKVCache:
 
     @property
     def state(self) -> dict[str, Any]:
-        """For serialization / checkpointing prefix cache."""
+        """For serialization / checkpointing prefix cache.
+
+        seq_len/bit_width wrapped as mx.array because mx.save_safetensors
+        rejects plain Python ints (std::bad_cast).
+        """
         return {
-            "seq_len": self._seq_len,
+            "seq_len": mx.array(self._seq_len, dtype=mx.int32),
             "compressed_keys": self.compressed_keys,
             "compressed_values": self.compressed_values,
-            "bit_width": self.bit_width,
+            "bit_width": mx.array(self.bit_width, dtype=mx.int32),
         }
 
     @state.setter
     def state(self, v):
-        self._seq_len = v["seq_len"]
-        self.offset = v["seq_len"]
+        seq_len_v = v["seq_len"]
+        if isinstance(seq_len_v, mx.array):
+            seq_len_v = int(seq_len_v.item())
+        self._seq_len = seq_len_v
+        self.offset = seq_len_v
         self.compressed_keys = v["compressed_keys"]
         self.compressed_values = v.get("compressed_values", {})
         self.uncompressed_values = v.get("uncompressed_values")
@@ -585,29 +780,25 @@ class TurboQuantKVCache:
             if version == "v2" and len(v) > 5 and v[5]
             else get_default_codebook_dir()
         )
-        self.compressor = TurboQuantCompressor(
-            bit_width=self.bit_width,
-            head_dim=self.head_dim,
-            codebook_dir=self.codebook_dir,
-            seed=self.seed,
-        )
-
-        rng = np.random.default_rng(self.seed + (self.layer_idx or 0) * 1000)
-        rotations = []
-        for h in range(self.num_heads):
-            A = rng.normal(size=(self.head_dim, self.head_dim)).astype(np.float32)
-            Q, _ = np.linalg.qr(A)
-            rotations.append(Q)
-        self.rotation_matrices = mx.array(np.stack(rotations), dtype=mx.float32)
+        self._fallback_cache = None
+        self._warned_fallback = False
+        try:
+            self._reconfigure_runtime_shape(self.num_heads, self.head_dim)
+        except Exception:
+            self._activate_fallback_cache(self.num_heads, self.head_dim)
 
     def is_trimmable(self):
         return True
 
     def size(self):
+        if self._fallback_cache is not None:
+            return self._fallback_cache.size()
         return self._seq_len
 
     @property
     def nbytes(self):
+        if self._fallback_cache is not None:
+            return self._fallback_cache.nbytes
         if self._seq_len == 0:
             return 0
         total = 0
@@ -621,4 +812,172 @@ class TurboQuantKVCache:
         return total
 
     def empty(self):
+        if self._fallback_cache is not None:
+            return self._fallback_cache.empty()
         return self._seq_len == 0
+
+
+from .cache import KVCache
+
+
+class RotorQuantKVCache(KVCache):
+    """
+    RotorQuant KV cache. Uses sparse Clifford rotors instead of dense matrices.
+    """
+
+    def __init__(
+        self,
+        head_dim: int = 128,
+        bit_width: int = 3,
+        codebook_dir: str | None = None,
+        seed: int = 42,
+        **kwargs,
+    ):
+        super().__init__()
+        self.codebook_dir = os.path.abspath(codebook_dir or get_default_codebook_dir())
+        self.compressor = RotorQuantCompressor(
+            bit_width, head_dim, self.codebook_dir, seed=seed
+        )
+
+        mx.random.seed(seed)
+        raw_rotors = mx.random.normal((self.compressor.num_chunks, 4))
+        self.rotors = raw_rotors / mx.linalg.norm(raw_rotors, axis=-1, keepdims=True)
+
+        self.step = 256
+        self.keys = None
+        self.values = None
+        self.k_norms = None
+        self.v_norms = None
+        self.is_deferred = False
+        self.deferred_keys = None
+        self.deferred_values = None
+
+    def _compress_and_store(self, keys: mx.array, values: mx.array):
+        B, n_kv_heads, seq_len, head_dim = keys.shape
+
+        k_comp = self.compressor.compress(keys, self.rotors)
+        v_comp = self.compressor.compress(values, self.rotors)
+
+        prev = self.offset
+
+        packed_k = mx.array(pack_indices(k_comp["indices"]))
+        packed_v = mx.array(pack_indices(v_comp["indices"]))
+
+        if self.keys is None or (prev + seq_len) > self.keys.shape[2]:
+            n_steps = (self.step + seq_len - 1) // self.step
+
+            k_shape = (B, n_kv_heads, prev + n_steps * self.step, packed_k.shape[-1])
+            v_shape = (B, n_kv_heads, prev + n_steps * self.step, packed_v.shape[-1])
+            norm_shape = (B, n_kv_heads, prev + n_steps * self.step, 1)
+
+            new_k = mx.zeros(k_shape, dtype=packed_k.dtype)
+            new_v = mx.zeros(v_shape, dtype=packed_v.dtype)
+            new_k_norm = mx.zeros(norm_shape, dtype=k_comp["x_norm"].dtype)
+            new_v_norm = mx.zeros(norm_shape, dtype=v_comp["x_norm"].dtype)
+
+            if self.keys is not None:
+                new_k[..., :prev, :] = self.keys[..., :prev, :]
+                new_v[..., :prev, :] = self.values[..., :prev, :]
+                new_k_norm[..., :prev, :] = self.k_norms[..., :prev, :]
+                new_v_norm[..., :prev, :] = self.v_norms[..., :prev, :]
+
+            self.keys = new_k
+            self.values = new_v
+            self.k_norms = new_k_norm
+            self.v_norms = new_v_norm
+
+        self.offset += seq_len
+        self.keys[..., prev : self.offset, :] = packed_k
+        self.values[..., prev : self.offset, :] = packed_v
+        self.k_norms[..., prev : self.offset, :] = k_comp["x_norm"]
+        self.v_norms[..., prev : self.offset, :] = v_comp["x_norm"]
+
+    def update_and_fetch(self, keys: mx.array, values: mx.array):
+        B, n_kv_heads, seq_len, head_dim = keys.shape
+
+        if seq_len > 1:
+            self.is_deferred = True
+            if self.deferred_keys is None:
+                self.deferred_keys = keys
+                self.deferred_values = values
+            else:
+                self.deferred_keys = mx.concatenate([self.deferred_keys, keys], axis=2)
+                self.deferred_values = mx.concatenate(
+                    [self.deferred_values, values], axis=2
+                )
+            # Track total sequence length including deferred tokens
+            self.offset += seq_len
+
+            k_hat = self.deferred_keys
+            v_hat = self.deferred_values
+
+            if self.keys is not None and self.offset > 0:
+                fetched_packed_k = self.keys[..., : self.offset, :]
+                fetched_norm_k = self.k_norms[..., : self.offset, :]
+                original_shape_k = fetched_packed_k.shape[:-1] + (
+                    self.compressor.padded_dim,
+                )
+                past_k = self.compressor.decompress(
+                    fetched_packed_k, original_shape_k, fetched_norm_k, self.rotors
+                )
+                k_hat = mx.concatenate([past_k, k_hat], axis=2)
+
+                fetched_packed_v = self.values[..., : self.offset, :]
+                fetched_norm_v = self.v_norms[..., : self.offset, :]
+                original_shape_v = fetched_packed_v.shape[:-1] + (
+                    self.compressor.padded_dim,
+                )
+                past_v = self.compressor.decompress(
+                    fetched_packed_v, original_shape_v, fetched_norm_v, self.rotors
+                )
+                v_hat = mx.concatenate([past_v, v_hat], axis=2)
+
+            return k_hat, v_hat
+
+        # Transition to decode or just normal decode step
+        if self.is_deferred:
+            # Reset offset before compress — it was already tracked during deferred accumulation
+            deferred_len = self.deferred_keys.shape[2]
+            self.offset -= deferred_len
+            self._compress_and_store(self.deferred_keys, self.deferred_values)
+            self.deferred_keys = None
+            self.deferred_values = None
+            self.is_deferred = False
+
+        self._compress_and_store(keys, values)
+
+        fetched_packed_k = self.keys[..., : self.offset, :]
+        fetched_norm_k = self.k_norms[..., : self.offset, :]
+        original_shape_k = fetched_packed_k.shape[:-1] + (self.compressor.padded_dim,)
+        k_hat = self.compressor.decompress(
+            fetched_packed_k, original_shape_k, fetched_norm_k, self.rotors
+        )
+
+        fetched_packed_v = self.values[..., : self.offset, :]
+        fetched_norm_v = self.v_norms[..., : self.offset, :]
+        original_shape_v = fetched_packed_v.shape[:-1] + (self.compressor.padded_dim,)
+        v_hat = self.compressor.decompress(
+            fetched_packed_v, original_shape_v, fetched_norm_v, self.rotors
+        )
+
+        return k_hat, v_hat
+
+    @property
+    def state(self):
+        # We need to save the rotors along with the KV states
+        return self.keys, self.values, self.k_norms, self.v_norms, self.rotors
+
+    @state.setter
+    def state(self, v):
+        self.keys, self.values, self.k_norms, self.v_norms, self.rotors = v
+
+    @property
+    def nbytes(self):
+        if self.keys is None:
+            return 0
+        return (
+            self.keys.nbytes
+            + self.values.nbytes
+            + self.k_norms.nbytes
+            + self.v_norms.nbytes
+        )

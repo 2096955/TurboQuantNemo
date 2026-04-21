@@ -25,10 +25,15 @@ def make_prompt_cache(
         max_kv_size (Optional[int]): If provided and the model does not have a
             ``make_cache`` method, a ``RotatingKVCache`` is used with a maximum
             size of ``max_kv_size``
-        kv_cache_type (str): Type of cache, e.g. 'turboquant'
+        kv_cache_type (str): Type of cache, e.g. 'turboquant' or 'isoquant'
     """
-    if kv_cache_type == "turboquant":
-        from .mlx_turboquant import TurboQuantKVCache, get_default_codebook_dir
+    if kv_cache_type in ("turboquant", "rotorquant", "isoquant"):
+        from .mlx_isoquant import IsoQuantKVCache
+        from .mlx_turboquant import (
+            RotorQuantKVCache,
+            TurboQuantKVCache,
+            get_default_codebook_dir,
+        )
 
         config = getattr(model, "args", None) or getattr(model, "config", None)
         head_dim = getattr(config, "head_dim", None) if config is not None else None
@@ -59,29 +64,65 @@ def make_prompt_cache(
         except ValueError:
             skip_layers = 2
 
-        # Hybrid models (e.g. Nemotron-H) use make_cache() with a *heterogeneous*
-        # list: ArraysCache for Mamba/SSM recurrent state, KVCache for attention.
-        # TurboQuant must only touch true KV entries; applying it to ArraysCache
-        # would corrupt SSM state. Until attention layers opt in with a
-        # TurboQuant-aware path, defer entirely to the model's native caches.
+        def make_quant_cache(layer_idx: int):
+            if kv_cache_type == "rotorquant":
+                return RotorQuantKVCache(
+                    head_dim=head_dim,
+                    bit_width=bits,
+                    codebook_dir=codebook_path,
+                    seed=42,
+                )
+            if kv_cache_type == "isoquant":
+                return IsoQuantKVCache(
+                    num_heads=n_kv,
+                    head_dim=head_dim,
+                    bit_width=bits,
+                    layer_idx=layer_idx,
+                    codebook_dir=codebook_path,
+                    seed=42,
+                )
+            return TurboQuantKVCache(
+                num_heads=n_kv,
+                head_dim=head_dim,
+                bit_width=bits,
+                layer_idx=layer_idx,
+                codebook_dir=codebook_path,
+                seed=42,
+            )
+
+        # Hybrid models can expose heterogeneous caches (e.g. ArraysCache + KVCache).
+        # If a model provides kv_cache_type-aware make_cache(), trust that custom
+        # logic first. Otherwise replace only attention KV cache instances
+        # recursively and leave non-attention caches intact.
         if hasattr(model, "make_cache"):
-            return model.make_cache()
+            import inspect
+
+            sig = inspect.signature(model.make_cache)
+            if "kv_cache_type" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                return model.make_cache(kv_cache_type=kv_cache_type)
+            native = model.make_cache()
+            layer_count = len(getattr(model, "layers", []))
+            align_top_level_to_layers = layer_count > 0 and len(native) == layer_count
+            layer_idx_ref = None if align_top_level_to_layers else [0]
+            return [
+                _replace_attention_caches(
+                    c,
+                    make_quant_cache=make_quant_cache,
+                    skip_layers=skip_layers,
+                    layer_idx=i if align_top_level_to_layers else None,
+                    layer_idx_ref=layer_idx_ref,
+                )
+                for i, c in enumerate(native)
+            ]
 
         caches = []
         for i, layer in enumerate(model.layers):
             if getattr(layer, "is_linear", False) or i < skip_layers:
                 caches.append(KVCache())
             else:
-                caches.append(
-                    TurboQuantKVCache(
-                        num_heads=n_kv,
-                        head_dim=head_dim,
-                        bit_width=bits,
-                        layer_idx=i,
-                        codebook_dir=codebook_path,
-                        seed=42,
-                    )
-                )
+                caches.append(make_quant_cache(i))
         return caches
 
     if hasattr(model, "make_cache"):
@@ -94,6 +135,42 @@ def make_prompt_cache(
         ]
     else:
         return [KVCache() for _ in range(num_layers)]
+
+
+def _replace_attention_caches(
+    obj: Any,
+    *,
+    make_quant_cache,
+    skip_layers: int,
+    layer_idx: Optional[int],
+    layer_idx_ref: Optional[list[int]],
+):
+    if isinstance(obj, CacheList):
+        return CacheList(
+            *[
+                _replace_attention_caches(
+                    c,
+                    make_quant_cache=make_quant_cache,
+                    skip_layers=skip_layers,
+                    layer_idx=layer_idx,
+                    layer_idx_ref=layer_idx_ref,
+                )
+                for c in obj.caches
+            ]
+        )
+
+    if isinstance(obj, (KVCache, RotatingKVCache)):
+        if layer_idx is None:
+            assert layer_idx_ref is not None
+            current_layer_idx = layer_idx_ref[0]
+            layer_idx_ref[0] += 1
+        else:
+            current_layer_idx = layer_idx
+        if current_layer_idx < skip_layers:
+            return obj
+        return make_quant_cache(current_layer_idx)
+
+    return obj
 
 
 def save_prompt_cache(file_name: str, cache: List[Any], metadata: Dict[str, str] = {}):
@@ -165,6 +242,22 @@ def trim_prompt_cache(cache: List[Any], num_tokens: int) -> List[Any]:
     if not can_trim_prompt_cache(cache) or len(cache) == 0:
         return 0
     return [c.trim(num_tokens) for c in cache][0]
+
+
+def finalize_deferred_kv_caches(cache: List[Any]) -> None:
+    """Finalize any cache implementing deferred-prefill transitions."""
+
+    def _walk(obj: Any) -> None:
+        if isinstance(obj, CacheList):
+            for sub in obj.caches:
+                _walk(sub)
+            return
+        hook = getattr(obj, "finalize_deferred_prefill", None)
+        if callable(hook):
+            hook()
+
+    for c in cache:
+        _walk(c)
 
 
 def create_attention_mask(
@@ -1442,3 +1535,4 @@ class BatchRotatingKVCache(_BaseCache):
 
 # Registered by name for load_prompt_cache / save_prompt_cache deserialization.
 from .mlx_turboquant import TurboQuantKVCache  # noqa: E402, F401
+from .mlx_isoquant import IsoQuantKVCache  # noqa: E402, F401
