@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -160,9 +161,12 @@ def main() -> None:
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument(
         "--extra-args",
-        nargs="*",
-        default=[],
-        help="Extra args passed through to mlx_lm.generate",
+        default="",
+        help=(
+            "Extra args passed through to mlx_lm.generate, as a single quoted "
+            "string. Example: --extra-args '--expert-offload --max-resident-experts 2048'. "
+            "argparse cannot capture --flags via nargs='*'."
+        ),
     )
     parser.add_argument(
         "--config-suite",
@@ -199,7 +203,7 @@ def main() -> None:
             args.model,
             args.prompt,
             args.max_tokens,
-            args.extra_args,
+            shlex.split(args.extra_args),
             args.model,
         )
         print(json.dumps(diag, indent=2))
