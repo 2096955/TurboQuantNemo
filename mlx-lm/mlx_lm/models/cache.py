@@ -926,6 +926,12 @@ class CacheList(_BaseCache):
     def __getitem__(self, idx):
         return self.caches[idx]
 
+    def __len__(self):
+        return len(self.caches)
+
+    def __iter__(self):
+        return iter(self.caches)
+
     def is_trimmable(self):
         return all(c.is_trimmable() for c in self.caches)
 

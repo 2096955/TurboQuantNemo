@@ -711,7 +711,8 @@ class TestPromptCache(unittest.TestCase):
 
 class TestIsoQuantPromptCachePersistence(unittest.TestCase):
     def test_isoquant_cache_save_load_roundtrip(self):
-        """Verify IsoQuantKVCache survives save/load via globals() lookup."""
+        """Verify IsoQuantKVCache survives save/load via globals() lookup
+        AND that decompressed key/value content is preserved bit-for-bit."""
         from mlx_lm.models.mlx_isoquant import IsoQuantKVCache
         from mlx_lm.models.cache import save_prompt_cache, load_prompt_cache
         import tempfile
@@ -728,6 +729,13 @@ class TestIsoQuantPromptCachePersistence(unittest.TestCase):
         cache.update_and_fetch(keys, values)
         cache.finalize_deferred_prefill()
 
+        # Capture pre-save reconstructions so we can prove the load preserved
+        # the *compressed* state, not just the class wrapper.
+        pre_seq_len = cache._seq_len
+        pre_keys = cache.reconstruct_keys()
+        pre_values = cache.get_values()
+        mx.eval(pre_keys, pre_values)
+
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "test_iso_cache.safetensors")
             save_prompt_cache(path, [cache])
@@ -736,6 +744,21 @@ class TestIsoQuantPromptCachePersistence(unittest.TestCase):
         self.assertEqual(len(loaded), 1)
         self.assertIsInstance(loaded[0], IsoQuantKVCache)
         self.assertTrue(loaded[0].supports_fused_attention)
+        self.assertEqual(loaded[0]._seq_len, pre_seq_len)
+
+        # Bit-for-bit content preservation: compressed state is lossless under
+        # save/load, so reconstructions must match exactly (not just allclose).
+        post_keys = loaded[0].reconstruct_keys()
+        post_values = loaded[0].get_values()
+        mx.eval(post_keys, post_values)
+        self.assertTrue(
+            mx.array_equal(pre_keys, post_keys),
+            "reconstruct_keys() differs after save/load — compressed state lost",
+        )
+        self.assertTrue(
+            mx.array_equal(pre_values, post_values),
+            "get_values() differs after save/load — compressed state lost",
+        )
 
 
 if __name__ == "__main__":
