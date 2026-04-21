@@ -1,0 +1,26 @@
+[
+  {
+    "config": "dense_llama_3_2_3b",
+    "passed": true,
+    "hash_run_1": "bdff8c417ab50e95e95cce16035a3799c7e00104de4a7b3453f06728c620faf7",
+    "hash_run_2": "bdff8c417ab50e95e95cce16035a3799c7e00104de4a7b3453f06728c620faf7",
+    "len_run_1": 6,
+    "len_run_2": 6
+  },
+  {
+    "config": "moe_qwen36_35b_a3b",
+    "passed": true,
+    "hash_run_1": "725097d8d5b26a838cc2597d18050ac778c21c0d6d7ea5dbd218af7eab4a345c",
+    "hash_run_2": "725097d8d5b26a838cc2597d18050ac778c21c0d6d7ea5dbd218af7eab4a345c",
+    "len_run_1": 203,
+    "len_run_2": 203
+  },
+  {
+    "config": "moe_qwen36_35b_a3b_offload",
+    "passed": true,
+    "hash_run_1": "725097d8d5b26a838cc2597d18050ac778c21c0d6d7ea5dbd218af7eab4a345c",
+    "hash_run_2": "725097d8d5b26a838cc2597d18050ac778c21c0d6d7ea5dbd218af7eab4a345c",
+    "len_run_1": 203,
+    "len_run_2": 203
+  }
+]
