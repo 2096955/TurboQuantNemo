@@ -347,6 +347,31 @@ class ExpertWeightLoaderTest(unittest.TestCase):
             load_non_expert_weights(Path("/tmp/nonexistent"), {})
         self.assertIn("empty weight_map", str(ctx.exception).lower())
 
+    def test_load_non_expert_weights_filters_gemma4_multimodal_experts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shard = root / "model.safetensors"
+            mx.save_safetensors(
+                str(shard),
+                {
+                    "language_model.model.layers.0.experts.0.gate_proj.weight": mx.ones(
+                        (4, 4)
+                    ),
+                    "language_model.model.embed_tokens.weight": mx.ones((8, 4)),
+                },
+            )
+            loaded = load_non_expert_weights(
+                root,
+                {
+                    "language_model.model.layers.0.experts.0.gate_proj.weight": "model.safetensors",
+                    "language_model.model.embed_tokens.weight": "model.safetensors",
+                },
+            )
+            self.assertIn("language_model.model.embed_tokens.weight", loaded)
+            self.assertNotIn(
+                "language_model.model.layers.0.experts.0.gate_proj.weight", loaded
+            )
+
     def test_resolve_weight_map_missing_shard_file_raises(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
