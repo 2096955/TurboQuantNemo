@@ -1,0 +1,79 @@
+{
+  "per_kernel_errors": [
+    {
+      "kernel": "matmul_qkv",
+      "max_abs_error": 7.373234205854118e-06,
+      "rmse": 5.735273768875143e-07,
+      "relative_error": 5.736905077916359e-07,
+      "within_threshold": true,
+      "threshold_rmse": 0.001
+    },
+    {
+      "kernel": "rope_q",
+      "max_abs_error": 0.00018384980595720357,
+      "rmse": 4.531617666213081e-06,
+      "relative_error": 4.534729166740815e-06,
+      "within_threshold": true,
+      "threshold_rmse": 0.001
+    },
+    {
+      "kernel": "rope_k",
+      "max_abs_error": 0.00017225677833865305,
+      "rmse": 4.495597706974955e-06,
+      "relative_error": 4.4969327047087685e-06,
+      "within_threshold": true,
+      "threshold_rmse": 0.001
+    },
+    {
+      "kernel": "attention_scores",
+      "max_abs_error": 8.198815088311662e-05,
+      "rmse": 5.071576890998166e-06,
+      "relative_error": 5.07422703646509e-06,
+      "within_threshold": true,
+      "threshold_rmse": 0.1
+    },
+    {
+      "kernel": "softmax",
+      "max_abs_error": 1.0788323917473863e-06,
+      "rmse": 8.409081373693136e-09,
+      "relative_error": 5.097439841855402e-06,
+      "within_threshold": true,
+      "threshold_rmse": 0.001
+    },
+    {
+      "kernel": "attention_output",
+      "max_abs_error": 3.0902965667128912e-06,
+      "rmse": 2.6972350153713483e-07,
+      "relative_error": 4.875946597426041e-06,
+      "within_threshold": true,
+      "threshold_rmse": 0.1
+    },
+    {
+      "kernel": "matmul_output",
+      "max_abs_error": 2.1204107876100775e-06,
+      "rmse": 2.717432535343504e-07,
+      "relative_error": 4.944768351240801e-06,
+      "within_threshold": true,
+      "threshold_rmse": 0.1
+    }
+  ],
+  "perplexity_delta_pct": 1.6e-05,
+  "threshold_pct": 0.5,
+  "pass": true,
+  "known_limitations": [
+    "Omits residual connections, LayerNorm, and FFN",
+    "Partial-pipeline divergence is a proxy, not a bound",
+    "Uses kernel-chain simulation, not e2e model inference",
+    "Novel kernel precision uses high-level MLX as reference"
+  ],
+  "config": {
+    "num_tokens": 1000,
+    "num_heads": 8,
+    "head_dim": 128,
+    "vocab_size": 1000,
+    "kv_compress": false,
+    "seed": 42
+  },
+  "elapsed_seconds": 0.22,
+  "timestamp": "2026-04-14T14:34:23Z"
+}

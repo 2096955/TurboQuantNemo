@@ -1,0 +1,9 @@
+# Benchmark and comparison tool dependencies
+# Install with: pip install -r requirements-benchmark.txt
+
+numpy>=1.24.0
+scipy>=1.10.0
+matplotlib>=3.7.0
+
+# MLX is required for benchmark_mlx_kernels.py
+# mlx>=0.30.4  # Only on macOS, install separately if needed

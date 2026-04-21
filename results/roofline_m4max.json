@@ -1,0 +1,26 @@
+{
+  "hardware": {
+    "chip": "Apple M4 Max",
+    "memory_gb": 128,
+    "gpu_cores": 40,
+    "macos_version": "26.3.1",
+    "metal_gpu_family": "applegpu_g16s"
+  },
+  "calibration": {
+    "peak_fp16_tflops": 6.7,
+    "peak_fp32_tflops": 4.91,
+    "peak_memory_bandwidth_gbs": 22.7,
+    "theoretical_memory_bandwidth_gbs": 546.0,
+    "bandwidth_efficiency_ratio": 0.042,
+    "noop_dispatch_us": 1141.95
+  },
+  "power_baseline": {
+    "avg_package_watts": null,
+    "avg_gpu_watts": null
+  },
+  "valid": false,
+  "warnings": [
+    "Bandwidth efficiency 0.04 < 0.5 - calibration may be unreliable (too few iters=200)"
+  ],
+  "timestamp": "2026-04-14T14:38:12Z"
+}
