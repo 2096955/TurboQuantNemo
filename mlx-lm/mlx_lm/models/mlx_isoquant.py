@@ -725,6 +725,9 @@ class IsoQuantKVCache(TurboQuantKVCache):
         Returns:
             output: (B, num_heads, 1, head_dim) — attention output
         """
+        if self.compressed_keys is None or self._seq_len == 0:
+            return mx.zeros_like(queries)
+
         if not self.supports_fused_attention:
             import warnings
 
