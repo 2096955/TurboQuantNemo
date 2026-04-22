@@ -761,5 +761,49 @@ class TestIsoQuantPromptCachePersistence(unittest.TestCase):
         )
 
 
+class TestTurboQuantFromStateEdgeCases(unittest.TestCase):
+    def test_from_state_with_none_meta_state_raises_clearly(self):
+        """from_state(state, meta_state=None) must raise ValueError, not TypeError."""
+        from mlx_lm.models.mlx_turboquant import TurboQuantKVCache
+
+        with self.assertRaises(ValueError):
+            TurboQuantKVCache.from_state({}, meta_state=None)
+
+
+class TestIsoQuantRoundTrip(unittest.TestCase):
+    def test_isoquant_save_load_produces_same_attention_output(self):
+        """Save IsoQuant cache, load it, verify fused_attention output matches."""
+        from mlx_lm.models.mlx_isoquant import IsoQuantKVCache
+
+        cache = IsoQuantKVCache(
+            num_heads=2,
+            head_dim=128,
+            bit_width=3,
+            codebook_dir=None,
+        )
+        keys = mx.random.normal((1, 2, 8, 128))
+        values = mx.random.normal((1, 2, 8, 128))
+        cache.update_and_fetch(keys, values)
+        cache.finalize_deferred_prefill()
+
+        q = mx.random.normal((1, 2, 1, 128))
+        original_output = cache.fused_attention(q, scale=1.0 / (128**0.5))
+        mx.eval(original_output)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "roundtrip.safetensors")
+            save_prompt_cache(path, [cache])
+            loaded = load_prompt_cache(path)
+
+        loaded_cache = loaded[0]
+        loaded_output = loaded_cache.fused_attention(q, scale=1.0 / (128**0.5))
+        mx.eval(loaded_output)
+
+        self.assertTrue(
+            mx.allclose(original_output, loaded_output, atol=1e-5).item(),
+            "Loaded cache should produce identical attention output",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

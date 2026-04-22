@@ -741,6 +741,11 @@ class TurboQuantKVCache:
     @classmethod
     def from_state(cls, state: dict, meta_state=None, **kwargs):
         # Reconstruct from state (for prefix cache loading)
+        if meta_state is None:
+            raise ValueError(
+                "meta_state is required for from_state reconstruction. "
+                "Cannot restore cache without version, bit_width, num_heads, head_dim."
+            )
         obj = cls.__new__(cls)
         obj.state = state
         obj.meta_state = meta_state
@@ -765,6 +770,11 @@ class TurboQuantKVCache:
 
     @meta_state.setter
     def meta_state(self, v):
+        if v is None:
+            raise ValueError(
+                "meta_state is required for from_state reconstruction. "
+                "Cannot restore cache without version, bit_width, num_heads, head_dim."
+            )
         version = v[0]
         if version not in {"v1", "v2"}:
             raise ValueError(f"Unsupported meta_state version: {version}")
