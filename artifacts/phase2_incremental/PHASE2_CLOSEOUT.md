@@ -123,9 +123,17 @@ NOT starting Phase 3 (NPT=8 fusion) until 8K Phase 2 evidence is captured cleanl
 
 ## Re-run instructions for completing 8K
 
+**IMPORTANT — REBOOT REQUIRED.** Two prior 8K Python processes (PID 86094 from
+21:17, PID 38964 from 23:14) are stuck in `UE` state (uninterruptible kernel
+sleep) and **cannot be killed from userspace** (`kill -9` has no effect). They
+still hold ~13-20 GB each. Only a reboot clears them. Without that, any new 8K
+attempt will land in the same state.
+
 ```bash
-# 1. Free memory: close browser, Slack, Amazon Q Helper, any Codex/Gemini sessions
-# 2. Wait for swap to drain (~5-15 min idle):
+# 1. REBOOT to clear UE-stuck Metal/MLX processes
+# 2. After reboot, free memory: close browser, Slack, Amazon Q Helper, any
+#    Codex/Gemini sessions
+# 3. Wait for swap to drain (~5-15 min idle):
 sysctl vm.swapusage  # target < 10 GB used
 
 # 3. From the worktree, run only the 8K cells:
