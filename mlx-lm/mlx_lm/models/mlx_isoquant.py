@@ -549,10 +549,18 @@ class IsoQuantKVCache(TurboQuantKVCache):
         # Bulk compress
         self.compressed_keys = self._compress_batch(all_keys)
         self.compressed_values = self._compress_batch(all_values)
-        self._invalidate_fused_caches()
+        # Phase 2: pre-populate packed cache once at finalize so decode appends
+        # extend rather than rebuild. Replaces the prior _invalidate_fused_caches()
+        # call which forced a lazy rebuild on every fused_attention.
+        from .fused_kv_decode_kernels import pack_indices_3bit
+
+        self._packed_keys_cache = pack_indices_3bit(self.compressed_keys["indices"])
+        self._packed_values_cache = pack_indices_3bit(self.compressed_values["indices"])
         mx.eval(
             *[v for v in self.compressed_keys.values() if isinstance(v, mx.array)],
             *[v for v in self.compressed_values.values() if isinstance(v, mx.array)],
+            self._packed_keys_cache,
+            self._packed_values_cache,
         )
 
         # Free the FP16 buffer
@@ -648,10 +656,29 @@ class IsoQuantKVCache(TurboQuantKVCache):
         self.compressed_values = _concat_compressed(
             self.compressed_values, new_compressed_vals
         )
-        self._invalidate_fused_caches()
+        # Phase 2: incremental packed-cache append. Pack ONLY the new token's
+        # indices and concatenate to the existing _packed_*_cache; do NOT
+        # invalidate the whole cache. This eliminates the per-step O(stored_T)
+        # repack of the full history that previously dominated decode.
+        from .fused_kv_decode_kernels import pack_indices_3bit
+
+        new_packed_k = pack_indices_3bit(new_compressed_keys["indices"])
+        new_packed_v = pack_indices_3bit(new_compressed_vals["indices"])
+        if self._packed_keys_cache is None:
+            self._packed_keys_cache = new_packed_k
+            self._packed_values_cache = new_packed_v
+        else:
+            self._packed_keys_cache = mx.concatenate(
+                [self._packed_keys_cache, new_packed_k], axis=1
+            )
+            self._packed_values_cache = mx.concatenate(
+                [self._packed_values_cache, new_packed_v], axis=1
+            )
         mx.eval(
             *[v for v in self.compressed_keys.values() if isinstance(v, mx.array)],
             *[v for v in self.compressed_values.values() if isinstance(v, mx.array)],
+            self._packed_keys_cache,
+            self._packed_values_cache,
         )
         self._seq_len += seq_len
         self.offset += seq_len
