@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 import numpy as np
 import mlx.core as mx
@@ -50,6 +51,18 @@ class IsoQuantStats:
         "packed_cache_misses",
         "fallback_invocations",
         "unfused_fallback_calls",
+        "packed_key_repack_ms",
+        "packed_value_repack_ms",
+        "fused_qk_ms",
+        "fused_softmax_ms",
+        "fused_value_ms",
+        "fused_value_tiled_ms",
+        "fused_inverse_ms",
+        "fused_single_kernel_ms",
+        "fused_metal_total_ms",
+        "decode_key_compress_ms",
+        "decode_value_compress_ms",
+        "decode_concat_ms",
     )
 
     def __init__(self) -> None:
@@ -71,6 +84,24 @@ class IsoQuantStats:
             round(1 - self.fused_metal_failures / fused_total, 4)
             if fused_total
             else None
+        )
+        d["packed_repack_ms_total"] = round(
+            self.packed_key_repack_ms + self.packed_value_repack_ms, 3
+        )
+        d["fused_kernel_ms_total"] = round(
+            self.fused_qk_ms
+            + self.fused_softmax_ms
+            + self.fused_value_ms
+            + self.fused_value_tiled_ms
+            + self.fused_inverse_ms
+            + self.fused_single_kernel_ms,
+            3,
+        )
+        d["decode_write_ms_total"] = round(
+            self.decode_key_compress_ms
+            + self.decode_value_compress_ms
+            + self.decode_concat_ms,
+            3,
         )
         return d
 
@@ -396,6 +427,9 @@ class IsoQuantKVCache(TurboQuantKVCache):
             os.environ.get("ISOQUANT_USE_STRUCTURED_MLX", "0") == "1"
         )
         self._use_metal_runtime = os.environ.get("ISOQUANT_USE_METAL", "0") == "1"
+        self._profile_fused_timing = (
+            os.environ.get("ISOQUANT_PROFILE_METAL", "0") == "1"
+        )
         self._metal_runtime_error: str | None = None
         self._fused_metal_ok: bool | None = (
             None  # None=untested, True=works, False=failed
@@ -457,6 +491,9 @@ class IsoQuantKVCache(TurboQuantKVCache):
             os.environ.get("ISOQUANT_USE_STRUCTURED_MLX", "0") == "1"
         )
         self._use_metal_runtime = os.environ.get("ISOQUANT_USE_METAL", "0") == "1"
+        self._profile_fused_timing = (
+            os.environ.get("ISOQUANT_PROFILE_METAL", "0") == "1"
+        )
         self._metal_runtime_error = None
         self._fused_metal_ok = None
         self._packed_keys_cache = None
@@ -520,6 +557,37 @@ class IsoQuantKVCache(TurboQuantKVCache):
     def _invalidate_fused_caches(self) -> None:
         self._packed_keys_cache = None
         self._packed_values_cache = None
+
+    def _profile_mx_call(self, stat_name: str, fn):
+        if not self._profile_fused_timing:
+            return fn()
+
+        mx.synchronize()
+        t0 = time.perf_counter()
+        out = fn()
+        mx.eval(out)
+        mx.synchronize()
+        setattr(
+            _GLOBAL_STATS,
+            stat_name,
+            getattr(_GLOBAL_STATS, stat_name) + (time.perf_counter() - t0) * 1000.0,
+        )
+        return out
+
+    def _profile_mx_eval(self, stat_name: str, *arrays) -> None:
+        if not self._profile_fused_timing:
+            mx.eval(*arrays)
+            return
+
+        mx.synchronize()
+        t0 = time.perf_counter()
+        mx.eval(*arrays)
+        mx.synchronize()
+        setattr(
+            _GLOBAL_STATS,
+            stat_name,
+            getattr(_GLOBAL_STATS, stat_name) + (time.perf_counter() - t0) * 1000.0,
+        )
 
     def finalize_deferred_prefill(self) -> None:
         """Bulk-compress accumulated FP16 KV into IsoQuant at the prefill→decode boundary.
@@ -640,8 +708,14 @@ class IsoQuantKVCache(TurboQuantKVCache):
         # Decode phase (post-finalize): compress incrementally.
         _GLOBAL_STATS.decode_calls += 1
         _GLOBAL_STATS.decode_tokens += seq_len
-        new_compressed_keys = self._compress_batch(k_batch)
-        new_compressed_vals = self._compress_batch(v_batch)
+        new_compressed_keys = self._profile_mx_call(
+            "decode_key_compress_ms",
+            lambda: self._compress_batch(k_batch),
+        )
+        new_compressed_vals = self._profile_mx_call(
+            "decode_value_compress_ms",
+            lambda: self._compress_batch(v_batch),
+        )
 
         def _concat_compressed(existing, new):
             if not existing:
@@ -674,7 +748,8 @@ class IsoQuantKVCache(TurboQuantKVCache):
             self._packed_values_cache = mx.concatenate(
                 [self._packed_values_cache, new_packed_v], axis=1
             )
-        mx.eval(
+        self._profile_mx_eval(
+            "decode_concat_ms",
             *[v for v in self.compressed_keys.values() if isinstance(v, mx.array)],
             *[v for v in self.compressed_values.values() if isinstance(v, mx.array)],
             self._packed_keys_cache,
@@ -831,15 +906,20 @@ class IsoQuantKVCache(TurboQuantKVCache):
         """
         from .fused_kv_decode_kernels import pack_indices_3bit
 
+        total_t0 = time.perf_counter() if self._profile_fused_timing else None
         if self._packed_keys_cache is None:
             _GLOBAL_STATS.packed_cache_misses += 1
-            self._packed_keys_cache = pack_indices_3bit(self.compressed_keys["indices"])
+            self._packed_keys_cache = self._profile_mx_call(
+                "packed_key_repack_ms",
+                lambda: pack_indices_3bit(self.compressed_keys["indices"]),
+            )
         else:
             _GLOBAL_STATS.packed_cache_hits += 1
         if self._packed_values_cache is None:
             _GLOBAL_STATS.packed_cache_misses += 1
-            self._packed_values_cache = pack_indices_3bit(
-                self.compressed_values["indices"]
+            self._packed_values_cache = self._profile_mx_call(
+                "packed_value_repack_ms",
+                lambda: pack_indices_3bit(self.compressed_values["indices"]),
             )
         else:
             _GLOBAL_STATS.packed_cache_hits += 1
@@ -854,7 +934,7 @@ class IsoQuantKVCache(TurboQuantKVCache):
         kv_head_map = mx.arange(H_q, dtype=mx.uint32) // repeats
 
         if T <= self._SINGLE_KERNEL_T_THRESHOLD:
-            return self._fused_attention_single_kernel(
+            out = self._fused_attention_single_kernel(
                 k_packed,
                 v_packed,
                 centroids,
@@ -869,7 +949,7 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 D,
             )
         else:
-            return self._fused_attention_3kernel(
+            out = self._fused_attention_3kernel(
                 k_packed,
                 v_packed,
                 centroids,
@@ -885,6 +965,13 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 D,
                 repeats,
             )
+        if total_t0 is not None:
+            mx.eval(out)
+            mx.synchronize()
+            _GLOBAL_STATS.fused_metal_total_ms += (
+                time.perf_counter() - total_t0
+            ) * 1000.0
+        return out
 
     def _fused_attention_single_kernel(
         self,
@@ -904,22 +991,30 @@ class IsoQuantKVCache(TurboQuantKVCache):
         """Single fully-fused kernel: QK + online softmax + V + inverse rotation."""
         from .fused_kv_decode_kernels import fully_fused_attention
 
-        return fully_fused_attention(
-            K_packed=k_packed,
-            V_packed=v_packed,
-            centroids=centroids,
-            k_norms=k_norms,
-            v_norms=v_norms,
-            q_rot=q_rot,
-            kv_head_map=kv_head_map,
-            blocks_t=self.block_matrices_t,
-            scale=scale,
-            num_heads=H_q,
-            seq_len=T,
-            head_dim=D,
-            use_hadamard=self._use_hadamard,
-            mask=mask,
+        return self._profile_mx_call(
+            "fused_single_kernel_ms",
+            lambda: fully_fused_attention(
+                K_packed=k_packed,
+                V_packed=v_packed,
+                centroids=centroids,
+                k_norms=k_norms,
+                v_norms=v_norms,
+                q_rot=q_rot,
+                kv_head_map=kv_head_map,
+                blocks_t=self.block_matrices_t,
+                scale=scale,
+                num_heads=H_q,
+                seq_len=T,
+                head_dim=D,
+                use_hadamard=self._use_hadamard,
+                mask=mask,
+            ),
         )
+
+    # Crossover above which T-parallel tiling of fused_value_accum wins
+    # over the serial-T baseline. Default chosen from the analyst's M4 Max
+    # heuristic (128-256 sweet spot); override via ISOQUANT_VACCUM_TILE.
+    _T_TILED_VALUE_ACCUM_THRESHOLD = 256
 
     def _fused_attention_3kernel(
         self,
@@ -938,11 +1033,20 @@ class IsoQuantKVCache(TurboQuantKVCache):
         D,
         repeats,
     ) -> mx.array:
-        """Legacy 3-kernel pipeline: QK dot + softmax + V accum + inverse rotation."""
+        """Legacy 3-kernel pipeline: QK dot + softmax + V accum + inverse rotation.
+
+        At long context the V-accumulation step is the dominant cost (~39% of
+        decode wall-clock at T=4K per instrumentation). The T-parallel-tiled
+        variant in ``fused_kv_decode_tiled`` is selected automatically when T
+        exceeds ``_T_TILED_VALUE_ACCUM_THRESHOLD``.
+        """
         from .fused_kv_decode_kernels import fused_qk_dot, fused_value_accum
 
-        scores = fused_qk_dot(
-            k_packed, centroids, k_norms, q_rot, kv_head_map, H_q, T, D
+        scores = self._profile_mx_call(
+            "fused_qk_ms",
+            lambda: fused_qk_dot(
+                k_packed, centroids, k_norms, q_rot, kv_head_map, H_q, T, D
+            ),
         )
         scores = scores * scale
 
@@ -952,14 +1056,47 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 m = m.squeeze(0)
             scores = scores + m
 
-        attn_weights = mx.softmax(scores, axis=-1)
-
-        output_rot = fused_value_accum(
-            v_packed, centroids, v_norms, attn_weights, kv_head_map, H_q, T, D
+        attn_weights = self._profile_mx_call(
+            "fused_softmax_ms",
+            lambda: mx.softmax(scores, axis=-1),
         )
 
-        return self._apply_inverse_rotation(
-            output_rot, H_q, H_kv, D, repeats, use_metal_kernel=True
+        if T > self._T_TILED_VALUE_ACCUM_THRESHOLD:
+            import os
+
+            from .fused_kv_decode_tiled import fused_value_accum_tiled
+
+            try:
+                tile_size = int(os.environ.get("ISOQUANT_VACCUM_TILE", 128))
+            except ValueError:
+                tile_size = 128
+            output_rot = self._profile_mx_call(
+                "fused_value_tiled_ms",
+                lambda: fused_value_accum_tiled(
+                    v_packed,
+                    centroids,
+                    v_norms,
+                    attn_weights,
+                    kv_head_map,
+                    H_q,
+                    T,
+                    D,
+                    tile_size=tile_size,
+                ),
+            )
+        else:
+            output_rot = self._profile_mx_call(
+                "fused_value_ms",
+                lambda: fused_value_accum(
+                    v_packed, centroids, v_norms, attn_weights, kv_head_map, H_q, T, D
+                ),
+            )
+
+        return self._profile_mx_call(
+            "fused_inverse_ms",
+            lambda: self._apply_inverse_rotation(
+                output_rot, H_q, H_kv, D, repeats, use_metal_kernel=True
+            ),
         )
 
     # ----- MLX-ops fallback (centroid gather + dense matmul) -----
