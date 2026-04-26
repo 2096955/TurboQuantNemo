@@ -88,6 +88,40 @@ def _identity_blocks(h_kv: int, d: int) -> mx.array:
     return mx.array(blocks)
 
 
+def _random_so4_blocks(h_kv: int, d: int, seed: int = 42) -> tuple[mx.array, mx.array]:
+    """Random SO(4) block matrices and their transposes."""
+    from mlx_lm.models.mlx_isoquant import _build_isoclinic_block_matrices
+
+    rng = np.random.default_rng(seed)
+    n_blocks = d // 4
+    blocks_list = []
+    blocks_t_list = []
+    for _ in range(h_kv):
+        blk = _build_isoclinic_block_matrices(d, rng)  # (n_blocks, 4, 4)
+        blocks_list.append(blk)
+        blocks_t_list.append(blk.transpose(0, 2, 1))
+    blocks = mx.array(np.stack(blocks_list, dtype=np.float32))
+    blocks_t = mx.array(np.stack(blocks_t_list, dtype=np.float32))
+    return blocks, blocks_t
+
+
+def _python_inverse_rotation(
+    output_rot: mx.array,
+    blocks: mx.array,
+    use_hadamard: bool,
+) -> mx.array:
+    """Python reference inverse rotation: SO(4) blocks then optional WHT."""
+    from mlx_lm.models.mlx_isoquant import (
+        _apply_so4_blocks_last_axis,
+        _fwht_last_axis,
+    )
+
+    y = _apply_so4_blocks_last_axis(output_rot, blocks)
+    if use_hadamard:
+        y = _fwht_last_axis(y)
+    return y
+
+
 def test_fused_npt8_matches_stable_3kernel_no_inverse_rotation() -> None:
     from mlx_lm.models.fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
 
@@ -226,3 +260,195 @@ def test_fused_npt8_with_storage_stride() -> None:
     )
     mx.eval(ref, out)
     np.testing.assert_allclose(np.asarray(ref), np.asarray(out), rtol=1e-3, atol=1e-4)
+
+
+def test_fused_npt8_inverse_rotation_non_identity() -> None:
+    """NPT=8 kernel applies inverse SO(4) rotation with random blocks."""
+    from mlx_lm.models.fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
+
+    t, h_kv, h_q, d = 128, 2, 16, 256
+    k_p, v_p, c, nk, nv, q, kv_map = _synthetic_d256(t, h_kv, h_q)
+    scale = float(1.0 / np.sqrt(d))
+    blocks, blocks_t = _random_so4_blocks(h_kv, d, seed=77)
+
+    ref_rot = _ref_3kernel_stable(k_p, v_p, c, nk, nv, q, kv_map, h_q, t, d, scale)
+    mx.eval(ref_rot)
+
+    repeats = h_q // h_kv
+    ref_rot_grouped = ref_rot.reshape(h_kv, repeats, d)
+    inv_parts = []
+    for g in range(repeats):
+        group_out = ref_rot_grouped[:, g, :]
+        inv_parts.append(
+            _python_inverse_rotation(group_out, blocks, use_hadamard=False)
+        )
+    ref = mx.stack(inv_parts, axis=1).reshape(h_q, d)
+
+    out = fused_attention_npt8_tiled(
+        k_p,
+        v_p,
+        c,
+        nk,
+        nv,
+        q,
+        kv_map,
+        blocks_t=blocks_t,
+        scale=scale,
+        use_hadamard=False,
+        mask=None,
+        tile_size=128,
+        num_heads=h_q,
+        seq_len=t,
+        head_dim=d,
+    )
+    mx.eval(ref, out)
+    np.testing.assert_allclose(np.asarray(ref), np.asarray(out), rtol=1e-3, atol=1e-4)
+
+
+def test_fused_npt8_with_hadamard() -> None:
+    """NPT=8 kernel applies inverse SO(4) + WHT (Hadamard) correctly."""
+    from mlx_lm.models.fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
+
+    t, h_kv, h_q, d = 128, 2, 16, 256
+    k_p, v_p, c, nk, nv, q, kv_map = _synthetic_d256(t, h_kv, h_q)
+    scale = float(1.0 / np.sqrt(d))
+    blocks, blocks_t = _random_so4_blocks(h_kv, d, seed=88)
+
+    ref_rot = _ref_3kernel_stable(k_p, v_p, c, nk, nv, q, kv_map, h_q, t, d, scale)
+    mx.eval(ref_rot)
+
+    repeats = h_q // h_kv
+    ref_rot_grouped = ref_rot.reshape(h_kv, repeats, d)
+    inv_parts = []
+    for g in range(repeats):
+        group_out = ref_rot_grouped[:, g, :]
+        inv_parts.append(_python_inverse_rotation(group_out, blocks, use_hadamard=True))
+    ref = mx.stack(inv_parts, axis=1).reshape(h_q, d)
+
+    out = fused_attention_npt8_tiled(
+        k_p,
+        v_p,
+        c,
+        nk,
+        nv,
+        q,
+        kv_map,
+        blocks_t=blocks_t,
+        scale=scale,
+        use_hadamard=True,
+        mask=None,
+        tile_size=128,
+        num_heads=h_q,
+        seq_len=t,
+        head_dim=d,
+    )
+    mx.eval(ref, out)
+    np.testing.assert_allclose(np.asarray(ref), np.asarray(out), rtol=1e-2, atol=1e-3)
+
+
+def test_npt8_cache_level_dispatch() -> None:
+    """IsoQuantKVCache.fused_attention dispatches NPT=8 when ISOQUANT_USE_NPT8_FUSED=1 and D=256."""
+    from unittest import mock
+
+    from mlx_lm.models.base import scaled_dot_product_attention
+    from mlx_lm.models.mlx_isoquant import IsoQuantKVCache
+    from mlx_lm.models.mlx_turboquant import get_default_codebook_dir
+
+    h_kv, d, seq_len, bit_width = 2, 256, 32, 3
+    cache = IsoQuantKVCache(
+        num_heads=h_kv,
+        head_dim=d,
+        bit_width=bit_width,
+        codebook_dir=get_default_codebook_dir(),
+    )
+    if cache._fallback_cache is not None:
+        return  # no codebook available
+
+    rng = np.random.default_rng(42)
+    h_q = h_kv * 8  # GQA repeats=8
+    keys = mx.array(rng.normal(size=(1, h_kv, seq_len, d)).astype(np.float16))
+    values = mx.array(rng.normal(size=(1, h_kv, seq_len, d)).astype(np.float16))
+    cache.update_and_fetch(keys, values)
+    cache.finalize_deferred_prefill()
+
+    queries = mx.array(rng.normal(size=(1, h_q, 1, d)).astype(np.float32))
+    scale = d**-0.5
+
+    # Dense path (reconstruct + SDPA)
+    keys_dense = cache.reconstruct_keys()
+    values_dense = cache.get_values()
+    output_dense = scaled_dot_product_attention(
+        queries, keys_dense, values_dense, cache=None, scale=scale, mask=None
+    )
+    mx.eval(output_dense)
+
+    # 3-kernel fused path (env flag OFF)
+    with mock.patch.dict(os.environ, {"ISOQUANT_USE_NPT8_FUSED": "0"}):
+        output_3kernel = cache.fused_attention(queries, scale=scale, mask=None)
+    mx.eval(output_3kernel)
+
+    # NPT=8 fused path (env flag ON)
+    with mock.patch.dict(os.environ, {"ISOQUANT_USE_NPT8_FUSED": "1"}):
+        output_npt8 = cache.fused_attention(queries, scale=scale, mask=None)
+    mx.eval(output_npt8)
+
+    # Both fused paths should match dense within tolerance
+    np.testing.assert_allclose(
+        np.asarray(output_3kernel), np.asarray(output_dense), rtol=1e-2, atol=1e-2
+    )
+    np.testing.assert_allclose(
+        np.asarray(output_npt8), np.asarray(output_dense), rtol=1e-2, atol=1e-2
+    )
+    # NPT=8 and 3-kernel should match each other tightly
+    np.testing.assert_allclose(
+        np.asarray(output_npt8), np.asarray(output_3kernel), rtol=1e-3, atol=1e-3
+    )
+
+
+def test_npt8_cache_level_prealloc_mode() -> None:
+    """NPT=8 dispatch works correctly in prealloc cache mode."""
+    from unittest import mock
+
+    from mlx_lm.models.mlx_isoquant import IsoQuantKVCache
+    from mlx_lm.models.mlx_turboquant import get_default_codebook_dir
+
+    h_kv, d, seq_len, bit_width = 2, 256, 32, 3
+    cache_concat = IsoQuantKVCache(
+        num_heads=h_kv,
+        head_dim=d,
+        bit_width=bit_width,
+        codebook_dir=get_default_codebook_dir(),
+    )
+    if cache_concat._fallback_cache is not None:
+        return
+
+    rng = np.random.default_rng(55)
+    h_q = h_kv * 4
+    keys = mx.array(rng.normal(size=(1, h_kv, seq_len, d)).astype(np.float16))
+    values = mx.array(rng.normal(size=(1, h_kv, seq_len, d)).astype(np.float16))
+
+    cache_concat.update_and_fetch(keys, values)
+    cache_concat.finalize_deferred_prefill()
+
+    cache_prealloc = IsoQuantKVCache(
+        num_heads=h_kv,
+        head_dim=d,
+        bit_width=bit_width,
+        codebook_dir=get_default_codebook_dir(),
+    )
+    with mock.patch.dict(os.environ, {"ISOQUANT_CACHE_MODE": "prealloc"}):
+        cache_prealloc._cache_mode = "prealloc"
+    cache_prealloc.update_and_fetch(keys, values)
+    cache_prealloc.finalize_deferred_prefill()
+
+    queries = mx.array(rng.normal(size=(1, h_q, 1, d)).astype(np.float32))
+    scale = d**-0.5
+
+    with mock.patch.dict(os.environ, {"ISOQUANT_USE_NPT8_FUSED": "1"}):
+        out_concat = cache_concat.fused_attention(queries, scale=scale, mask=None)
+        out_prealloc = cache_prealloc.fused_attention(queries, scale=scale, mask=None)
+    mx.eval(out_concat, out_prealloc)
+
+    np.testing.assert_allclose(
+        np.asarray(out_prealloc), np.asarray(out_concat), rtol=1e-3, atol=1e-3
+    )
