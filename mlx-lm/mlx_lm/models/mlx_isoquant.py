@@ -584,7 +584,20 @@ class IsoQuantKVCache(TurboQuantKVCache):
         self._packed_values_cache = None
 
     def _ensure_buffer_capacity(self, additional: int) -> None:
-        """Extend all 6 preallocated buffers if offset + additional > capacity."""
+        """Extend all 6 preallocated buffers if offset + additional > capacity.
+
+        If packed caches are missing (e.g. after from_state restore), rebuild
+        them from the compressed indices first.
+        """
+        # Lazy rebuild of packed cache (handles from_state restore in prealloc mode)
+        if self._packed_keys_cache is None or self._packed_values_cache is None:
+            from .fused_kv_decode_kernels import pack_indices_3bit
+
+            self._packed_keys_cache = pack_indices_3bit(self.compressed_keys["indices"])
+            self._packed_values_cache = pack_indices_3bit(
+                self.compressed_values["indices"]
+            )
+
         needed = self.offset + additional
         current_cap = self.compressed_keys["indices"].shape[1]
 
@@ -1123,7 +1136,24 @@ class IsoQuantKVCache(TurboQuantKVCache):
         else:
             storage_stride = T
 
-        if T <= self._SINGLE_KERNEL_T_THRESHOLD:
+        if D == 256 and os.environ.get("ISOQUANT_USE_NPT8_FUSED", "0") == "1":
+            out = self._fused_attention_npt8(
+                k_packed,
+                v_packed,
+                centroids,
+                k_norms,
+                v_norms,
+                q_rot,
+                kv_head_map,
+                scale,
+                mask,
+                H_q,
+                H_kv,
+                T,
+                D,
+                storage_stride,
+            )
+        elif T <= self._SINGLE_KERNEL_T_THRESHOLD:
             out = self._fused_attention_single_kernel(
                 k_packed,
                 v_packed,
@@ -1201,6 +1231,48 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 head_dim=D,
                 use_hadamard=self._use_hadamard,
                 mask=mask,
+                storage_stride=storage_stride,
+            ),
+        )
+
+    def _fused_attention_npt8(
+        self,
+        k_packed,
+        v_packed,
+        centroids,
+        k_norms,
+        v_norms,
+        q_rot,
+        kv_head_map,
+        scale,
+        mask,
+        H_q,
+        H_kv,
+        T,
+        D,
+        storage_stride,
+    ) -> mx.array:
+        """NPT=8 single-pass fused kernel for head_dim=256."""
+        from .fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
+
+        return self._profile_mx_call(
+            "fused_single_kernel_ms",
+            lambda: fused_attention_npt8_tiled(
+                K_packed=k_packed,
+                V_packed=v_packed,
+                centroids=centroids,
+                k_norms=k_norms,
+                v_norms=v_norms,
+                q_rot=q_rot,
+                kv_head_map=kv_head_map,
+                blocks_t=self.block_matrices_t,
+                scale=scale,
+                use_hadamard=self._use_hadamard,
+                mask=mask,
+                tile_size=128,
+                num_heads=H_q,
+                seq_len=T,
+                head_dim=D,
                 storage_stride=storage_stride,
             ),
         )
@@ -1435,7 +1507,8 @@ class IsoQuantKVCache(TurboQuantKVCache):
         """Trim prefix tokens, invalidating packed caches."""
         super().trim(n)
         self._invalidate_fused_caches()
-        if self._cache_mode == "prealloc" and self.compressed_keys:
+        mode = getattr(self, "_cache_mode", "concat_append")
+        if mode == "prealloc" and self.compressed_keys:
             from .fused_kv_decode_kernels import pack_indices_3bit
 
             self._packed_keys_cache = pack_indices_3bit(self.compressed_keys["indices"])
@@ -1445,7 +1518,7 @@ class IsoQuantKVCache(TurboQuantKVCache):
             self._extend_buffers_by_step()
 
     def asymmetric_attention_scores(self, query, scale=1.0):
-        if self._cache_mode == "prealloc":
+        if getattr(self, "_cache_mode", "concat_append") == "prealloc":
             saved_keys = self.compressed_keys
             saved_values = self.compressed_values
             T = self.offset
