@@ -16,6 +16,7 @@ os.environ.setdefault("ISOQUANT_BITS", "3")
 
 import mlx.core as mx
 import numpy as np
+import pytest
 from mlx_lm.models.fused_kv_decode_kernels import (
     fused_qk_dot,
     fused_value_accum,

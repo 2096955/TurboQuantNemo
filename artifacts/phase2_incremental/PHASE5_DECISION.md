@@ -112,7 +112,7 @@ Gated behind `ISOQUANT_USE_NPT8_FUSED=1`, only triggers for `head_dim=256`.
 ## Branch state
 
 ```
-isoquant-decode-perf (7+ commits ahead of main):
+isoquant-decode-perf (12 commits ahead of main at the time of writing):
   8a9b830  feat: O(1) preallocated-buffer decode
   acca18e  docs: Phase 2 closeout + Qwen3.6 A/B
   ef97d5d  evidence: Gemma 4 +28% decode throughput
@@ -120,6 +120,7 @@ isoquant-decode-perf (7+ commits ahead of main):
   615ccb9  docs: Phase 5 decision
   10ee227  feat: Phase 3 — NPT=8 single-pass fused attention kernel
   7f62154  test: Phase 3 review gaps — rotation, Hadamard, cache dispatch
+  4a87078  refactor: Phase 3 review hardening — honest naming, dispatch proof, artifacts
 ```
 
 All changes are opt-in (`ISOQUANT_CACHE_MODE=prealloc`, `ISOQUANT_USE_NPT8_FUSED=1`).

@@ -1,6 +1,8 @@
 # Fused NPT=8 T-tiled attention kernel — design
 
-**Status:** draft — implementation in `mlx_lm.models.fused_kv_decode_npt8_tiled` (Phase 3).
+**Status:** draft target design. Current Phase 3 v1 implementation is the
+single-pass kernel in `mlx_lm.models.fused_kv_decode_npt8`; this spec remains
+the more ambitious T-tiled v2 direction.
 
 **Context:** `fully_fused_attention` in `fused_kv_decode_kernels.py` requires `head_dim=128` (NPT=4) because the Metal source assumes each thread’s `NPT` dimensions fit one 3-byte packed word in the inner loop. For `head_dim=256` (NPT=8), Phase 3 adds a new pipeline: T-tile parallel partials, FlashAttention-style merge, then inverse rotation.
 
@@ -23,7 +25,8 @@ fused_attention_npt8_tiled(
 ) -> (H_q, D=256) float32
 ```
 
-Wrapper also passes `num_heads`, `seq_len`, `head_dim`, optional `storage_stride` for padded KV buffers.
+If built, the wrapper would also pass `num_heads`, `seq_len`, `head_dim`,
+optional `storage_stride` for padded KV buffers.
 
 ## Threadgroup map (target)
 
