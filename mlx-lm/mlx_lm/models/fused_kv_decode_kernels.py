@@ -47,6 +47,7 @@ _FUSED_QK_DOT_SOURCE = """
 
     uint D = head_dim[0];
     uint T = seq_len[0];
+    uint T_stride = storage_stride[0];
     uint VALS_PER_WORD = 8;
     uint PACKED_WORDS = D / VALS_PER_WORD;
     uint TG_SIZE = threads_per_threadgroup.x;
@@ -59,7 +60,7 @@ _FUSED_QK_DOT_SOURCE = """
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     // Pointer to this token's packed K for this head
-    const device uint8_t* packed_base = K_packed + (kv_head_idx * T + token_idx) * PACKED_WORDS * 3;
+    const device uint8_t* packed_base = K_packed + (kv_head_idx * T_stride + token_idx) * PACKED_WORDS * 3;
 
     float acc = 0.0f;
 
@@ -86,7 +87,7 @@ _FUSED_QK_DOT_SOURCE = """
     acc = simd_sum(acc);
 
     if (lane == 0) {
-        float norm_val = norms[(kv_head_idx * T + token_idx)];
+        float norm_val = norms[(kv_head_idx * T_stride + token_idx)];
         scores[q_head_idx * T + token_idx] = acc * norm_val;
     }
 """
@@ -101,6 +102,7 @@ _FUSED_VALUE_ACCUM_SOURCE = """
 
     uint D = head_dim[0];
     uint T = seq_len[0];
+    uint T_stride = storage_stride[0];
     uint VALS_PER_WORD = 8;
     uint PACKED_WORDS = D / VALS_PER_WORD;
     uint TG_SIZE = threads_per_threadgroup.x;
@@ -116,8 +118,8 @@ _FUSED_VALUE_ACCUM_SOURCE = """
             float attn_w = attn_weights[q_head_idx * T + t];
             if (attn_w == 0.0f) continue;
 
-            float norm_val = norms[kv_head_idx * T + t];
-            const device uint8_t* packed_base = V_packed + (kv_head_idx * T + t) * PACKED_WORDS * 3;
+            float norm_val = norms[kv_head_idx * T_stride + t];
+            const device uint8_t* packed_base = V_packed + (kv_head_idx * T_stride + t) * PACKED_WORDS * 3;
 
             // Read the 3-byte word containing this dimension
             uint byte0 = packed_base[w_idx * 3 + 0];
@@ -166,6 +168,7 @@ _FULLY_FUSED_ATTENTION_SOURCE = """
     uint q_head = threadgroup_position_in_grid.y;
     uint kv_head = kv_head_map[q_head];
     uint T = seq_len[0];
+    uint T_stride = storage_stride[0];
     uint use_mask = has_mask[0];
 
     // Each thread owns NPT consecutive dimensions
@@ -190,8 +193,8 @@ _FULLY_FUSED_ATTENTION_SOURCE = """
     for (uint i = 0; i < NPT; i++) O_r[i] = 0.0f;
 
     // Pre-compute base offsets for K and V packed data
-    uint kv_k_base = kv_head * T * PACKED_WORDS * 3;
-    uint kv_v_base = kv_head * T * PACKED_WORDS * 3;
+    uint kv_k_base = kv_head * T_stride * PACKED_WORDS * 3;
+    uint kv_v_base = kv_head * T_stride * PACKED_WORDS * 3;
     uint stride_bytes = PACKED_WORDS * 3;
 
     // === Main loop: single pass over all KV tokens ===
@@ -199,7 +202,7 @@ _FULLY_FUSED_ATTENTION_SOURCE = """
         // --- Decode K[t] for this thread's dims ---
         uint k_off = kv_k_base + t * stride_bytes + w_byte;
         uint kw = uint(K_packed[k_off]) | (uint(K_packed[k_off+1]) << 8) | (uint(K_packed[k_off+2]) << 16);
-        float k_norm = k_norms[kv_head * T + t];
+        float k_norm = k_norms[kv_head * T_stride + t];
 
         // Partial dot product over this thread's NPT dimensions
         float partial = 0.0f;
@@ -222,7 +225,7 @@ _FULLY_FUSED_ATTENTION_SOURCE = """
         // --- Decode V[t] for this thread's dims and accumulate ---
         uint v_off = kv_v_base + t * stride_bytes + w_byte;
         uint vw = uint(V_packed[v_off]) | (uint(V_packed[v_off+1]) << 8) | (uint(V_packed[v_off+2]) << 16);
-        float v_norm = v_norms[kv_head * T + t];
+        float v_norm = v_norms[kv_head * T_stride + t];
 
         for (uint i = 0; i < NPT; i++) {
             float v_val = centroids[(vw >> ((bp_base + i) * 3)) & 0x7] * v_norm;
@@ -288,8 +291,9 @@ _fused_kernel_cache: dict[str, any] = {}
 
 
 def _get_fused_qk_kernel():
-    if "fused_qk" not in _fused_kernel_cache:
-        _fused_kernel_cache["fused_qk"] = mx.fast.metal_kernel(
+    key = "fused_qk_v2"
+    if key not in _fused_kernel_cache:
+        _fused_kernel_cache[key] = mx.fast.metal_kernel(
             name="fused_qk_dot_3bit",
             input_names=[
                 "K_packed",
@@ -299,16 +303,18 @@ def _get_fused_qk_kernel():
                 "kv_head_map",
                 "head_dim",
                 "seq_len",
+                "storage_stride",
             ],
             output_names=["scores"],
             source=_FUSED_QK_DOT_SOURCE,
         )
-    return _fused_kernel_cache["fused_qk"]
+    return _fused_kernel_cache[key]
 
 
 def _get_fused_value_kernel():
-    if "fused_val" not in _fused_kernel_cache:
-        _fused_kernel_cache["fused_val"] = mx.fast.metal_kernel(
+    key = "fused_val_v2"
+    if key not in _fused_kernel_cache:
+        _fused_kernel_cache[key] = mx.fast.metal_kernel(
             name="fused_value_accum_3bit",
             input_names=[
                 "V_packed",
@@ -318,15 +324,16 @@ def _get_fused_value_kernel():
                 "kv_head_map",
                 "head_dim",
                 "seq_len",
+                "storage_stride",
             ],
             output_names=["output"],
             source=_FUSED_VALUE_ACCUM_SOURCE,
         )
-    return _fused_kernel_cache["fused_val"]
+    return _fused_kernel_cache[key]
 
 
 def _get_fully_fused_kernel(use_hadamard: bool):
-    key = f"fully_fused_h{int(use_hadamard)}"
+    key = f"fully_fused_v2_h{int(use_hadamard)}"
     if key not in _fused_kernel_cache:
         _fused_kernel_cache[key] = mx.fast.metal_kernel(
             name=f"fully_fused_attn_3bit_h{int(use_hadamard)}",
@@ -343,6 +350,7 @@ def _get_fully_fused_kernel(use_hadamard: bool):
                 "seq_len",
                 "mask_data",
                 "has_mask",
+                "storage_stride",
             ],
             output_names=["output"],
             source=_FULLY_FUSED_ATTENTION_SOURCE,
@@ -394,6 +402,7 @@ def fused_qk_dot(
     num_heads: int,
     seq_len: int,
     head_dim: int,
+    storage_stride: int | None = None,
 ) -> mx.array:
     """Compute attention scores Q·Kᵀ from 3-bit packed K without reconstruction.
 
@@ -403,6 +412,7 @@ def fused_qk_dot(
         norms: (num_heads, seq_len) float32 — stored ||k|| norms
         q: (num_heads, head_dim) float32 — query vectors (one per head)
         num_heads, seq_len, head_dim: dimensions
+        storage_stride: buffer stride along T axis (defaults to seq_len)
 
     Returns:
         scores: (num_heads, seq_len) float32 — attention scores
@@ -414,6 +424,9 @@ def fused_qk_dot(
     kernel = _get_fused_qk_kernel()
     hd = mx.array([head_dim], dtype=mx.uint32)
     sl = mx.array([seq_len], dtype=mx.uint32)
+    ss = mx.array(
+        [storage_stride if storage_stride is not None else seq_len], dtype=mx.uint32
+    )
 
     (scores,) = kernel(
         inputs=[
@@ -424,6 +437,7 @@ def fused_qk_dot(
             kv_head_map.reshape(-1),
             hd,
             sl,
+            ss,
         ],
         output_shapes=[(num_heads * seq_len,)],
         output_dtypes=[mx.float32],
@@ -442,6 +456,7 @@ def fused_value_accum(
     num_heads: int,
     seq_len: int,
     head_dim: int,
+    storage_stride: int | None = None,
 ) -> mx.array:
     """Compute attention-weighted value sum from 3-bit packed V in rotated space.
 
@@ -454,6 +469,7 @@ def fused_value_accum(
         norms: (num_heads, seq_len) float32 — stored ||v|| norms
         attn_weights: (num_heads, seq_len) float32 — softmax attention weights
         num_heads, seq_len, head_dim: dimensions
+        storage_stride: buffer stride along T axis (defaults to seq_len)
 
     Returns:
         output_rotated: (num_heads, head_dim) float32 — attention output in rotated space
@@ -465,6 +481,9 @@ def fused_value_accum(
     kernel = _get_fused_value_kernel()
     hd = mx.array([head_dim], dtype=mx.uint32)
     sl = mx.array([seq_len], dtype=mx.uint32)
+    ss = mx.array(
+        [storage_stride if storage_stride is not None else seq_len], dtype=mx.uint32
+    )
 
     (output,) = kernel(
         inputs=[
@@ -475,6 +494,7 @@ def fused_value_accum(
             kv_head_map.reshape(-1),
             hd,
             sl,
+            ss,
         ],
         output_shapes=[(num_heads * head_dim,)],
         output_dtypes=[mx.float32],
@@ -499,6 +519,7 @@ def fully_fused_attention(
     head_dim: int,
     use_hadamard: bool = True,
     mask: mx.array | None = None,
+    storage_stride: int | None = None,
 ) -> mx.array:
     """Single-kernel fully-fused attention: QK dot + online softmax + V accum + inverse rotation.
 
@@ -520,6 +541,7 @@ def fully_fused_attention(
         head_dim: D (head dimension, must be divisible by 32)
         use_hadamard: whether to apply WHT in inverse rotation
         mask: optional (H_q, T) or broadcastable attention mask
+        storage_stride: buffer stride along T axis (defaults to seq_len)
 
     Returns:
         output: (H_q, D) float32 — attention output in original space
@@ -547,6 +569,9 @@ def fully_fused_attention(
 
     scale_arr = mx.array([scale], dtype=mx.float32)
     sl = mx.array([seq_len], dtype=mx.uint32)
+    ss = mx.array(
+        [storage_stride if storage_stride is not None else seq_len], dtype=mx.uint32
+    )
 
     (output,) = kernel(
         inputs=[
@@ -562,6 +587,7 @@ def fully_fused_attention(
             sl,
             mask_flat,
             has_mask_val,
+            ss,
         ],
         template=[
             ("D", head_dim),
@@ -619,6 +645,7 @@ def fused_isoquant_attention(
     scale: float,
     mask: mx.array | None = None,
     num_kv_heads: int | None = None,
+    storage_stride: int | None = None,
 ) -> mx.array:
     """Full fused IsoQuant attention: Q·Kᵀ → softmax → V·a → inverse rotate.
 
@@ -642,6 +669,7 @@ def fused_isoquant_attention(
         scale: float — attention scale (1/sqrt(d_k))
         mask: optional attention mask
         num_kv_heads: KV head count (defaults to num_q_heads if None)
+        storage_stride: buffer stride along T axis (defaults to seq_len)
 
     Returns:
         output: (batch, num_q_heads, 1, head_dim) — attention output
@@ -673,6 +701,7 @@ def fused_isoquant_attention(
         num_heads=H_q,
         seq_len=T,
         head_dim=D,
+        storage_stride=storage_stride,
     )
     scores = scores * scale  # (H_q, T)
 
@@ -696,6 +725,7 @@ def fused_isoquant_attention(
         num_heads=H_q,
         seq_len=T,
         head_dim=D,
+        storage_stride=storage_stride,
     )  # (H_q, D) — still in rotated space
 
     # Step 5: Kernel D — single inverse rotation on aggregated output

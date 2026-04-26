@@ -395,6 +395,8 @@ class IsoQuantKVCache(TurboQuantKVCache):
     orthogonal R differs (Hadamard + isoclinic blocks vs dense QR).
     """
 
+    _PREALLOC_STEP = 256
+
     def __init__(
         self,
         num_heads: int,
@@ -436,11 +438,25 @@ class IsoQuantKVCache(TurboQuantKVCache):
         )
         self._packed_keys_cache: mx.array | None = None
         self._packed_values_cache: mx.array | None = None
+        self._cache_mode = os.environ.get("ISOQUANT_CACHE_MODE", "concat_append")
         if self._fallback_cache is None:
             try:
                 self._set_rotation_components(self.num_heads, self.head_dim)
             except Exception:
                 self._activate_fallback_cache(self.num_heads, self.head_dim)
+
+    @classmethod
+    def from_state(cls, state: dict, meta_state=None, **kwargs):
+        if meta_state is None:
+            raise ValueError(
+                "meta_state is required for from_state reconstruction. "
+                "Cannot restore IsoQuant cache without version, bit_width, "
+                "num_heads, and head_dim."
+            )
+        obj = cls.__new__(cls)
+        obj.meta_state = meta_state
+        obj.state = state
+        return obj
 
     @property
     def meta_state(self):
@@ -498,6 +514,7 @@ class IsoQuantKVCache(TurboQuantKVCache):
         self._fused_metal_ok = None
         self._packed_keys_cache = None
         self._packed_values_cache = None
+        self._cache_mode = os.environ.get("ISOQUANT_CACHE_MODE", "concat_append")
         try:
             self.compressor = TurboQuantCompressor(
                 bit_width=self.bit_width,
@@ -508,6 +525,14 @@ class IsoQuantKVCache(TurboQuantKVCache):
             self._set_rotation_components(self.num_heads, self.head_dim)
         except Exception:
             self._activate_fallback_cache(self.num_heads, self.head_dim)
+        if self._cache_mode == "prealloc" and getattr(self, "compressed_keys", None):
+            from .fused_kv_decode_kernels import pack_indices_3bit
+
+            self._packed_keys_cache = pack_indices_3bit(self.compressed_keys["indices"])
+            self._packed_values_cache = pack_indices_3bit(
+                self.compressed_values["indices"]
+            )
+            self._extend_buffers_by_step()
 
     def _set_rotation_components(self, num_heads: int, head_dim: int) -> None:
         components = build_isoquant_rotation_components(
@@ -557,6 +582,85 @@ class IsoQuantKVCache(TurboQuantKVCache):
     def _invalidate_fused_caches(self) -> None:
         self._packed_keys_cache = None
         self._packed_values_cache = None
+
+    def _ensure_buffer_capacity(self, additional: int) -> None:
+        """Extend all 6 preallocated buffers if offset + additional > capacity."""
+        needed = self.offset + additional
+        current_cap = self.compressed_keys["indices"].shape[1]
+
+        if needed <= current_cap:
+            return
+
+        n_steps = (
+            needed - current_cap + self._PREALLOC_STEP - 1
+        ) // self._PREALLOC_STEP
+        extend_by = n_steps * self._PREALLOC_STEP
+
+        H = self.compressed_keys["indices"].shape[0]
+        D_idx = self.compressed_keys["indices"].shape[2]
+        D_norm = self.compressed_keys["x_norm"].shape[2]
+        packed_D = self._packed_keys_cache.shape[2]
+
+        pad_idx = mx.zeros((H, extend_by, D_idx), dtype=mx.uint8)
+        pad_norm = mx.zeros((H, extend_by, D_norm), dtype=mx.float16)
+        pad_packed = mx.zeros((H, extend_by, packed_D), dtype=mx.uint8)
+
+        self.compressed_keys["indices"] = mx.concatenate(
+            [self.compressed_keys["indices"], pad_idx], axis=1
+        )
+        self.compressed_keys["x_norm"] = mx.concatenate(
+            [self.compressed_keys["x_norm"], pad_norm], axis=1
+        )
+        self.compressed_values["indices"] = mx.concatenate(
+            [self.compressed_values["indices"], pad_idx], axis=1
+        )
+        self.compressed_values["x_norm"] = mx.concatenate(
+            [self.compressed_values["x_norm"], pad_norm], axis=1
+        )
+        self._packed_keys_cache = mx.concatenate(
+            [self._packed_keys_cache, pad_packed], axis=1
+        )
+        self._packed_values_cache = mx.concatenate(
+            [self._packed_values_cache, pad_packed], axis=1
+        )
+
+    def _extend_buffers_by_step(self) -> None:
+        """Extend compressed + packed buffers by _PREALLOC_STEP zeros."""
+        H = self.compressed_keys["indices"].shape[0]
+        D_idx = self.compressed_keys["indices"].shape[2]
+        D_norm = self.compressed_keys["x_norm"].shape[2]
+        packed_D = self._packed_keys_cache.shape[2]
+
+        pad_idx = mx.zeros((H, self._PREALLOC_STEP, D_idx), dtype=mx.uint8)
+        pad_norm = mx.zeros((H, self._PREALLOC_STEP, D_norm), dtype=mx.float16)
+        pad_packed = mx.zeros((H, self._PREALLOC_STEP, packed_D), dtype=mx.uint8)
+
+        self.compressed_keys["indices"] = mx.concatenate(
+            [self.compressed_keys["indices"], pad_idx], axis=1
+        )
+        self.compressed_keys["x_norm"] = mx.concatenate(
+            [self.compressed_keys["x_norm"], pad_norm], axis=1
+        )
+        self.compressed_values["indices"] = mx.concatenate(
+            [self.compressed_values["indices"], pad_idx], axis=1
+        )
+        self.compressed_values["x_norm"] = mx.concatenate(
+            [self.compressed_values["x_norm"], pad_norm], axis=1
+        )
+        self._packed_keys_cache = mx.concatenate(
+            [self._packed_keys_cache, pad_packed], axis=1
+        )
+        self._packed_values_cache = mx.concatenate(
+            [self._packed_values_cache, pad_packed], axis=1
+        )
+        mx.eval(
+            self.compressed_keys["indices"],
+            self.compressed_keys["x_norm"],
+            self.compressed_values["indices"],
+            self.compressed_values["x_norm"],
+            self._packed_keys_cache,
+            self._packed_values_cache,
+        )
 
     def _profile_mx_call(self, stat_name: str, fn):
         if not self._profile_fused_timing:
@@ -630,6 +734,9 @@ class IsoQuantKVCache(TurboQuantKVCache):
             self._packed_keys_cache,
             self._packed_values_cache,
         )
+
+        if self._cache_mode == "prealloc":
+            self._extend_buffers_by_step()
 
         # Free the FP16 buffer
         self._fp16_keys.clear()
@@ -717,44 +824,75 @@ class IsoQuantKVCache(TurboQuantKVCache):
             lambda: self._compress_batch(v_batch),
         )
 
-        def _concat_compressed(existing, new):
-            if not existing:
-                return new
-            for key in new:
-                existing[key] = mx.concatenate([existing[key], new[key]], axis=1)
-            return existing
-
-        self.compressed_keys = _concat_compressed(
-            self.compressed_keys, new_compressed_keys
-        )
-        self.compressed_values = _concat_compressed(
-            self.compressed_values, new_compressed_vals
-        )
-        # Phase 2: incremental packed-cache append. Pack ONLY the new token's
-        # indices and concatenate to the existing _packed_*_cache; do NOT
-        # invalidate the whole cache. This eliminates the per-step O(stored_T)
-        # repack of the full history that previously dominated decode.
         from .fused_kv_decode_kernels import pack_indices_3bit
 
-        new_packed_k = pack_indices_3bit(new_compressed_keys["indices"])
-        new_packed_v = pack_indices_3bit(new_compressed_vals["indices"])
-        if self._packed_keys_cache is None:
-            self._packed_keys_cache = new_packed_k
-            self._packed_values_cache = new_packed_v
+        if self._cache_mode == "prealloc":
+            self._ensure_buffer_capacity(seq_len)
+            pos = self.offset
+            end = pos + seq_len
+            new_packed_k = pack_indices_3bit(new_compressed_keys["indices"])
+            new_packed_v = pack_indices_3bit(new_compressed_vals["indices"])
+            self._profile_mx_eval(
+                "decode_concat_ms",
+                new_compressed_keys["indices"],
+                new_compressed_keys["x_norm"],
+                new_compressed_vals["indices"],
+                new_compressed_vals["x_norm"],
+                new_packed_k,
+                new_packed_v,
+            )
+            self.compressed_keys["indices"][:, pos:end, :] = new_compressed_keys[
+                "indices"
+            ]
+            self.compressed_keys["x_norm"][:, pos:end, :] = new_compressed_keys[
+                "x_norm"
+            ]
+            self.compressed_values["indices"][:, pos:end, :] = new_compressed_vals[
+                "indices"
+            ]
+            self.compressed_values["x_norm"][:, pos:end, :] = new_compressed_vals[
+                "x_norm"
+            ]
+            self._packed_keys_cache[:, pos:end, :] = new_packed_k
+            self._packed_values_cache[:, pos:end, :] = new_packed_v
         else:
-            self._packed_keys_cache = mx.concatenate(
-                [self._packed_keys_cache, new_packed_k], axis=1
+
+            def _concat_compressed(existing, new):
+                if not existing:
+                    return new
+                for key in new:
+                    existing[key] = mx.concatenate([existing[key], new[key]], axis=1)
+                return existing
+
+            self.compressed_keys = _concat_compressed(
+                self.compressed_keys, new_compressed_keys
             )
-            self._packed_values_cache = mx.concatenate(
-                [self._packed_values_cache, new_packed_v], axis=1
+            self.compressed_values = _concat_compressed(
+                self.compressed_values, new_compressed_vals
             )
-        self._profile_mx_eval(
-            "decode_concat_ms",
-            *[v for v in self.compressed_keys.values() if isinstance(v, mx.array)],
-            *[v for v in self.compressed_values.values() if isinstance(v, mx.array)],
-            self._packed_keys_cache,
-            self._packed_values_cache,
-        )
+            new_packed_k = pack_indices_3bit(new_compressed_keys["indices"])
+            new_packed_v = pack_indices_3bit(new_compressed_vals["indices"])
+            if self._packed_keys_cache is None:
+                self._packed_keys_cache = new_packed_k
+                self._packed_values_cache = new_packed_v
+            else:
+                self._packed_keys_cache = mx.concatenate(
+                    [self._packed_keys_cache, new_packed_k], axis=1
+                )
+                self._packed_values_cache = mx.concatenate(
+                    [self._packed_values_cache, new_packed_v], axis=1
+                )
+            self._profile_mx_eval(
+                "decode_concat_ms",
+                *[v for v in self.compressed_keys.values() if isinstance(v, mx.array)],
+                *[
+                    v
+                    for v in self.compressed_values.values()
+                    if isinstance(v, mx.array)
+                ],
+                self._packed_keys_cache,
+                self._packed_values_cache,
+            )
         self._seq_len += seq_len
         self.offset += seq_len
         return keys, values
@@ -767,7 +905,13 @@ class IsoQuantKVCache(TurboQuantKVCache):
         if self._deferred and self._fp16_keys:
             full = mx.concatenate(self._fp16_keys, axis=1)
             return full[None, ...].astype(self._dtype)
-        x_hat = self._decompress_batch(self.compressed_keys)
+        if self._cache_mode == "prealloc":
+            sliced = {
+                k: v[:, : self.offset, :] for k, v in self.compressed_keys.items()
+            }
+        else:
+            sliced = self.compressed_keys
+        x_hat = self._decompress_batch(sliced)
         return x_hat[None, ...].astype(self._dtype)
 
     def get_values(self) -> mx.array:
@@ -778,7 +922,13 @@ class IsoQuantKVCache(TurboQuantKVCache):
         if self._deferred and self._fp16_values:
             full = mx.concatenate(self._fp16_values, axis=1)
             return full[None, ...].astype(self._dtype)
-        x_hat = self._decompress_batch(self.compressed_values)
+        if self._cache_mode == "prealloc":
+            sliced = {
+                k: v[:, : self.offset, :] for k, v in self.compressed_values.items()
+            }
+        else:
+            sliced = self.compressed_values
+        x_hat = self._decompress_batch(sliced)
         return x_hat[None, ...].astype(self._dtype)
 
     # ------------------------------------------------------------------
@@ -850,7 +1000,10 @@ class IsoQuantKVCache(TurboQuantKVCache):
 
         B, H_q, _, D = queries.shape
         H_kv = self.num_heads
-        T = self.compressed_keys["indices"].shape[1]
+        if self._cache_mode == "prealloc":
+            T = self.offset
+        else:
+            T = self.compressed_keys["indices"].shape[1]
         repeats = H_q // H_kv if H_q != H_kv else 1
 
         # --- Rotate query forward (always dense — one vector, O(d²)) ---
@@ -896,42 +1049,79 @@ class IsoQuantKVCache(TurboQuantKVCache):
         D: int,
         repeats: int,
     ) -> mx.array:
-        """Execute attention via Metal kernels on packed 3-bit storage.
-
-        Adaptively selects between:
-          - Single fully-fused kernel (T <= threshold): one dispatch, online softmax,
-            eliminates 3 kernel launch overheads (~150μs saved).
-          - Legacy 3-kernel pipeline (T > threshold): parallelizes QK dot across T
-            tokens with grid=(32*T, H), better GPU occupancy at long context.
-        """
+        """Execute attention via Metal kernels on packed 3-bit storage."""
         from .fused_kv_decode_kernels import pack_indices_3bit
 
         total_t0 = time.perf_counter() if self._profile_fused_timing else None
+
         if self._packed_keys_cache is None:
             _GLOBAL_STATS.packed_cache_misses += 1
+            if self._cache_mode == "prealloc":
+                valid_k_idx = self.compressed_keys["indices"][:, : self.offset, :]
+            else:
+                valid_k_idx = self.compressed_keys["indices"]
             self._packed_keys_cache = self._profile_mx_call(
                 "packed_key_repack_ms",
-                lambda: pack_indices_3bit(self.compressed_keys["indices"]),
+                lambda: pack_indices_3bit(valid_k_idx),
             )
+            if self._cache_mode == "prealloc":
+                cap = self.compressed_keys["indices"].shape[1]
+                cur = self._packed_keys_cache.shape[1]
+                if cur < cap:
+                    pad = mx.zeros(
+                        (
+                            self._packed_keys_cache.shape[0],
+                            cap - cur,
+                            self._packed_keys_cache.shape[2],
+                        ),
+                        dtype=mx.uint8,
+                    )
+                    self._packed_keys_cache = mx.concatenate(
+                        [self._packed_keys_cache, pad], axis=1
+                    )
         else:
             _GLOBAL_STATS.packed_cache_hits += 1
+
         if self._packed_values_cache is None:
             _GLOBAL_STATS.packed_cache_misses += 1
+            if self._cache_mode == "prealloc":
+                valid_v_idx = self.compressed_values["indices"][:, : self.offset, :]
+            else:
+                valid_v_idx = self.compressed_values["indices"]
             self._packed_values_cache = self._profile_mx_call(
                 "packed_value_repack_ms",
-                lambda: pack_indices_3bit(self.compressed_values["indices"]),
+                lambda: pack_indices_3bit(valid_v_idx),
             )
+            if self._cache_mode == "prealloc":
+                cap = self.compressed_values["indices"].shape[1]
+                cur = self._packed_values_cache.shape[1]
+                if cur < cap:
+                    pad = mx.zeros(
+                        (
+                            self._packed_values_cache.shape[0],
+                            cap - cur,
+                            self._packed_values_cache.shape[2],
+                        ),
+                        dtype=mx.uint8,
+                    )
+                    self._packed_values_cache = mx.concatenate(
+                        [self._packed_values_cache, pad], axis=1
+                    )
         else:
             _GLOBAL_STATS.packed_cache_hits += 1
 
         k_packed = self._packed_keys_cache
         v_packed = self._packed_values_cache
 
-        # Norms: squeeze trailing dim, cast to f32
         k_norms = self.compressed_keys["x_norm"][:, :, 0].astype(mx.float32)
         v_norms = self.compressed_values["x_norm"][:, :, 0].astype(mx.float32)
         centroids = self.compressor.centroids.reshape(-1).astype(mx.float32)
         kv_head_map = mx.arange(H_q, dtype=mx.uint32) // repeats
+
+        if self._cache_mode == "prealloc":
+            storage_stride = k_packed.shape[1]
+        else:
+            storage_stride = T
 
         if T <= self._SINGLE_KERNEL_T_THRESHOLD:
             out = self._fused_attention_single_kernel(
@@ -947,6 +1137,7 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 H_q,
                 T,
                 D,
+                storage_stride,
             )
         else:
             out = self._fused_attention_3kernel(
@@ -964,6 +1155,7 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 T,
                 D,
                 repeats,
+                storage_stride,
             )
         if total_t0 is not None:
             mx.eval(out)
@@ -987,6 +1179,7 @@ class IsoQuantKVCache(TurboQuantKVCache):
         H_q,
         T,
         D,
+        storage_stride,
     ) -> mx.array:
         """Single fully-fused kernel: QK + online softmax + V + inverse rotation."""
         from .fused_kv_decode_kernels import fully_fused_attention
@@ -1008,6 +1201,7 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 head_dim=D,
                 use_hadamard=self._use_hadamard,
                 mask=mask,
+                storage_stride=storage_stride,
             ),
         )
 
@@ -1032,20 +1226,23 @@ class IsoQuantKVCache(TurboQuantKVCache):
         T,
         D,
         repeats,
+        storage_stride,
     ) -> mx.array:
-        """Legacy 3-kernel pipeline: QK dot + softmax + V accum + inverse rotation.
-
-        At long context the V-accumulation step is the dominant cost (~39% of
-        decode wall-clock at T=4K per instrumentation). The T-parallel-tiled
-        variant in ``fused_kv_decode_tiled`` is selected automatically when T
-        exceeds ``_T_TILED_VALUE_ACCUM_THRESHOLD``.
-        """
+        """Legacy 3-kernel pipeline: QK dot + softmax + V accum + inverse rotation."""
         from .fused_kv_decode_kernels import fused_qk_dot, fused_value_accum
 
         scores = self._profile_mx_call(
             "fused_qk_ms",
             lambda: fused_qk_dot(
-                k_packed, centroids, k_norms, q_rot, kv_head_map, H_q, T, D
+                k_packed,
+                centroids,
+                k_norms,
+                q_rot,
+                kv_head_map,
+                H_q,
+                T,
+                D,
+                storage_stride=storage_stride,
             ),
         )
         scores = scores * scale
@@ -1082,13 +1279,22 @@ class IsoQuantKVCache(TurboQuantKVCache):
                     T,
                     D,
                     tile_size=tile_size,
+                    storage_stride=storage_stride,
                 ),
             )
         else:
             output_rot = self._profile_mx_call(
                 "fused_value_ms",
                 lambda: fused_value_accum(
-                    v_packed, centroids, v_norms, attn_weights, kv_head_map, H_q, T, D
+                    v_packed,
+                    centroids,
+                    v_norms,
+                    attn_weights,
+                    kv_head_map,
+                    H_q,
+                    T,
+                    D,
+                    storage_stride=storage_stride,
                 ),
             )
 
@@ -1119,15 +1325,22 @@ class IsoQuantKVCache(TurboQuantKVCache):
         reduction — K and V are fully materialised in FP32 before the dot
         product.
         """
-        k_rot_quant = self.compressor.centroids[
-            self.compressed_keys["indices"]
-        ]  # (H_kv, T, D)
-        k_rot_scaled = k_rot_quant * self.compressed_keys["x_norm"].astype(mx.float32)
+        if self._cache_mode == "prealloc":
+            k_indices = self.compressed_keys["indices"][:, : self.offset, :]
+            k_xnorm = self.compressed_keys["x_norm"][:, : self.offset, :]
+            v_indices = self.compressed_values["indices"][:, : self.offset, :]
+            v_xnorm = self.compressed_values["x_norm"][:, : self.offset, :]
+        else:
+            k_indices = self.compressed_keys["indices"]
+            k_xnorm = self.compressed_keys["x_norm"]
+            v_indices = self.compressed_values["indices"]
+            v_xnorm = self.compressed_values["x_norm"]
 
-        v_rot_quant = self.compressor.centroids[
-            self.compressed_values["indices"]
-        ]  # (H_kv, T, D)
-        v_rot_scaled = v_rot_quant * self.compressed_values["x_norm"].astype(mx.float32)
+        k_rot_quant = self.compressor.centroids[k_indices]
+        k_rot_scaled = k_rot_quant * k_xnorm.astype(mx.float32)
+
+        v_rot_quant = self.compressor.centroids[v_indices]
+        v_rot_scaled = v_rot_quant * v_xnorm.astype(mx.float32)
 
         if repeats > 1:
             k_rot_scaled = mx.repeat(k_rot_scaled, repeats, axis=0)
@@ -1189,3 +1402,62 @@ class IsoQuantKVCache(TurboQuantKVCache):
 
             return fused_inverse_rotate(x, self.block_matrices, self._use_hadamard)
         return self._rotate_inverse(x[:, None, :])[:, 0, :]
+
+    @property
+    def state(self) -> dict:
+        base = super().state
+        mode = getattr(self, "_cache_mode", "concat_append")
+        if mode == "prealloc" and getattr(self, "offset", 0) > 0:
+            T = self.offset
+            base["compressed_keys"] = {
+                k: v[:, :T, :] for k, v in self.compressed_keys.items()
+            }
+            base["compressed_values"] = {
+                k: v[:, :T, :] for k, v in self.compressed_values.items()
+            }
+        return base
+
+    @state.setter
+    def state(self, v):
+        TurboQuantKVCache.state.fset(self, v)
+        mode = getattr(self, "_cache_mode", "concat_append")
+        if mode == "prealloc" and self.compressed_keys:
+            self._invalidate_fused_caches()
+            from .fused_kv_decode_kernels import pack_indices_3bit
+
+            self._packed_keys_cache = pack_indices_3bit(self.compressed_keys["indices"])
+            self._packed_values_cache = pack_indices_3bit(
+                self.compressed_values["indices"]
+            )
+            self._extend_buffers_by_step()
+
+    def trim(self, n: int):
+        """Trim prefix tokens, invalidating packed caches."""
+        super().trim(n)
+        self._invalidate_fused_caches()
+        if self._cache_mode == "prealloc" and self.compressed_keys:
+            from .fused_kv_decode_kernels import pack_indices_3bit
+
+            self._packed_keys_cache = pack_indices_3bit(self.compressed_keys["indices"])
+            self._packed_values_cache = pack_indices_3bit(
+                self.compressed_values["indices"]
+            )
+            self._extend_buffers_by_step()
+
+    def asymmetric_attention_scores(self, query, scale=1.0):
+        if self._cache_mode == "prealloc":
+            saved_keys = self.compressed_keys
+            saved_values = self.compressed_values
+            T = self.offset
+            self.compressed_keys = {
+                k: v[:, :T, :] for k, v in self.compressed_keys.items()
+            }
+            self.compressed_values = {
+                k: v[:, :T, :] for k, v in self.compressed_values.items()
+            }
+            try:
+                return super().asymmetric_attention_scores(query, scale)
+            finally:
+                self.compressed_keys = saved_keys
+                self.compressed_values = saved_values
+        return super().asymmetric_attention_scores(query, scale)
