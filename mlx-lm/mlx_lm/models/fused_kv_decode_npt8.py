@@ -1,18 +1,20 @@
-"""Phase 3: NPT=8, T-tiled fully fused IsoQuant attention (head_dim=256).
+"""Phase 3 v1: NPT=8 single-pass fused IsoQuant attention (head_dim=256).
+
+Single-pass implementation: one threadgroup per query head, serial loop over
+the full sequence length T. NOT the T-tiled + FA2-merge design from the spec
+(``docs/superpowers/specs/2026-04-24-fused-npt8-tiled-design.md``).
 
 ``fully_fused_attention`` in ``fused_kv_decode_kernels`` is restricted to
 ``head_dim=128`` (NPT=4). This module provides a generalisation for
-``head_dim=256`` (NPT=8) using the 3-kernel reference pipeline as a
-correctness baseline, with a Metal kernel path for performance.
-
-See ``docs/superpowers/specs/2026-04-24-fused-npt8-tiled-design.md``.
+``head_dim=256`` (NPT=8) using online softmax with in-kernel inverse
+SO(4) rotation and optional WHT.
 """
 
 from __future__ import annotations
 
 import mlx.core as mx
 
-__all__ = ["fused_attention_npt8_tiled"]
+__all__ = ["fused_attention_npt8"]
 
 _npt8_kernel_cache: dict[tuple[bool], mx.fast.MetalKernel] | None = None
 
@@ -183,7 +185,7 @@ def _get_npt8_kernel(use_hadamard: bool) -> mx.fast.MetalKernel:
     return _npt8_kernel_cache[key]
 
 
-def fused_attention_npt8_tiled(
+def fused_attention_npt8(
     K_packed: mx.array,
     V_packed: mx.array,
     centroids: mx.array,
@@ -196,7 +198,6 @@ def fused_attention_npt8_tiled(
     scale: float,
     use_hadamard: bool,
     mask: mx.array | None,
-    tile_size: int,
     num_heads: int,
     seq_len: int,
     head_dim: int,
@@ -206,10 +207,8 @@ def fused_attention_npt8_tiled(
 
     Single Metal kernel dispatch replacing the 3-kernel pipeline
     (fused_qk_dot + softmax + fused_value_accum) with online softmax
-    and in-kernel inverse rotation.
-
-    tile_size is accepted for API compatibility but not used in the
-    single-pass implementation (the full T is processed in one pass).
+    and in-kernel inverse rotation. Full T is processed in one pass
+    per threadgroup.
     """
     assert head_dim == 256, f"NPT=8 kernel requires head_dim=256, got {head_dim}"
 

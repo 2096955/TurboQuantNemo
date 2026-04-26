@@ -36,9 +36,15 @@ nvfp4_isoquant at ~46% of nvfp4_default throughput. Dominated by:
 - Fused Metal kernel decode (qk_dot + value_accum + inverse_rotation)
 - NOT by cache-update cost (now O(1) via prealloc)
 
-## Decision: Branch B — paper-with-honest-gap
+## Decision: Branch B — paper-with-honest-gap (SUPERSEDED)
 
-**Do not proceed to Phase 3 (NPT=8 fused kernel) yet.**
+**Original decision:** Do not proceed to Phase 3 yet.
+
+**Update 2026-04-26:** Phase 3 was reopened and a v1 single-pass NPT=8 kernel
+was implemented. This is a correctness-first single-pass implementation (not
+the T-tiled + FA2-merge design from the spec). The original rationale below
+remains valid context for understanding why the v1 approach was chosen over
+the more ambitious tiled design.
 
 ### Rationale
 
@@ -84,24 +90,37 @@ IsoQuant decode performance results for the paper/results track:
    cost, which is fundamental to the IsoQuant design. Models with higher
    H_kv show much smaller relative throughput cost.
 
-### Conditions to revisit Phase 3
+### Conditions to pursue T-tiled Phase 3 v2
 
-- A specific throughput target is set for H_kv=2 models (e.g., "must reach
-  70% of default KV")
+- v1 single-pass kernel shows measurable throughput win in variance study
 - Profiling quantifies dispatch/sync overhead as a substantial fraction of
   the residual gap
-- A new kernel fusion approach emerges that doesn't require the full NPT=8
-  rewrite (e.g., single-kernel Q×K→softmax→V path)
+- Long-context workloads (T > 4K) need T-parallel processing for latency
+
+## Phase 3 v1 status
+
+v1 single-pass NPT=8 kernel implemented (`fused_kv_decode_npt8.py`).
+Gated behind `ISOQUANT_USE_NPT8_FUSED=1`, only triggers for `head_dim=256`.
+
+- 8 tests pass: kernel correctness (identity + random SO(4) + Hadamard +
+  mask + storage_stride) + cache-level dispatch + prealloc equivalence
+- E2E smoke: Gemma 4 produces equivalent quality on all three paths
+  (NPT=8, 3-kernel, default KV)
+- Single-run throughput: 43.6 tok/s (NPT=8) vs 40.6 tok/s (3-kernel)
+  — encouraging, pending variance study
 
 ## Branch state
 
 ```
-isoquant-decode-perf (4 commits ahead of main):
+isoquant-decode-perf (7+ commits ahead of main):
   8a9b830  feat: O(1) preallocated-buffer decode
   acca18e  docs: Phase 2 closeout + Qwen3.6 A/B
   ef97d5d  evidence: Gemma 4 +28% decode throughput
   7ac3671  docs: add Gemma 4 evidence to closeout
+  615ccb9  docs: Phase 5 decision
+  10ee227  feat: Phase 3 — NPT=8 single-pass fused attention kernel
+  7f62154  test: Phase 3 review gaps — rotation, Hadamard, cache dispatch
 ```
 
-All changes are opt-in (`ISOQUANT_CACHE_MODE=prealloc`). Default behavior
-is unchanged (`concat_append`). Safe to merge to main whenever ready.
+All changes are opt-in (`ISOQUANT_CACHE_MODE=prealloc`, `ISOQUANT_USE_NPT8_FUSED=1`).
+Default behavior is unchanged. Safe to merge to main whenever ready.

@@ -1,10 +1,13 @@
-"""Phase 3: fused NPT=8 T-tiled kernel must equal the stable 3-kernel pipeline.
+"""Phase 3 v1: NPT=8 single-pass fused kernel for head_dim=256.
+
+This is a full-sequence single-pass implementation (one threadgroup per head,
+serial loop over T). It is NOT the T-tiled + FA2-merge design from the spec.
 
 The reference uses ``fused_value_accum`` (serial T loop) — not
 ``fused_value_accum_tiled`` — for primary equivalence so failures localize
 to the new kernel. A secondary test cross-checks the tiled V path.
 
-See: docs/superpowers/plans/2026-04-24-isoquant-decode-performance.md (Phase 3).
+See: docs/superpowers/specs/2026-04-24-fused-npt8-tiled-design.md (target design).
 """
 
 import os
@@ -18,6 +21,7 @@ from mlx_lm.models.fused_kv_decode_kernels import (
     fused_value_accum,
     pack_indices_3bit,
 )
+from mlx_lm.models.fused_kv_decode_npt8 import fused_attention_npt8
 
 
 def _ref_3kernel_stable(
@@ -123,14 +127,12 @@ def _python_inverse_rotation(
 
 
 def test_fused_npt8_matches_stable_3kernel_no_inverse_rotation() -> None:
-    from mlx_lm.models.fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
-
     t, h_kv, h_q, d = 256, 2, 16, 256
     k_p, v_p, c, nk, nv, q, kv_map = _synthetic_d256(t, h_kv, h_q)
     scale = float(1.0 / np.sqrt(d))
     blocks_t = _identity_blocks(h_kv, d)
     ref = _ref_3kernel_stable(k_p, v_p, c, nk, nv, q, kv_map, h_q, t, d, scale)
-    out = fused_attention_npt8_tiled(
+    out = fused_attention_npt8(
         k_p,
         v_p,
         c,
@@ -142,7 +144,6 @@ def test_fused_npt8_matches_stable_3kernel_no_inverse_rotation() -> None:
         scale=scale,
         use_hadamard=False,
         mask=None,
-        tile_size=128,
         num_heads=h_q,
         seq_len=t,
         head_dim=d,
@@ -152,7 +153,6 @@ def test_fused_npt8_matches_stable_3kernel_no_inverse_rotation() -> None:
 
 
 def test_fused_npt8_also_matches_tiled_v_accum_path() -> None:
-    from mlx_lm.models.fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
     from mlx_lm.models.fused_kv_decode_tiled import fused_value_accum_tiled
 
     t, h_kv, h_q, d = 256, 2, 16, 256
@@ -164,7 +164,7 @@ def test_fused_npt8_also_matches_tiled_v_accum_path() -> None:
     ref_tiled = fused_value_accum_tiled(
         v_p, c, nv, attn, kv_map, h_q, t, d, tile_size=128
     )
-    out = fused_attention_npt8_tiled(
+    out = fused_attention_npt8(
         k_p,
         v_p,
         c,
@@ -176,7 +176,6 @@ def test_fused_npt8_also_matches_tiled_v_accum_path() -> None:
         scale=scale,
         use_hadamard=False,
         mask=None,
-        tile_size=128,
         num_heads=h_q,
         seq_len=t,
         head_dim=d,
@@ -189,7 +188,6 @@ def test_fused_npt8_also_matches_tiled_v_accum_path() -> None:
 
 def test_fused_npt8_with_mask() -> None:
     """NPT=8 kernel handles attention mask correctly."""
-    from mlx_lm.models.fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
 
     t, h_kv, h_q, d = 128, 2, 16, 256
     k_p, v_p, c, nk, nv, q, kv_map = _synthetic_d256(t, h_kv, h_q)
@@ -200,7 +198,7 @@ def test_fused_npt8_with_mask() -> None:
     mask = mx.array(rng.standard_normal((h_q, t)).astype(np.float32))
 
     ref = _ref_3kernel_stable(k_p, v_p, c, nk, nv, q, kv_map, h_q, t, d, scale, mask)
-    out = fused_attention_npt8_tiled(
+    out = fused_attention_npt8(
         k_p,
         v_p,
         c,
@@ -212,7 +210,6 @@ def test_fused_npt8_with_mask() -> None:
         scale=scale,
         use_hadamard=False,
         mask=mask,
-        tile_size=128,
         num_heads=h_q,
         seq_len=t,
         head_dim=d,
@@ -223,7 +220,6 @@ def test_fused_npt8_with_mask() -> None:
 
 def test_fused_npt8_with_storage_stride() -> None:
     """NPT=8 kernel works with padded buffers (storage_stride > seq_len)."""
-    from mlx_lm.models.fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
 
     t, h_kv, h_q, d = 128, 2, 16, 256
     k_p, v_p, c, nk, nv, q, kv_map = _synthetic_d256(t, h_kv, h_q)
@@ -240,7 +236,7 @@ def test_fused_npt8_with_storage_stride() -> None:
     nk_padded = mx.concatenate([nk, mx.zeros((h_kv, 64))], axis=1)
     nv_padded = mx.concatenate([nv, mx.zeros((h_kv, 64))], axis=1)
 
-    out = fused_attention_npt8_tiled(
+    out = fused_attention_npt8(
         k_padded,
         v_padded,
         c,
@@ -252,7 +248,6 @@ def test_fused_npt8_with_storage_stride() -> None:
         scale=scale,
         use_hadamard=False,
         mask=None,
-        tile_size=128,
         num_heads=h_q,
         seq_len=t,
         head_dim=d,
@@ -264,7 +259,6 @@ def test_fused_npt8_with_storage_stride() -> None:
 
 def test_fused_npt8_inverse_rotation_non_identity() -> None:
     """NPT=8 kernel applies inverse SO(4) rotation with random blocks."""
-    from mlx_lm.models.fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
 
     t, h_kv, h_q, d = 128, 2, 16, 256
     k_p, v_p, c, nk, nv, q, kv_map = _synthetic_d256(t, h_kv, h_q)
@@ -284,7 +278,7 @@ def test_fused_npt8_inverse_rotation_non_identity() -> None:
         )
     ref = mx.stack(inv_parts, axis=1).reshape(h_q, d)
 
-    out = fused_attention_npt8_tiled(
+    out = fused_attention_npt8(
         k_p,
         v_p,
         c,
@@ -296,7 +290,6 @@ def test_fused_npt8_inverse_rotation_non_identity() -> None:
         scale=scale,
         use_hadamard=False,
         mask=None,
-        tile_size=128,
         num_heads=h_q,
         seq_len=t,
         head_dim=d,
@@ -307,7 +300,6 @@ def test_fused_npt8_inverse_rotation_non_identity() -> None:
 
 def test_fused_npt8_with_hadamard() -> None:
     """NPT=8 kernel applies inverse SO(4) + WHT (Hadamard) correctly."""
-    from mlx_lm.models.fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
 
     t, h_kv, h_q, d = 128, 2, 16, 256
     k_p, v_p, c, nk, nv, q, kv_map = _synthetic_d256(t, h_kv, h_q)
@@ -325,7 +317,7 @@ def test_fused_npt8_with_hadamard() -> None:
         inv_parts.append(_python_inverse_rotation(group_out, blocks, use_hadamard=True))
     ref = mx.stack(inv_parts, axis=1).reshape(h_q, d)
 
-    out = fused_attention_npt8_tiled(
+    out = fused_attention_npt8(
         k_p,
         v_p,
         c,
@@ -337,7 +329,6 @@ def test_fused_npt8_with_hadamard() -> None:
         scale=scale,
         use_hadamard=True,
         mask=None,
-        tile_size=128,
         num_heads=h_q,
         seq_len=t,
         head_dim=d,
@@ -362,7 +353,7 @@ def test_npt8_cache_level_dispatch() -> None:
         codebook_dir=get_default_codebook_dir(),
     )
     if cache._fallback_cache is not None:
-        return  # no codebook available
+        pytest.skip("IsoQuant fallback — no TQ codebook for D=256, 3-bit")
 
     rng = np.random.default_rng(42)
     h_q = h_kv * 8  # GQA repeats=8
@@ -387,10 +378,18 @@ def test_npt8_cache_level_dispatch() -> None:
         output_3kernel = cache.fused_attention(queries, scale=scale, mask=None)
     mx.eval(output_3kernel)
 
-    # NPT=8 fused path (env flag ON)
-    with mock.patch.dict(os.environ, {"ISOQUANT_USE_NPT8_FUSED": "1"}):
+    # NPT=8 fused path (env flag ON) — assert dispatch actually happens
+    with (
+        mock.patch.dict(os.environ, {"ISOQUANT_USE_NPT8_FUSED": "1"}),
+        mock.patch.object(
+            cache, "_fused_attention_npt8", wraps=cache._fused_attention_npt8
+        ) as npt8_spy,
+    ):
         output_npt8 = cache.fused_attention(queries, scale=scale, mask=None)
     mx.eval(output_npt8)
+    assert npt8_spy.call_count == 1, (
+        f"_fused_attention_npt8 was not dispatched (called {npt8_spy.call_count} times)"
+    )
 
     # Both fused paths should match dense within tolerance
     np.testing.assert_allclose(
@@ -420,7 +419,7 @@ def test_npt8_cache_level_prealloc_mode() -> None:
         codebook_dir=get_default_codebook_dir(),
     )
     if cache_concat._fallback_cache is not None:
-        return
+        pytest.skip("IsoQuant fallback — no TQ codebook for D=256, 3-bit")
 
     rng = np.random.default_rng(55)
     h_q = h_kv * 4
@@ -444,11 +443,19 @@ def test_npt8_cache_level_prealloc_mode() -> None:
     queries = mx.array(rng.normal(size=(1, h_q, 1, d)).astype(np.float32))
     scale = d**-0.5
 
-    with mock.patch.dict(os.environ, {"ISOQUANT_USE_NPT8_FUSED": "1"}):
+    with (
+        mock.patch.dict(os.environ, {"ISOQUANT_USE_NPT8_FUSED": "1"}),
+        mock.patch.object(
+            cache_prealloc,
+            "_fused_attention_npt8",
+            wraps=cache_prealloc._fused_attention_npt8,
+        ) as npt8_spy,
+    ):
         out_concat = cache_concat.fused_attention(queries, scale=scale, mask=None)
         out_prealloc = cache_prealloc.fused_attention(queries, scale=scale, mask=None)
     mx.eval(out_concat, out_prealloc)
 
+    assert npt8_spy.call_count == 1, "NPT=8 dispatch not triggered in prealloc mode"
     np.testing.assert_allclose(
         np.asarray(out_prealloc), np.asarray(out_concat), rtol=1e-3, atol=1e-3
     )

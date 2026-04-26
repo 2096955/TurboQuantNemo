@@ -1253,11 +1253,11 @@ class IsoQuantKVCache(TurboQuantKVCache):
         storage_stride,
     ) -> mx.array:
         """NPT=8 single-pass fused kernel for head_dim=256."""
-        from .fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
+        from .fused_kv_decode_npt8 import fused_attention_npt8
 
         return self._profile_mx_call(
             "fused_single_kernel_ms",
-            lambda: fused_attention_npt8_tiled(
+            lambda: fused_attention_npt8(
                 K_packed=k_packed,
                 V_packed=v_packed,
                 centroids=centroids,
@@ -1269,7 +1269,6 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 scale=scale,
                 use_hadamard=self._use_hadamard,
                 mask=mask,
-                tile_size=128,
                 num_heads=H_q,
                 seq_len=T,
                 head_dim=D,

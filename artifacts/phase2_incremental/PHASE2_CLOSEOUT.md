@@ -196,26 +196,29 @@ used O(T) `mx.concatenate`. The prealloc step (commit `8a9b830`) fixes this.
    noise. Gemma 4 (H_kv=8) showed +28% decode throughput — confirmed by
    same-session A/B. Models with even higher H_kv would show larger gains.
 
-## Phase 3 decision: DEFERRED
+## Phase 3 decision: DEFERRED → REOPENED (v1 single-pass)
 
+**Update 2026-04-26:** Phase 3 was reopened after Phase 5 decision. The v1
+implementation is a single-pass NPT=8 fused kernel (one threadgroup per head,
+serial loop over T with online softmax + in-kernel inverse rotation). This is
+NOT the T-tiled + FA2-merge design from the original spec — it is a simpler
+correctness-first implementation that eliminates multi-kernel dispatch overhead.
+
+**Status:** v1 kernel passes 8 tests (identity + random SO(4) rotation,
+Hadamard, mask, storage_stride, cache-level dispatch, prealloc equivalence).
+E2E smoke test on Gemma 4 (head_dim=256, H_kv=8) shows equivalent quality to
+3-kernel path and default KV. Single-run throughput: 43.6 tok/s (NPT=8) vs
+40.6 tok/s (3-kernel) — encouraging but not a proven win (no variance study).
+
+**Original rationale for deferring (still valid context):**
 The prealloc optimization completes Phase 2's intended scope. The residual gap
 (nvfp4_isoquant at ~46% of nvfp4_default throughput) is dominated by:
 - Per-token compress (SO(4) rotation + quantize)
 - Fused Metal kernel decode (qk_dot + value_accum + inverse_rotation)
 
-Phase 3 (NPT=8 kernel fusion) targets the Metal kernel dispatch overhead.
 Phase 1 showed fused V-accum at 5.5% peak bandwidth — execution/dispatch-bound,
-not bandwidth-bound. Phase 3 might help via dispatch reduction but the lever
-is limited.
-
-**Do not start Phase 3 yet.** The Gemma 4 A/B shows prealloc already delivers
-a real decode throughput win (+28%) on higher-H_kv models without kernel fusion.
-Phase 3's remaining value is limited to the per-token compress + fused-kernel
-overhead, which is the dominant cost on H_kv=2 models where prealloc has no
-effect. Next steps:
-1. Keep prealloc as opt-in — it is a proven win for H_kv >= 8
-2. Proceed to Phase 5 decision (documentation, honest gap characterization)
-3. Reassess Phase 3 only if a specific H_kv=2 throughput target is set
+not bandwidth-bound. The v1 NPT=8 kernel addresses dispatch reduction (3 kernels
+→ 1) but not bandwidth. Performance validation with repeats is pending.
 
 ## Saved artifacts
 
