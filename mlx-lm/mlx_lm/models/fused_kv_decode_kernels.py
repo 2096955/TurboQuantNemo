@@ -623,7 +623,12 @@ def fused_inverse_rotate(
     Returns:
         output: (num_heads, head_dim) float32 — output in original space
     """
-    from .isoquant_metal_kernels import metal_rotate_inverse
+    try:
+        from .isoquant_metal_kernels import metal_rotate_inverse
+    except ModuleNotFoundError:
+        from .mlx_isoquant import structured_rotate_inverse
+
+        return structured_rotate_inverse(output_rotated, block_matrices, use_hadamard)
 
     # Add seq_len=1 dimension for the rotation kernel interface
     x = output_rotated[:, None, :]  # (H, 1, D)
