@@ -91,6 +91,36 @@ The A/B confirms:
 - Zero Metal failures — stride-aware kernels work correctly on padded buffers
 - 100% packed cache hit rate — no lazy rebuilds in either mode
 
+## End-to-end model A/B: Gemma 4 (H_kv=8) — +28% decode throughput
+
+Same-session A/B on Gemma 4-26B-A4B-IT-4bit (H_kv=8, head_dim=256), 4K context:
+
+| Mode | decode tok/s | peak memory MB | Metal failures | packed cache hit |
+|---|---|---|---|---|
+| concat_append | 20.82 | 15182 | 0 | 1.0 |
+| prealloc | 26.65 | 15216 | 0 | 1.0 |
+| **Δ** | **+28.0%** | **+34 MB** | **—** | **—** |
+
+**Interpretation:** With 4x more KV heads than Qwen3.6, the cache-update path
+consumes a meaningful fraction of decode time. Prealloc's O(1) slice assignment
+eliminates the O(T) concatenation cost across 28 layers × 8 KV heads = 224
+cache updates per decode step.
+
+- Swap unchanged (4666 MB both runs) — not a thermal/swap artifact
+- Peak memory delta +34 MB — negligible padding overhead
+- Same model, same session, same swap state — clean paired comparison
+
+**H_kv scaling confirmed:**
+
+| Model | H_kv | decode Δ | Signal |
+|---|---|---|---|
+| Qwen3.6-35B-A3B | 2 | +0.36% | noise |
+| Gemma 4-26B-A4B | 8 | +28.0% | real win |
+
+The prealloc optimization is a **product-level decode throughput improvement**
+for models with H_kv >= 8. For H_kv=2 models it remains a safe no-regression
+opt-in with cache-update-path benefits only.
+
 ## Prealloc technical design
 
 ### Six managed arrays
@@ -163,8 +193,8 @@ used O(T) `mx.concatenate`. The prealloc step (commit `8a9b830`) fixes this.
    repeat numbers.
 3. **H_kv sensitivity.** Prealloc's cache-update speedup (28.3x at H=32) scales
    linearly with H_kv. On Qwen3.6 (H_kv=2), the end-to-end effect is within
-   noise. Models with higher H_kv (e.g. Llama-style H_kv=8 or 32) would show
-   a measurable decode throughput improvement.
+   noise. Gemma 4 (H_kv=8) showed +28% decode throughput — confirmed by
+   same-session A/B. Models with even higher H_kv would show larger gains.
 
 ## Phase 3 decision: DEFERRED
 
@@ -178,10 +208,14 @@ Phase 1 showed fused V-accum at 5.5% peak bandwidth — execution/dispatch-bound
 not bandwidth-bound. Phase 3 might help via dispatch reduction but the lever
 is limited.
 
-**Do not start Phase 3 yet.** Next steps:
-1. Keep prealloc as opt-in for cache-update improvement
-2. If a higher-H_kv model is available, run A/B to quantify decode throughput win
-3. Reassess Phase 3 based on whether the residual gap justifies kernel fusion
+**Do not start Phase 3 yet.** The Gemma 4 A/B shows prealloc already delivers
+a real decode throughput win (+28%) on higher-H_kv models without kernel fusion.
+Phase 3's remaining value is limited to the per-token compress + fused-kernel
+overhead, which is the dominant cost on H_kv=2 models where prealloc has no
+effect. Next steps:
+1. Keep prealloc as opt-in — it is a proven win for H_kv >= 8
+2. Proceed to Phase 5 decision (documentation, honest gap characterization)
+3. Reassess Phase 3 only if a specific H_kv=2 throughput target is set
 
 ## Saved artifacts
 
@@ -189,7 +223,9 @@ is limited.
   attribution (Phase 2 step 1; interpret per wrapper-artifact caveat)
 - `matrix_T4096_d512_r{1,2,3}.json` — 4K matrix, 3 repeats
 - `matrix_T8192_d1024_r{1,2,3}.json` — 8K matrix, 3 repeats (post-reboot)
-- `../prealloc-ab/concat_append.json` — same-session A/B, concat_append mode
-- `../prealloc-ab/prealloc.json` — same-session A/B, prealloc mode
+- `../prealloc-ab/concat_append.json` — Qwen3.6 same-session A/B, concat_append mode
+- `../prealloc-ab/prealloc.json` — Qwen3.6 same-session A/B, prealloc mode
+- `../prealloc-ab-gemma4/concat_append.json` — Gemma 4 same-session A/B, concat_append
+- `../prealloc-ab-gemma4/prealloc.json` — Gemma 4 same-session A/B, prealloc (+28%)
 - `mlx-lm/tests/test_iso_incremental_pack.py` — 11 correctness tests
 - `mlx-lm/tests/bench_prealloc_vs_concat.py` — A/B benchmark with exit-code gate
