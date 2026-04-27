@@ -12,6 +12,12 @@ canonical decision point is stable; longer contexts show high repeat variance,
 so the 16K and 32K values should be treated as directional rather than final
 paired-comparison estimates.
 
+Operational caveat: a follow-up rerun attempt on 2026-04-27 hit a Metal GPU
+hang during the 32K matrix and left several `benchmark_nvfp4_isoquant.py`
+processes stuck in `UE` state even after `kill -9`. Swap was ~67.9 GB used
+after the hang. Treat any new MLX benchmark in this boot session as invalid
+until the machine is restarted and the Phase 0 system-state gate is clean.
+
 | T | iso tok/s | iso CV | default tok/s | default CV | gap (iso/default ms) |
 |-------|-----------|--------|---------------|------------|----------------------|
 | 4096 | 47.7 | 6.6% | 90.7 | 14.5% | 1.90x |
@@ -54,8 +60,9 @@ noise for this validation pass.
 
 ## Summary
 
-Phase 4 validates the important product-facing point: IsoQuant preserves
-quality at 32K and the fused NPT=8 path roughly doubles stable 8K throughput
-versus pre-fusion IsoQuant. It does not close the performance gap to default
-KV: the canonical 8K ratio remains 1.91x slower per decode step. That residual
-gap, not quality loss, is the primary remaining engineering problem.
+Phase 4 supports the important product-facing point: IsoQuant preserves quality
+at 32K and the fused NPT=8 path roughly doubles stable 8K throughput versus
+pre-fusion IsoQuant. It does not close the performance gap to default KV: the
+canonical 8K ratio remains 1.91x slower per decode step. That residual gap, not
+quality loss, is the primary remaining engineering problem. A clean rebooted
+rerun is required before treating the 16K/32K performance curve as release-grade.

@@ -1617,7 +1617,7 @@ After Phase 4, pick exactly one of three pre-defined branches.
 ### Task 5.1: Write the decision memo
 
 **Files:**
-- Create: `docs/PHASE5_DECISION_2026-04-24.md`
+- Create: `docs/PHASE5_DECISION_2026-04-27.md`
 
 - [x] **Step 1: Compute the post-Phase-3 measured ms/step at 8K from the matrix**
 

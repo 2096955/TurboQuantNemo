@@ -2,10 +2,10 @@
 
 > **Status:** This is a summary/companion to the canonical plan at
 > [2026-04-24-isoquant-decode-performance.md](2026-04-24-isoquant-decode-performance.md).
-> For detailed task steps, refer to the canonical plan. Phases 0-3b complete and merged to main.
+> For detailed task steps, refer to the canonical plan. All phases (0-5) complete; Branch C selected.
 
 **Date:** 2026-04-24
-**Status:** Phases 0-3b complete; Phase 4-5 pending
+**Status:** Phases 0-5 complete; Branch C selected (1.91x gap at 8K)
 **Owner:** Implementation track (this repo)
 
 ## Context
