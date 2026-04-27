@@ -117,13 +117,13 @@ deer-flow requires additional API keys in `.env` -- see `deer-flow/.env.example`
 | `ISOQUANT_BITS` | (falls back to `TURBOQUANT_BITS`) | Quantization bit-width for IsoQuant KV cache |
 | `TURBOQUANT_SKIP_LAYERS` | (none) | Comma-separated layer indices to skip compression |
 
-**IsoQuant Metal fused decode (head_dim=256, 3-bit path):** when `ISOQUANT_USE_METAL=1` and the fused path is active, set `ISOQUANT_USE_NPT8_FUSED=1` to use the NPT=8 fused attention kernels. For `seq_len >= 512` the implementation uses T-tiled + FA2 merge (Phase 3b); shorter sequences use the v1 single-pass kernel. Override tile width with `ISOQUANT_NPT8_TILE_SIZE` (default `256`; invalid values fall back to 256).
+**IsoQuant fused decode (head_dim=256, 3-bit path):** set `ISOQUANT_USE_NPT8_FUSED=1` to enable NPT=8 fused attention kernels (D=256 only). For `seq_len >= 512` the implementation uses T-tiled + FA2 merge (Phase 3b); shorter sequences use the v1 single-pass kernel. Override tile width with `ISOQUANT_NPT8_TILE_SIZE` (default `256`; invalid values fall back to 256). `ISOQUANT_USE_METAL` is a separate flag that only controls the SO(4) rotation runtime (Metal vs Python); it does not gate fused attention dispatch.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `ISOQUANT_USE_METAL` | `0` | `1` enables Metal fused decode kernels for IsoQuant (3-bit packed path) |
+| `ISOQUANT_USE_METAL` | `0` | `1` uses Metal kernels for SO(4) inverse rotation (not fused attention — rotation only) |
 | `ISOQUANT_CACHE_MODE` | `concat_append` | `prealloc` for O(1) buffer-slice decode; `concat_append` for default concat path |
-| `ISOQUANT_USE_NPT8_FUSED` | `0` | `1` enables NPT=8 fused QK+softmax+V for D=256 (Metal + optional tiled path) |
+| `ISOQUANT_USE_NPT8_FUSED` | `0` | `1` enables NPT=8 fused QK+softmax+V for D=256 (v1 single-pass or T-tiled+FA2 merge) |
 | `ISOQUANT_NPT8_TILE_SIZE` | `256` | T tokens per tile for the tiled NPT=8 path (long contexts); must be a positive int |
 
 ## MCP Tool Surface
