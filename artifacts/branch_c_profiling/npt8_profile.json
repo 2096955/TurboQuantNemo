@@ -1,0 +1,86 @@
+{
+  "model": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+  "decode_steps": 100,
+  "configs": [
+    {
+      "T": 4096,
+      "default_total_ms_per_step": 11.302850419888273,
+      "iso_unpatched_ms_per_step": 20.807297499850392,
+      "iso_instrumented_ms_per_step": 35.145453750155866,
+      "instrumentation_overhead_pct": 68.90926729148063,
+      "components": [
+        {
+          "name": "compression_and_packing",
+          "avg_ms_per_step": 15.443196487321984,
+          "pct_of_instrumented_total": 43.94080838194754,
+          "gap_attribution_pct": 96.19596644550376
+        },
+        {
+          "name": "query_rotation",
+          "avg_ms_per_step": 2.454119179164991,
+          "pct_of_instrumented_total": 6.982750021129282,
+          "gap_attribution_pct": 15.28675532983268
+        },
+        {
+          "name": "metal_kernel",
+          "avg_ms_per_step": 4.004925399494823,
+          "pct_of_instrumented_total": 11.39528721969356,
+          "gap_attribution_pct": 24.946756952993837
+        },
+        {
+          "name": "fa2_merge",
+          "avg_ms_per_step": 2.447984638856724,
+          "pct_of_instrumented_total": 6.965295301802349,
+          "gap_attribution_pct": 15.248543160859947
+        },
+        {
+          "name": "inverse_rotation",
+          "avg_ms_per_step": 3.7746151912142523,
+          "pct_of_instrumented_total": 10.739981387201501,
+          "gap_attribution_pct": 23.512150258323942
+        }
+      ],
+      "residual_ms": 7.020612854103092
+    },
+    {
+      "T": 8192,
+      "default_total_ms_per_step": 12.514245000202209,
+      "iso_unpatched_ms_per_step": 36.75739208003506,
+      "iso_instrumented_ms_per_step": 38.0379954201635,
+      "instrumentation_overhead_pct": 3.483934163065943,
+      "components": [
+        {
+          "name": "compression_and_packing",
+          "avg_ms_per_step": 31.553771850594785,
+          "pct_of_instrumented_total": 82.95329841137868,
+          "gap_attribution_pct": 125.77356000845657
+        },
+        {
+          "name": "query_rotation",
+          "avg_ms_per_step": 2.5093689817003906,
+          "pct_of_instrumented_total": 6.597006372134436,
+          "gap_attribution_pct": 10.002362687340797
+        },
+        {
+          "name": "metal_kernel",
+          "avg_ms_per_step": 8.67803301778622,
+          "pct_of_instrumented_total": 22.814117626151496,
+          "gap_attribution_pct": 34.59070160251947
+        },
+        {
+          "name": "fa2_merge",
+          "avg_ms_per_step": 5.404999719175976,
+          "pct_of_instrumented_total": 14.209475708361982,
+          "gap_attribution_pct": 21.54436749255561
+        },
+        {
+          "name": "inverse_rotation",
+          "avg_ms_per_step": 8.115476107632276,
+          "pct_of_instrumented_total": 21.335183460615163,
+          "gap_attribution_pct": 32.34834573988476
+        }
+      ],
+      "residual_ms": -18.22365425672615
+    }
+  ]
+}
