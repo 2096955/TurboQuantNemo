@@ -1332,7 +1332,7 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 num_heads=H_q,
                 seq_len=T,
                 head_dim=D,
-                tile_size=256,
+                tile_size=int(os.environ.get("ISOQUANT_NPT8_TILE_SIZE", "256")),
                 storage_stride=storage_stride,
             ),
         )

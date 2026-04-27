@@ -178,6 +178,8 @@ def fused_attention_npt8_tiled(
         raise ValueError(f"NPT=8 tiled kernel requires head_dim=256, got {head_dim}")
     if tile_size < 1:
         raise ValueError(f"tile_size must be >= 1, got {tile_size}")
+    if seq_len == 0:
+        return mx.zeros((num_heads, head_dim), dtype=mx.float32)
 
     num_tiles = (seq_len + tile_size - 1) // tile_size
     kernel = _get_tiled_kernel()
