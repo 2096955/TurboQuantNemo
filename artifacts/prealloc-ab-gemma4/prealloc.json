@@ -1,0 +1,105 @@
+{
+  "harness": "benchmark_nvfp4_isoquant",
+  "profile": "custom-4096p256d",
+  "prefill_tokens": 4096,
+  "decode_tokens": 256,
+  "seed": 42,
+  "isoquant_bits": 3,
+  "expert_offload": false,
+  "models": {
+    "baseline": {
+      "path": "gemma-4-26b-a4b-it-4bit",
+      "quant": "affine-4bit"
+    },
+    "nvfp4": {
+      "path": "gemma-4-26b-a4b-it-4bit",
+      "quant": "affine-4bit"
+    }
+  },
+  "runs": {
+    "baseline_default": {
+      "status": "skipped",
+      "reason": "user --skip"
+    },
+    "baseline_isoquant": {
+      "profile": "custom-4096p256d",
+      "load_time_s": 1.8406852499902016,
+      "peak_memory_after_load_mb": 13799.386859893799,
+      "system_after_load": {
+        "process_rss_mb": 14614.33,
+        "swap_used_mb": 4666.5,
+        "vm_pages_paged_out": null
+      },
+      "prefill_plus_first_token_s": 8.237010917000589,
+      "prefill_step_size": 64,
+      "decode_tok_per_s": 26.652285421026633,
+      "decode_split_point_tokens": null,
+      "decode_first_half_tok_per_s": null,
+      "decode_second_half_tok_per_s": null,
+      "peak_memory_mb": 15216.280906677246,
+      "kv_cache_type": "isoquant",
+      "expert_offload": false,
+      "use_predictor": false,
+      "use_dedekimi_observer": false,
+      "task_expert_cliques": false,
+      "expert_cache": {},
+      "kv_cache": {
+        "prefill_calls": 1792,
+        "prefill_tokens": 114660,
+        "decode_calls": 7196,
+        "decode_tokens": 7196,
+        "compress_calls": 14448,
+        "decompress_calls": 0,
+        "read_keys_calls": 0,
+        "read_values_calls": 0,
+        "finalize_calls": 28,
+        "fused_metal_attempts": 7196,
+        "fused_metal_failures": 0,
+        "packed_cache_hits": 14392,
+        "packed_cache_misses": 0,
+        "fallback_invocations": 0,
+        "unfused_fallback_calls": 0,
+        "packed_key_repack_ms": 0,
+        "packed_value_repack_ms": 0,
+        "fused_qk_ms": 0,
+        "fused_softmax_ms": 0,
+        "fused_value_ms": 0,
+        "fused_value_tiled_ms": 0,
+        "fused_inverse_ms": 0,
+        "fused_single_kernel_ms": 0,
+        "fused_metal_total_ms": 0,
+        "decode_key_compress_ms": 0,
+        "decode_value_compress_ms": 0,
+        "decode_concat_ms": 0,
+        "packed_cache_hit_rate": 1.0,
+        "fused_metal_success_rate": 1.0,
+        "packed_repack_ms_total": 0,
+        "fused_kernel_ms_total": 0,
+        "decode_write_ms_total": 0
+      },
+      "warm_second_pass": false,
+      "warm_pass_decode_tok_per_s": null,
+      "warm_pass_peak_memory_mb": null,
+      "warm_pass_expert_cache": {},
+      "system_at_end": {
+        "process_rss_mb": 14752.64,
+        "swap_used_mb": 4666.5,
+        "vm_pages_paged_out": null
+      },
+      "target_envelope_mb": null,
+      "status": "ok",
+      "label": "baseline+isoquant",
+      "model_path": "gemma-4-26b-a4b-it-4bit",
+      "model_quant": "affine-4bit"
+    },
+    "nvfp4_default": {
+      "status": "skipped",
+      "reason": "user --skip"
+    },
+    "nvfp4_isoquant": {
+      "status": "skipped",
+      "reason": "user --skip"
+    }
+  },
+  "deltas": {}
+}

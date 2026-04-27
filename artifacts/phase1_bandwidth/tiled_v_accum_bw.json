@@ -1,0 +1,57 @@
+{
+  "peak_gbs": 300.0,
+  "results": [
+    {
+      "T": 1024,
+      "ms_per_call": 0.5260316841304302,
+      "bytes_best": 548864,
+      "bytes_worst": 13910016,
+      "achieved_gbs_best": 1.0434048300860685,
+      "achieved_gbs_worst": 26.4433044997932,
+      "pct_peak_best": 0.34780161002868953,
+      "pct_peak_worst": 8.8144348332644
+    },
+    {
+      "T": 2048,
+      "ms_per_call": 0.3661391604691744,
+      "bytes_best": 1081344,
+      "bytes_worst": 55066624,
+      "achieved_gbs_best": 2.9533688737756294,
+      "achieved_gbs_worst": 150.39807249636198,
+      "pct_peak_best": 0.9844562912585432,
+      "pct_peak_worst": 50.132690832120666
+    },
+    {
+      "T": 4096,
+      "ms_per_call": 0.35795249976217747,
+      "bytes_best": 2146304,
+      "bytes_worst": 219168768,
+      "achieved_gbs_best": 5.9960581401889845,
+      "achieved_gbs_worst": 612.2845018420462,
+      "pct_peak_best": 1.9986860467296617,
+      "pct_peak_worst": 204.09483394734872
+    },
+    {
+      "T": 8192,
+      "ms_per_call": 0.4012116603553295,
+      "bytes_best": 4276224,
+      "bytes_worst": 874528768,
+      "achieved_gbs_best": 10.65827447839577,
+      "achieved_gbs_worst": 2179.7192215836435,
+      "pct_peak_best": 3.5527581594652564,
+      "pct_peak_worst": 726.5730738612145
+    },
+    {
+      "T": 16384,
+      "ms_per_call": 0.5194908194243908,
+      "bytes_best": 8536064,
+      "bytes_worst": 3493871616,
+      "achieved_gbs_best": 16.431597404277863,
+      "achieved_gbs_worst": 6725.569510297217,
+      "pct_peak_best": 5.477199134759288,
+      "pct_peak_worst": 2241.8565034324056
+    }
+  ],
+  "max_pct_peak_best": 5.477199134759288,
+  "decision": "Execution/dispatch-bound (best-case 5.5% < 20% peak): the kernel is not memory-throughput-limited even under perfect cache reuse. Phase 3 fusion's upside from traffic reduction is small. Investigate centroid loads / dispatch overhead / software pipelining BEFORE committing to the NPT=8 fusion."
+}

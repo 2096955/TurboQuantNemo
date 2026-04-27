@@ -1,0 +1,73 @@
+{
+  "model": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-4bit",
+  "T_prefill": 4096,
+  "decode_steps": 100,
+  "prefill_ms": 3663.660999853164,
+  "total_decode_ms": 5313.480333890766,
+  "per_step_ms": 53.13480333890766,
+  "tok_per_s": 18.820056482033795,
+  "kernels": {
+    "pack_indices_3bit": {
+      "calls": 2020,
+      "total_ms": 3150.6875017657876,
+      "avg_ms": 1.5597462880028652,
+      "per_step_ms": 31.506875017657876,
+      "pct_of_decode": 59.296116740470076
+    },
+    "fused_qk_dot": {
+      "calls": 1000,
+      "total_ms": 470.40602983906865,
+      "avg_ms": 0.47040602983906865,
+      "per_step_ms": 4.7040602983906865,
+      "pct_of_decode": 8.853068051060546
+    },
+    "fused_value_accum_tiled": {
+      "calls": 1000,
+      "total_ms": 563.8306983746588,
+      "avg_ms": 0.5638306983746588,
+      "per_step_ms": 5.638306983746588,
+      "pct_of_decode": 10.611325589715639
+    },
+    "_apply_inverse_rotation": {
+      "calls": 1000,
+      "total_ms": 345.6685720011592,
+      "avg_ms": 0.3456685720011592,
+      "per_step_ms": 3.456685720011592,
+      "pct_of_decode": 6.505502049125782
+    }
+  },
+  "global_stats": {
+    "prefill_calls": 10,
+    "prefill_tokens": 40960,
+    "decode_calls": 1000,
+    "decode_tokens": 1000,
+    "compress_calls": 2020,
+    "decompress_calls": 0,
+    "read_keys_calls": 10,
+    "read_values_calls": 10,
+    "finalize_calls": 10,
+    "fused_metal_attempts": 1000,
+    "fused_metal_failures": 0,
+    "packed_cache_hits": 2000,
+    "packed_cache_misses": 0,
+    "fallback_invocations": 0,
+    "unfused_fallback_calls": 0,
+    "packed_key_repack_ms": 0,
+    "packed_value_repack_ms": 0,
+    "fused_qk_ms": 0,
+    "fused_softmax_ms": 0,
+    "fused_value_ms": 0,
+    "fused_value_tiled_ms": 0,
+    "fused_inverse_ms": 0,
+    "fused_single_kernel_ms": 0,
+    "fused_metal_total_ms": 0,
+    "decode_key_compress_ms": 0,
+    "decode_value_compress_ms": 0,
+    "decode_concat_ms": 0,
+    "packed_cache_hit_rate": 1.0,
+    "fused_metal_success_rate": 1.0,
+    "packed_repack_ms_total": 0,
+    "fused_kernel_ms_total": 0,
+    "decode_write_ms_total": 0
+  }
+}
