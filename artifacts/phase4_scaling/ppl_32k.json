@@ -1,0 +1,9 @@
+{
+  "model": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+  "ctx": 32768,
+  "ppl_default": 5.625,
+  "ppl_isoquant": 5.623647212982178,
+  "divergence_pct": 0.024,
+  "threshold_pct": 5.0,
+  "pass": true
+}
