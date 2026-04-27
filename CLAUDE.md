@@ -117,6 +117,13 @@ deer-flow requires additional API keys in `.env` -- see `deer-flow/.env.example`
 | `ISOQUANT_BITS` | (falls back to `TURBOQUANT_BITS`) | Quantization bit-width for IsoQuant KV cache |
 | `TURBOQUANT_SKIP_LAYERS` | (none) | Comma-separated layer indices to skip compression |
 
+**IsoQuant Metal fused decode (head_dim=256, 3-bit path):** when `ISOQUANT_USE_METAL=1` and the fused path is active, set `ISOQUANT_USE_NPT8_FUSED=1` to use the NPT=8 fused attention kernels. For `seq_len >= 512` the implementation uses T-tiled + FA2 merge (Phase 3b); shorter sequences use the v1 single-pass kernel. Override tile width with `ISOQUANT_NPT8_TILE_SIZE` (default `256`; invalid values fall back to 256).
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `ISOQUANT_USE_NPT8_FUSED` | `0` | `1` enables NPT=8 fused QK+softmax+V for D=256 (Metal + optional tiled path) |
+| `ISOQUANT_NPT8_TILE_SIZE` | `256` | T tokens per tile for the tiled NPT=8 path (long contexts); must be a positive int |
+
 ## MCP Tool Surface
 
 **qwen-coder-mcp**: `code_generation`, `code_review`, `debug_assistance`
@@ -132,6 +139,7 @@ deer-flow requires additional API keys in `.env` -- see `deer-flow/.env.example`
 - **deer-flow backend** uses LangGraph for agent orchestration; the gateway is FastAPI. Security hardening covers 22 gateway tests.
 - **Qwen inference**: llama.cpp `/v1/completions` (default) or Ollama `/api/generate` -- toggled via `QWEN_API` env var.
 - **TurboQuant**: Codebook-based KV cache compression for MLX; codebook `.npz` files live in `mlx-lm/mlx_lm/models/turboquant_codebooks/`. **Must not** be applied to Mamba/SSM `ArrayCache` — only full attention layers.
+- **IsoQuant NPT=8 (D=256)**: With `ISOQUANT_USE_NPT8_FUSED=1`, decode uses fused Metal attention; for `seq_len` at or above 512, the T-tiled kernel + Python FA2 merge is selected (see `ISOQUANT_NPT8_TILE_SIZE`); shorter contexts use the v1 single-pass kernel.
 - **Expert offload** (mlx-lm): `mlx_lm/expert_offload.py` with LRU caching. Use `--expert-offload` flag. `repack_experts.py` writes to `repacked-*.safetensors` with atomic index update.
 - **No symlinks**: `mlx-lm/mlx_lm/models/mlx_turboquant.py` and `mlx_isoquant.py` are independent regular files (the historical symlink from `turboquant-mlx/` was replaced). Edit them in place under `mlx-lm/mlx_lm/models/`. The `turboquant-mlx/` directory now holds only codebook generation tooling.
 
