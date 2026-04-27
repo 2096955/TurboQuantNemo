@@ -1,0 +1,42 @@
+[
+  {
+    "prompt_tps": 23.049,
+    "gen_tps": 40.689,
+    "peak_mem_gb": 14.569,
+    "label": "IsoQuant 3-kernel (short context)",
+    "elapsed": 10.946159750004881,
+    "text_snippet": "Calling `python -m mlx_lm.generate...` directly is deprecated. Use `mlx_lm.generate...` or `python -m mlx_lm generate ...` instead.\nIn Douglas Adams' *The Hitchhiker's Guide to the Galaxy*, the number"
+  },
+  {
+    "prompt_tps": 23.505,
+    "gen_tps": 42.964,
+    "peak_mem_gb": 14.569,
+    "label": "IsoQuant NPT=8 v1 (short context, T < 512)",
+    "elapsed": 9.592592084009084,
+    "text_snippet": "Calling `python -m mlx_lm.generate...` directly is deprecated. Use `mlx_lm.generate...` or `python -m mlx_lm generate ...` instead.\nIn Douglas Adams' *The Hitchhiker's Guide to the Galaxy*, the number"
+  },
+  {
+    "prompt_tps": 423.346,
+    "gen_tps": 30.819,
+    "peak_mem_gb": 14.954,
+    "label": "IsoQuant NPT=8 tiled (prompt=670 tokens, T >= 512)",
+    "elapsed": 10.627377334007178,
+    "text_snippet": "Calling `python -m mlx_lm.generate...` directly is deprecated. Use `mlx_lm.generate...` or `python -m mlx_lm generate ...` instead.\n### Technical Deep Dive: From Scaled Dot-Product Attention to High-E"
+  },
+  {
+    "prompt_tps": 437.406,
+    "gen_tps": 31.572,
+    "peak_mem_gb": 14.954,
+    "label": "IsoQuant 3-kernel (prompt=670 tokens)",
+    "elapsed": 10.479944791994058,
+    "text_snippet": "Calling `python -m mlx_lm.generate...` directly is deprecated. Use `mlx_lm.generate...` or `python -m mlx_lm generate ...` instead.\n### Technical Deep Dive: From Scaled Dot-Product Attention to High-E"
+  },
+  {
+    "prompt_tps": 138.47,
+    "gen_tps": 113.175,
+    "peak_mem_gb": 14.548,
+    "label": "Default KV baseline (short)",
+    "elapsed": 5.2761371249944204,
+    "text_snippet": "Calling `python -m mlx_lm.generate...` directly is deprecated. Use `mlx_lm.generate...` or `python -m mlx_lm generate ...` instead.\nIn Douglas Adams's *The Hitchhiker's Guide to the Galaxy*, the numbe"
+  }
+]

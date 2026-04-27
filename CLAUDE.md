@@ -121,6 +121,8 @@ deer-flow requires additional API keys in `.env` -- see `deer-flow/.env.example`
 
 | Variable | Default | Notes |
 |----------|---------|-------|
+| `ISOQUANT_USE_METAL` | `0` | `1` enables Metal fused decode kernels for IsoQuant (3-bit packed path) |
+| `ISOQUANT_CACHE_MODE` | `concat_append` | `prealloc` for O(1) buffer-slice decode; `concat_append` for default concat path |
 | `ISOQUANT_USE_NPT8_FUSED` | `0` | `1` enables NPT=8 fused QK+softmax+V for D=256 (Metal + optional tiled path) |
 | `ISOQUANT_NPT8_TILE_SIZE` | `256` | T tokens per tile for the tiled NPT=8 path (long contexts); must be a positive int |
 
