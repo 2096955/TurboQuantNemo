@@ -1050,6 +1050,7 @@ class IsoQuantKVCache(TurboQuantKVCache):
     # in one 32-thread group, losing ~30-50% even at T=16.
     # Disabled (threshold=0) until the single kernel gains T-parallel tiling.
     _SINGLE_KERNEL_T_THRESHOLD = 0
+    _NPT8_TILED_T_THRESHOLD = 512
 
     def _fused_attention_metal(
         self,
@@ -1137,22 +1138,40 @@ class IsoQuantKVCache(TurboQuantKVCache):
             storage_stride = T
 
         if D == 256 and os.environ.get("ISOQUANT_USE_NPT8_FUSED", "0") == "1":
-            out = self._fused_attention_npt8(
-                k_packed,
-                v_packed,
-                centroids,
-                k_norms,
-                v_norms,
-                q_rot,
-                kv_head_map,
-                scale,
-                mask,
-                H_q,
-                H_kv,
-                T,
-                D,
-                storage_stride,
-            )
+            if T >= self._NPT8_TILED_T_THRESHOLD:
+                out = self._fused_attention_npt8_tiled(
+                    k_packed,
+                    v_packed,
+                    centroids,
+                    k_norms,
+                    v_norms,
+                    q_rot,
+                    kv_head_map,
+                    scale,
+                    mask,
+                    H_q,
+                    H_kv,
+                    T,
+                    D,
+                    storage_stride,
+                )
+            else:
+                out = self._fused_attention_npt8(
+                    k_packed,
+                    v_packed,
+                    centroids,
+                    k_norms,
+                    v_norms,
+                    q_rot,
+                    kv_head_map,
+                    scale,
+                    mask,
+                    H_q,
+                    H_kv,
+                    T,
+                    D,
+                    storage_stride,
+                )
         elif T <= self._SINGLE_KERNEL_T_THRESHOLD:
             out = self._fused_attention_single_kernel(
                 k_packed,
@@ -1272,6 +1291,48 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 num_heads=H_q,
                 seq_len=T,
                 head_dim=D,
+                storage_stride=storage_stride,
+            ),
+        )
+
+    def _fused_attention_npt8_tiled(
+        self,
+        k_packed,
+        v_packed,
+        centroids,
+        k_norms,
+        v_norms,
+        q_rot,
+        kv_head_map,
+        scale,
+        mask,
+        H_q,
+        H_kv,
+        T,
+        D,
+        storage_stride,
+    ) -> mx.array:
+        """NPT=8 tiled fused kernel with FA2-style merge for long sequences."""
+        from .fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
+
+        return self._profile_mx_call(
+            "fused_single_kernel_ms",
+            lambda: fused_attention_npt8_tiled(
+                K_packed=k_packed,
+                V_packed=v_packed,
+                centroids=centroids,
+                k_norms=k_norms,
+                v_norms=v_norms,
+                q_rot=q_rot,
+                kv_head_map=kv_head_map,
+                block_matrices=self.block_matrices,
+                scale=scale,
+                use_hadamard=self._use_hadamard,
+                mask=mask,
+                num_heads=H_q,
+                seq_len=T,
+                head_dim=D,
+                tile_size=256,
                 storage_stride=storage_stride,
             ),
         )
