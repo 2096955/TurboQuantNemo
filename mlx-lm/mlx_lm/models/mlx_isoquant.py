@@ -1315,6 +1315,11 @@ class IsoQuantKVCache(TurboQuantKVCache):
         """NPT=8 tiled fused kernel with FA2-style merge for long sequences."""
         from .fused_kv_decode_npt8_tiled import fused_attention_npt8_tiled
 
+        try:
+            tile_size = int(os.environ.get("ISOQUANT_NPT8_TILE_SIZE", "256"))
+        except ValueError:
+            tile_size = 256
+
         return self._profile_mx_call(
             "fused_single_kernel_ms",
             lambda: fused_attention_npt8_tiled(
@@ -1332,7 +1337,7 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 num_heads=H_q,
                 seq_len=T,
                 head_dim=D,
-                tile_size=int(os.environ.get("ISOQUANT_NPT8_TILE_SIZE", "256")),
+                tile_size=tile_size,
                 storage_stride=storage_stride,
             ),
         )
