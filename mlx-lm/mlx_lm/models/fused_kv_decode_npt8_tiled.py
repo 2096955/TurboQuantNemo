@@ -2,8 +2,10 @@
 
 This path splits the KV sequence across tiles, runs an online-softmax decode
 kernel per tile, then merges the per-tile partials with FlashAttention-style
-log-sum-exp formulas in MLX. Inverse rotation and optional Hadamard are applied
-once after merge via the existing structured Python path.
+log-sum-exp formulas in MLX. Each tile writes tile-local softmax-normalized
+rotated-space output plus its `(m, l)` statistics. Inverse rotation and
+optional Hadamard are applied once after merge via the existing structured
+Python path.
 """
 
 from __future__ import annotations
@@ -82,9 +84,10 @@ _NPT8_TILED_ATTENTION_SOURCE = """
         m_run = m_new;
     }
 
+    float inv_l = (l_run > 0.0f) ? (1.0f / l_run) : 0.0f;
     uint out_base = (tile_id * H_q + q_head) * 256;
     for (uint i = 0; i < 8; i++) {
-        o_partials[out_base + dim_base + i] = O_r[i];
+        o_partials[out_base + dim_base + i] = O_r[i] * inv_l;
     }
 
     if (lane == 0) {
@@ -138,10 +141,10 @@ def _fa2_merge(
     l_all = ml_all[:, :, 1]
 
     m_max = mx.max(m_all, axis=0)
-    scale = mx.exp(m_all - m_max[None, :])
+    weights = mx.exp(m_all - m_max[None, :]) * l_all
 
-    numerator = mx.sum(o_all * scale[:, :, None], axis=0)
-    denominator = mx.sum(scale * l_all, axis=0)
+    numerator = mx.sum(o_all * weights[:, :, None], axis=0)
+    denominator = mx.sum(weights, axis=0)
 
     denominator_safe = mx.where(denominator > 0, denominator, mx.ones_like(denominator))
     merged = numerator / denominator_safe[:, None]
@@ -227,16 +230,5 @@ def fused_attention_npt8_tiled(
 
     merged = _fa2_merge(o_partials, ml_partials, num_tiles, num_heads, head_dim)
 
-    h_kv = block_matrices.shape[0]
-    repeats = num_heads // h_kv if num_heads != h_kv else 1
-    if repeats > 1:
-        grouped = merged.reshape(h_kv, repeats, head_dim)
-        rotated = []
-        for g in range(repeats):
-            rotated.append(
-                structured_rotate_inverse(
-                    grouped[:, g, :], block_matrices, use_hadamard
-                )
-            )
-        return mx.stack(rotated, axis=1).reshape(num_heads, head_dim)
-    return structured_rotate_inverse(merged, block_matrices, use_hadamard)
+    expanded_blocks = mx.take(block_matrices, kv_head_map, axis=0)
+    return structured_rotate_inverse(merged, expanded_blocks, use_hadamard)
