@@ -1,24 +1,146 @@
 {
-  "status": "invalidated",
-  "invalidated_at": "2026-04-27",
-  "invalidated_commit": "8b04290",
-  "reason": "The original Branch C profile artifact double-counted component timings and reused cache state between unpatched and instrumented phases.",
-  "do_not_use_for_decisions": true,
-  "required_rerun": {
-    "script": "scripts/profile_npt8_metal.py",
-    "model": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
-    "output": "artifacts/branch_c_profiling/npt8_profile.json",
-    "roofline": "artifacts/branch_c_profiling/roofline.json",
-    "decode_steps": 100
+  "model": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+  "decode_steps": 100,
+  "roofline": {
+    "hardware": {
+      "chip": "Apple M4 Max",
+      "memory_gb": 128,
+      "gpu_cores": 40,
+      "macos_version": "26.3.1",
+      "metal_gpu_family": "applegpu_g16s"
+    },
+    "calibration": {
+      "peak_fp16_tflops": 14.46,
+      "peak_fp32_tflops": 10.29,
+      "peak_memory_bandwidth_gbs": 256.1,
+      "theoretical_memory_bandwidth_gbs": 546.0,
+      "bandwidth_efficiency_ratio": 0.469,
+      "noop_dispatch_us": 115.23
+    },
+    "power_baseline": {
+      "avg_package_watts": null,
+      "avg_gpu_watts": null
+    },
+    "valid": false,
+    "warnings": [
+      "Bandwidth efficiency 0.47 < 0.5 - calibration may be unreliable (too few iters=500)"
+    ],
+    "timestamp": "2026-04-27T21:46:37Z"
   },
-  "validity_gates": [
-    "Fresh cache per phase",
-    "No stacked monkeypatches",
-    "Decode-only component accounting",
-    "tiled_kernel_observed=true",
-    "missing_components=[] or explicitly explained",
-    "residual_ms >= 0",
-    "residual_pct < 20",
-    "Metal System Trace collected before ALU/BW claims"
+  "configs": [
+    {
+      "T": 4096,
+      "default_total_ms_per_step": 10.850190840000096,
+      "iso_unpatched_ms_per_step": 19.890690419999828,
+      "iso_instrumented_ms_per_step": 36.44228166000062,
+      "instrumentation_overhead_pct": 83.21275375820228,
+      "gap_ms": 9.040499579999732,
+      "components": [
+        {
+          "name": "compress_batch",
+          "call_count": 2000,
+          "avg_ms_per_step": 12.45898440000019,
+          "pct_of_instrumented_total": 34.18826657518343,
+          "gap_attribution_pct": 75.22020441744452
+        },
+        {
+          "name": "pack_indices_3bit",
+          "call_count": 2000,
+          "avg_ms_per_step": 5.181733520018952,
+          "pct_of_instrumented_total": 14.21901506706829,
+          "gap_attribution_pct": 31.28433603404656
+        },
+        {
+          "name": "inverse_rotation",
+          "call_count": 1000,
+          "avg_ms_per_step": 3.680622629985919,
+          "pct_of_instrumented_total": 10.099868785180387,
+          "gap_attribution_pct": 22.221489145697053
+        },
+        {
+          "name": "metal_kernel",
+          "call_count": 1000,
+          "avg_ms_per_step": 3.504827370006751,
+          "pct_of_instrumented_total": 9.617475115049347,
+          "gap_attribution_pct": 21.16013815859327
+        },
+        {
+          "name": "fa2_merge",
+          "call_count": 1000,
+          "avg_ms_per_step": 2.3505628600219097,
+          "pct_of_instrumented_total": 6.450097943790137,
+          "gap_attribution_pct": 14.191350847738313
+        },
+        {
+          "name": "query_rotation",
+          "call_count": 1000,
+          "avg_ms_per_step": 2.320431210011975,
+          "pct_of_instrumented_total": 6.367414729025876,
+          "gap_attribution_pct": 14.009433221034955
+        }
+      ],
+      "sum_components_ms": 29.497161990045697,
+      "residual_ms": 6.94511966995492,
+      "residual_pct": 19.05786178470254,
+      "missing_components": [],
+      "tiled_kernel_observed": true
+    },
+    {
+      "T": 8192,
+      "default_total_ms_per_step": 11.459481249999044,
+      "iso_unpatched_ms_per_step": 21.323323749998053,
+      "iso_instrumented_ms_per_step": 38.530864159999965,
+      "instrumentation_overhead_pct": 80.69820920860653,
+      "gap_ms": 9.86384249999901,
+      "components": [
+        {
+          "name": "compress_batch",
+          "call_count": 2000,
+          "avg_ms_per_step": 13.145803659945159,
+          "pct_of_instrumented_total": 34.1175936396262,
+          "gap_attribution_pct": 73.75426916525653
+        },
+        {
+          "name": "pack_indices_3bit",
+          "call_count": 2000,
+          "avg_ms_per_step": 5.260122390052402,
+          "pct_of_instrumented_total": 13.651711438938063,
+          "gap_attribution_pct": 29.511811725912835
+        },
+        {
+          "name": "metal_kernel",
+          "call_count": 1000,
+          "avg_ms_per_step": 3.894253050052612,
+          "pct_of_instrumented_total": 10.106840671627998,
+          "gap_attribution_pct": 21.84862904398496
+        },
+        {
+          "name": "inverse_rotation",
+          "call_count": 1000,
+          "avg_ms_per_step": 3.796080200022516,
+          "pct_of_instrumented_total": 9.852050512698698,
+          "gap_attribution_pct": 21.29783222751476
+        },
+        {
+          "name": "fa2_merge",
+          "call_count": 1000,
+          "avg_ms_per_step": 2.440000759997929,
+          "pct_of_instrumented_total": 6.332587688316023,
+          "gap_attribution_pct": 13.689575584081753
+        },
+        {
+          "name": "query_rotation",
+          "call_count": 1000,
+          "avg_ms_per_step": 2.390242490023411,
+          "pct_of_instrumented_total": 6.203448954837594,
+          "gap_attribution_pct": 13.410407803105368
+        }
+      ],
+      "sum_components_ms": 30.92650255009403,
+      "residual_ms": 7.604361609905936,
+      "residual_pct": 19.735767093955424,
+      "missing_components": [],
+      "tiled_kernel_observed": true
+    }
   ]
 }
