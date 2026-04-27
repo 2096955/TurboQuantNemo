@@ -1,41 +1,109 @@
-# Profiling Memo: IsoQuant NPT=8 Fused Kernel Bottlenecks
+# Profiling Memo: IsoQuant NPT=8 Fused Kernel Decomposition
 
-**Date:** April 27, 2026
-**Model:** Qwen3.6-35B-A3B-nvfp4 (D=256)
-**Context Lengths:** 4K, 8K (Tiled Path)
+**Date:** 2026-04-27
+**Model:** Qwen3.6-35B-A3B-nvfp4 (D=256, NPT=8)
+**Context Lengths:** 4K, 8K (both tiled path, `_NPT8_TILED_T_THRESHOLD=512`)
+**Status:** Awaiting clean rerun. The prior committed profile data is invalidated.
 
-## 1. Executive Summary
+## Background
 
-Profiling of the fused NPT=8 IsoQuant decode kernel reveals a **2.9x latency gap** vs. default KV at 8K context (36.8ms vs 12.5ms). The bottleneck is primarily in the **KV write path (compression and packing)** and the **merge/rotation overhead** on the read path, rather than the Metal kernel ALU performance itself.
+Phase 4/5 established a 1.91x latency gap between `nvfp4+isoquant` and
+`nvfp4+default` at 8K context (50.3 vs 96.4 tok/s). PPL is effectively
+lossless (0.024% divergence at 32K), so Branch C is a performance problem,
+not a quality problem.
 
-## 2. Gap Attribution (T=8192)
+This profiling pass is intended to decompose the fused NPT=8 decode step into
+six components:
 
-| Component | Avg ms/step (All Layers) | % of Instrumented Total | Gap Attribution* |
-|-----------|--------------------------|-------------------------|------------------|
-| **Total (Unpatched)** | **36.76 ms** | - | **100%** |
-| **Default Baseline** | **12.51 ms** | - | - |
-| **Gap** | **24.25 ms** | - | - |
-| `compression_and_packing` | 31.55 ms | 83.0% | ~125% |
-| `metal_kernel` | 8.68 ms | 22.8% | ~35% |
-| `inverse_rotation` | 8.12 ms | 21.3% | ~32% |
-| `fa2_merge` | 5.40 ms | 14.2% | ~22% |
-| `query_rotation` | 2.51 ms | 6.6% | ~10% |
+| Component | What it measures |
+|-----------|------------------|
+| `query_rotation` | Forward SO(4)+WHT rotation of the query vector |
+| `metal_kernel` | Tiled NPT=8 Metal dispatch (QK + softmax + V per tile) |
+| `fa2_merge` | Python-side FlashAttention-style tile merge |
+| `inverse_rotation` | Post-merge inverse SO(4)+WHT rotation |
+| `compress_batch` | Decode key/value `_compress_batch` work |
+| `pack_indices_3bit` | Decode 3-bit index packing into byte storage |
 
-*\*Attributions sum to >100% due to instrumentation overhead (sync fences across 64+ layers).*
+## Invalidated Data
 
-## 3. Analysis
+The initial profile artifact from commit `8b04290` is not decision-grade and
+must not be used for bottleneck ranking. The canonical
+`artifacts/branch_c_profiling/npt8_profile.json` file has been replaced with
+an explicit invalidation marker until the corrected profiler is rerun.
 
-1.  **Write Path Dominance:** The `compression_and_packing` component accounts for the majority of the overhead. Every decode step requires compressing the new key/value and packing them into 3-bit storage. This O(L) overhead (where L is layers) is currently the "floor" of IsoQuant latency.
-2.  **Kernel vs. Merge:** The tiled Metal kernel dispatch (`metal_kernel`) is only ~15% of the total step time. The combined overhead of the Python-side `fa2_merge` and the `inverse_rotation` (13.5ms total) is nearly double the time spent in the GPU kernel itself.
-3.  **ALU vs. BW:** While the kernel is efficient, the high cost of inverse rotation suggests that the SO(4) math, even if fused, is adding significant latency when implemented as a separate step.
+The invalidated run had these defects:
 
-## 4. Recommendations
+1. `patch_instrumentation()` was called inside the T-loop without a clean
+   save/restore boundary, so the second context length wrapped already-wrapped
+   functions.
+2. Phase B and Phase C reused the same IsoQuant cache. The instrumented run
+   therefore measured a cache that had already been extended by the unpatched
+   run.
+3. The kernel wrapper patched `_get_tiled_kernel()` rather than the cached
+   `_tiled_kernel_cache["npt8_tiled"]` object, so kernel timing could be
+   bypassed after cache hits.
+4. The label `compression_and_packing` was wrong: only `pack_indices_3bit` was
+   wrapped, while `_compress_batch` was not separately timed.
+5. Timings were collected during cache prefill/finalize and warmup, then
+   divided by decode-step count. That contaminated decode attribution with
+   setup work.
+6. `--roofline` was required but not read or enforced.
+7. `--capture-traces` started and stopped capture without running a workload.
+8. The memo made ALU/bandwidth claims without Metal counter data.
 
-1.  **Optimize Packing:** The 3-bit packing is currently a bottleneck. Investigate moving packing into a fused kernel or using a more cache-friendly bit-packing representation.
-2.  **Fuse Inverse Rotation:** The `inverse_rotation` is currently a separate call after the FA2 merge. Fusing the inverse SO(4) rotation directly into the T-tiled Metal kernel's final reduction would eliminate ~8ms of latency.
-3.  **C++ Merge:** Moving the FA2 tile merge from Python/MLX-ops to a dedicated C++ or Metal reduction would eliminate ~5ms of overhead.
+The visible symptom was a negative 8K residual: component sums exceeded the
+instrumented wall-clock step time by 18.2 ms.
 
-## 5. Next Steps
+## Corrected Script
 
-*   **Task 4 (Instruments):** Confirm if `metal_kernel` is memory-bound or ALU-bound (suspected memory-bound due to 3-bit unpacking).
-*   **Decision:** Proceed with **Phase 6: Fused Representation Redesign**, focusing on fusing the inverse rotation and optimizing the packing path.
+`scripts/profile_npt8_metal.py` now:
+
+- Creates fresh caches for default, unpatched IsoQuant, and instrumented
+  IsoQuant phases.
+- Patches instrumentation only for the measured decode phase and restores
+  originals after each context length.
+- Clears component samples after warmup so prefill/finalize/warmup do not
+  contaminate decode attribution.
+- Patches the cached NPT=8 tiled kernel object directly.
+- Separately records `compress_batch` and `pack_indices_3bit`.
+- Reads the roofline JSON, aborts if BW efficiency is below 0.5, and warns if
+  it is below the expected 0.73-0.85 range.
+- Runs actual decode steps inside optional `mx.metal.start_capture()` /
+  `mx.metal.stop_capture()`.
+- Emits `call_count`, `missing_components`, `tiled_kernel_observed`,
+  `residual_ms`, and `residual_pct` fields for sanity checking.
+
+## Roofline Note
+
+The current `roofline.json` records BW efficiency of 0.502. This barely clears
+the hard script gate (0.5) but misses the plan target range (0.73-0.85). The
+machine should be rebooted and roofline should be rerun before treating any new
+profile as final.
+
+## Rerun Gate
+
+After reboot:
+
+```bash
+python3 scripts/roofline_calibrate.py \
+  --output artifacts/branch_c_profiling/roofline.json \
+  --iters 500
+
+python3 scripts/profile_npt8_metal.py \
+  --model /Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4 \
+  --output artifacts/branch_c_profiling/npt8_profile.json \
+  --roofline artifacts/branch_c_profiling/roofline.json \
+  --decode-steps 100
+```
+
+Treat the rerun as valid only if:
+
+- `tiled_kernel_observed` is true for both 4K and 8K.
+- `missing_components` is empty or any missing component is explicitly
+  explained.
+- `residual_ms` is non-negative and `residual_pct` is below 20%.
+- 8K instrumentation overhead is small enough to preserve component ordering.
+- Metal System Trace is collected before making ALU/bandwidth claims.
+
+Until those gates pass, no Phase 6 or representation-redesign recommendation
+is justified by this profiling work.
