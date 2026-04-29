@@ -1,0 +1,111 @@
+{
+  "checkpoint_path": "/Volumes/Samsung9904tb/Kimi-K2.6",
+  "checkpoint_size_gb": 554,
+  "shard_count": 64,
+  "total_tensors": 208550,
+  "tensor_categories": {
+    "routed_expert": 207360,
+    "attention": 427,
+    "shared_expert": 180,
+    "dense_mlp": 231,
+    "norm": 235,
+    "other": 115,
+    "embedding": 2
+  },
+  "architecture": {
+    "top_level_model_type": "kimi_k25",
+    "text_model_type": "kimi_k2",
+    "top_level_arch": "KimiK25ForConditionalGeneration",
+    "text_arch": "DeepseekV3ForCausalLM",
+    "num_layers": 61,
+    "first_dense_layer": 0,
+    "expert_layers": "1-60",
+    "expert_layer_count": 60,
+    "hidden_size": 7168,
+    "num_attention_heads": 64,
+    "num_key_value_heads": 64,
+    "vocab_size": 163840
+  },
+  "moe": {
+    "n_routed_experts": 384,
+    "n_shared_experts": 1,
+    "num_experts_per_tok": 8,
+    "moe_intermediate_size": 2048,
+    "dense_intermediate_size": 18432,
+    "shared_expert_intermediate_size": 2048,
+    "routing_method": "noaux_tc",
+    "scoring_func": "sigmoid",
+    "routed_scaling_factor": 2.827
+  },
+  "mla": {
+    "kv_lora_rank": 512,
+    "q_lora_rank": 1536,
+    "qk_rope_head_dim": 64,
+    "qk_nope_head_dim": 128,
+    "v_head_dim": 128,
+    "kv_a_proj_dim": 576,
+    "compressible_latent_dim": 512,
+    "rope_dim_separate": 64,
+    "note": "kv_a_proj_with_mqa outputs 576-D = 512 (latent) + 64 (RoPE). IsoQuant compresses only the 512-D latent."
+  },
+  "quantization": {
+    "method": "compressed-tensors",
+    "format": "pack-quantized",
+    "routed_expert_bits": 4,
+    "group_size": 32,
+    "unquantized": [
+      "lm_head",
+      "self_attn.*",
+      "shared_experts.*",
+      "dense MLP (layer 0)"
+    ]
+  },
+  "rope": {
+    "type": "yarn",
+    "theta": 50000.0,
+    "factor": 64.0,
+    "original_max_position_embeddings": 4096,
+    "max_position_embeddings": 262144
+  },
+  "expert_key_pattern": {
+    "template": "language_model.model.layers.{L}.mlp.experts.{E}.{gate_proj|up_proj|down_proj}.{weight_packed|weight_scale|weight_shape}",
+    "suffixes": [
+      "weight_packed",
+      "weight_scale",
+      "weight_shape"
+    ],
+    "projections": [
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ]
+  },
+  "memory_estimates": {
+    "target_hardware": "M4 Max 128 GB unified memory",
+    "text_non_expert_resident_gb": 23.4,
+    "non_routed_safetensors_payload_gb": 24.4,
+    "non_expert_weights_gb": 23.4,
+    "routed_expert_weights_gb": 570.8,
+    "text_resident_total_with_routed_experts_gb": 594.2,
+    "indexed_safetensors_payload_gb": 595.1,
+    "total_all_weights_gb": 595.1,
+    "bytes_per_expert_mb": 24.8,
+    "params_per_expert": 44040192,
+    "budget_gb": 128,
+    "os_overhead_gb": 10,
+    "available_for_experts_gb": 94.6,
+    "max_resident_experts": 3816,
+    "resident_expert_pct": 16.6,
+    "expert_offload_required": true,
+    "note": "Text non-expert resident payload is ~23.4 GB (shared experts use moe_intermediate_size=2048, not intermediate_size=18432). Non-routed safetensors payload is ~24.4 GB before sanitizer drops vision/projector tensors. Routed experts are 570.8 GB at 4-bit. ~3,816 of 23,040 instances (~16.6%) fit in remaining 128 GB RAM. Expert offload is mandatory.",
+    "breakdown": {
+      "attention_bf16_gb": 12.3,
+      "shared_experts_bf16_gb": 5.3,
+      "shared_expert_intermediate_size": 2048,
+      "shared_expert_intermediate_note": "moe_intermediate_size * n_shared_experts = 2048 * 1",
+      "dense_mlp_layer0_bf16_gb": 0.8,
+      "embeddings_bf16_gb": 4.7,
+      "norms_gb": 0.0
+    }
+  }
+}

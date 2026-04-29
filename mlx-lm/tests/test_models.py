@@ -2658,5 +2658,47 @@ class TestIsoQuantIntegration(unittest.TestCase):
         )
 
 
+class TestIsoQuantIntegration(unittest.TestCase):
+    """Verify IsoQuant fused attention is wired through model forward pass."""
+
+    def _check_model_isoquant_wiring(self, model_cls, config_dict):
+        from mlx_lm.models.mlx_isoquant import IsoQuantKVCache
+
+        config = model_cls.ModelArgs(**config_dict)
+        model = model_cls.Model(config)
+        model.eval()
+
+        cache = make_prompt_cache(model, kv_cache_type="isoquant")
+        has_isoquant = any(isinstance(c, IsoQuantKVCache) for c in cache)
+        self.assertTrue(has_isoquant, "no IsoQuantKVCache in prompt cache")
+
+        x = mx.array([[0]])
+        logits = model(x, cache=cache)
+        mx.eval(logits)
+
+        self.assertTrue(
+            mx.isfinite(logits).all().item(),
+            "non-finite logits with IsoQuant cache",
+        )
+        self.assertEqual(logits.shape[0], 1)
+
+    def test_qwen2_isoquant_wiring(self):
+        from mlx_lm.models import qwen2
+
+        self._check_model_isoquant_wiring(
+            qwen2,
+            {
+                "model_type": "qwen2",
+                "hidden_size": 256,
+                "num_hidden_layers": 4,
+                "intermediate_size": 512,
+                "num_attention_heads": 4,
+                "num_key_value_heads": 2,
+                "rms_norm_eps": 1e-6,
+                "vocab_size": 1000,
+            },
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

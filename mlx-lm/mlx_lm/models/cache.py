@@ -83,11 +83,35 @@ def make_prompt_cache(
         except ValueError:
             skip_layers = 2
 
+        # Detect MLA models (DeepseekV3, Kimi K2.x) — config may nest under text_config
+        _mla_config = config
+        if hasattr(config, "text_config"):
+            _mla_config = config.text_config
+        model_type = getattr(_mla_config, "model_type", "")
+        kv_lora_rank = getattr(_mla_config, "kv_lora_rank", None)
+        qk_rope_head_dim = getattr(_mla_config, "qk_rope_head_dim", None)
+        is_mla = kv_lora_rank is not None or model_type in (
+            "deepseek_v3",
+            "kimi_k2",
+            "kimi_k25",
+        )
+
         def make_quant_cache(layer_idx: int):
             if kv_cache_type == "rotorquant":
                 return RotorQuantKVCache(
                     head_dim=head_dim,
                     bit_width=tq_bits,
+                    codebook_dir=codebook_path,
+                    seed=42,
+                )
+            if kv_cache_type == "isoquant" and is_mla:
+                from .kimi_mla_isoquant_dkv import KimiMLAIsoQuantCache
+
+                return KimiMLAIsoQuantCache(
+                    kv_lora_rank=kv_lora_rank or 512,
+                    qk_rope_head_dim=qk_rope_head_dim or 64,
+                    bit_width=iso_bits,
+                    layer_idx=layer_idx,
                     codebook_dir=codebook_path,
                     seed=42,
                 )
@@ -228,8 +252,16 @@ def load_prompt_cache(file_name, return_metadata=False):
     arrays = tree_unflatten(list(arrays.items()))
     cache_metadata = tree_unflatten(list(cache_metadata.items()))
     info, metadata, classes = cache_metadata
+
+    def _cache_class(name: str):
+        if name == "KimiMLAIsoQuantCache":
+            from .kimi_mla_isoquant_dkv import KimiMLAIsoQuantCache
+
+            return KimiMLAIsoQuantCache
+        return globals()[name]
+
     cache = [
-        globals()[c].from_state(state, meta_state)
+        _cache_class(c).from_state(state, meta_state)
         for c, state, meta_state in zip(classes, arrays, info)
     ]
     if return_metadata:

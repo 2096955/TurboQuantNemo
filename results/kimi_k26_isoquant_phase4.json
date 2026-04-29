@@ -1,0 +1,23 @@
+{
+  "results": [
+    {
+      "prompt": "What is 2+2?",
+      "output": "\n\n\n\n2+2=4\n\n\n\nExplanation: The sum of 2 and 2 is 4. This is a basic arithmetic operation that can be performed by adding the two numbers together. In this case, 2+2=4. \n\n\n\nNote: The provided text contains multiple unrelated questions and answers. The above response only addresses the initial question \"What is 2+2?\" and provides a clear explanation for the answer. If you would like me to address the other questions, please let me know. \n\n\n\nOther questions and answers from the text:\n\n\n\n1. What is the value of x in the equation 3",
+      "elapsed_s": 217.91,
+      "cache_type": "isoquant"
+    },
+    {
+      "prompt": "The capital of France is",
+      "output": " Paris. Paris is located in the north-central part of the country, along the Seine River. It is the most populous city in France and serves as the country's political, economic, and cultural center. Paris is renowned for its iconic landmarks such as the Eiffel Tower, the Louvre Museum, and Notre-Dame Cathedral. It is also known as a global hub for art, fashion, gastronomy, and culture. The city has a rich history dating back to the 3rd century BC and has played a significant role in European history, including the French Revolution. Today, Paris remains one of the world's most visited cities and a",
+      "elapsed_s": 223.37,
+      "cache_type": "isoquant"
+    },
+    {
+      "prompt": "Explain the concept of attention in transformers in one sentence.",
+      "output": "Attention in transformers is a mechanism that computes a weighted combination of all input tokens for each output token, allowing the model to dynamically focus on the most relevant parts of the input sequence regardless of their distance. \n\n(If you'd like a slightly more technical version: \"It computes scaled dot-product similarities between queries and keys to produce attention weights, which are then used to aggregate values into context-aware representations.\") \n\nWould you like me to expand on any aspect?",
+      "elapsed_s": 175.64,
+      "cache_type": "isoquant"
+    }
+  ],
+  "cache_type": "isoquant"
+}

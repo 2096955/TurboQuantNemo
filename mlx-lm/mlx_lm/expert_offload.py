@@ -62,14 +62,37 @@ _QWEN3_EXPERT_KEY_RE = re.compile(
     r"^(?:language_model\.)?model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|scales|biases)$"
 )
 
+# Kimi K2/K2.5: individual per-expert compressed-tensors keys in the raw
+# checkpoint. The multimodal wrapper adds language_model.; text-only Kimi K2
+# uses the bare model.layers prefix.
+_KIMI_EXPERT_KEY_RE = re.compile(
+    r"^(?:language_model\.)?model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|scales|biases|weight_packed|weight_scale|weight_shape)$"
+)
+
 # Supported model types for expert offloading
 EXPERT_OFFLOAD_MODEL_TYPES = frozenset(
-    {"nemotron_h", "gemma4_text", "gemma4", "qwen3_moe", "qwen3_5_moe"}
+    {
+        "nemotron_h",
+        "gemma4_text",
+        "gemma4",
+        "qwen3_moe",
+        "qwen3_5_moe",
+        "kimi_k25",
+        "kimi_k2",
+    }
 )
 
 # Model types with known MoE architectures (for future extensibility)
 MOE_MODEL_TYPES = frozenset(
-    {"nemotron_h", "gemma4_text", "gemma4", "qwen3_moe", "qwen3_5_moe"}
+    {
+        "nemotron_h",
+        "gemma4_text",
+        "gemma4",
+        "qwen3_moe",
+        "qwen3_5_moe",
+        "kimi_k25",
+        "kimi_k2",
+    }
 )
 
 # Legacy alias — kept for backward compatibility
@@ -135,6 +158,11 @@ def parse_expert_key(
         return int(m.group(1)), int(m.group(2)), m.group(3), m.group(4)
     elif model_type in ("qwen3_moe", "qwen3_5_moe"):
         m = _QWEN3_EXPERT_KEY_RE.match(key)
+        if m is None:
+            return None
+        return int(m.group(1)), int(m.group(2)), m.group(3), m.group(4)
+    elif model_type in ("kimi_k25", "kimi_k2"):
+        m = _KIMI_EXPERT_KEY_RE.match(key)
         if m is None:
             return None
         return int(m.group(1)), int(m.group(2)), m.group(3), m.group(4)
@@ -316,6 +344,36 @@ def build_qwen3_expert_key_table(
     return table
 
 
+def build_kimi_expert_key_table(
+    weight_map: dict[str, str],
+) -> dict[tuple[int, int], dict[str, str]]:
+    """Map Kimi compressed-tensors expert keys to SwitchGLU offload specs.
+
+    Kimi checkpoints store routed experts as per-expert tensors with
+    ``weight_packed`` / ``weight_scale`` / ``weight_shape`` suffixes. The
+    manager exposes those to the quantized SwitchGLU path as
+    ``{gate,up,down}_{weight,scales}``; ``_load_expert_pair_tensors`` performs
+    the final dtype aliasing and synthesized-bias handling.
+    """
+    table: dict[tuple[int, int], dict[str, str]] = {}
+    for key in weight_map.keys():
+        parsed = parse_expert_key(key, model_type="kimi_k25")
+        if parsed is None:
+            continue
+        layer_idx, expert_id, proj, suffix = parsed
+        short = proj.replace("_proj", "")
+        slot = table.setdefault((layer_idx, expert_id), {})
+        if suffix == "weight_packed":
+            slot[f"{short}_weight"] = key
+        elif suffix == "weight_scale":
+            slot[f"{short}_scales"] = key
+        elif suffix == "weight_shape":
+            slot[f"{short}_shape"] = key
+        else:
+            slot[f"{short}_{suffix}"] = key
+    return table
+
+
 class DedeKimiObserver:
     """Pure observer for expert activation logging + entropy tracking (Phase 1.6).
 
@@ -478,6 +536,8 @@ class ExpertOffloadManager:
                 "decode_misses": self.decode_misses,
                 "decode_hit_rate": decode_hit_rate,
                 "avg_load_ms": avg_load_ms,
+                "load_count": self.load_count,
+                "load_time_ms_total": self.load_time_ms_total,
                 "resident_slots": len(self._lru),
                 "prefill_gather_calls": self.prefill_evals,
                 "decode_gather_calls": self.decode_evals,
@@ -546,6 +606,13 @@ class ExpertOffloadManager:
                             )
                         handle = self._get_shard_handle(shard)
                         result[f"{proj}_{suffix}"] = handle[key]
+
+                    if base_key.endswith(".weight_packed"):
+                        result[f"{proj}_weight"] = result[f"{proj}_weight"].view(
+                            mx.uint32
+                        )
+                        if not biases_key:
+                            result[f"{proj}_biases"] = -8.0 * result[f"{proj}_scales"]
                 else:
                     # Dense expert
                     shard = self.weight_map.get(base_key)
@@ -979,8 +1046,13 @@ class ExpertOffloadManager:
     def is_quantized(self) -> bool:
         """True if the weight map contains .scales keys for experts."""
         return any(
-            k.endswith(".scales")
-            and (_NEMOTRON_EXPERT_KEY_RE.match(k) or _GEMMA4_EXPERT_KEY_RE.match(k))
+            (k.endswith(".scales") or k.endswith(".weight_scale"))
+            and (
+                _NEMOTRON_EXPERT_KEY_RE.match(k)
+                or _GEMMA4_EXPERT_KEY_RE.match(k)
+                or _QWEN3_EXPERT_KEY_RE.match(k)
+                or _KIMI_EXPERT_KEY_RE.match(k)
+            )
             for k in self.weight_map
         )
 
@@ -1024,7 +1096,7 @@ def attach_expert_offload_manager(
         _attach_nemotron_h(model, manager)
     elif model_type in ("gemma4_text", "gemma4"):
         _attach_gemma4(model, manager)
-    elif model_type in ("qwen3_moe", "qwen3_5_moe"):
+    elif model_type in ("qwen3_moe", "qwen3_5_moe", "kimi_k25", "kimi_k2"):
         _attach_qwen3_moe(model, manager)
 
 

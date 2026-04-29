@@ -1,0 +1,68 @@
+{
+  "phase": "4",
+  "gate": "correctness",
+  "status": "PASS",
+  "timestamp": "2026-04-29T13:13:57Z",
+  "model": "/Volumes/Samsung9904tb/Kimi-K2.6",
+  "hardware": "M4 Max, 128 GB",
+  "config": {
+    "expert_offload": true,
+    "max_resident_experts": 2000,
+    "kv_cache_type_default": "default",
+    "kv_cache_type_variant": "isoquant"
+  },
+  "cache_dispatch": {
+    "total_caches": 61,
+    "skip_layers": 2,
+    "layers_0_1": "KVCache (default TURBOQUANT_SKIP_LAYERS=2)",
+    "layers_2_60": "KimiMLAIsoQuantCache",
+    "kv_lora_rank": 512,
+    "qk_rope_head_dim": 64,
+    "compression": "IsoQuant 3-bit on kv_latent only; k_pe stored raw"
+  },
+  "prompts": [
+    {
+      "prompt": "What is 2+2?",
+      "default_output": "\n\n\n\n2+2=4\n\n\n\nExplanation: The sum of 2 and 2 is 4. This is a basic arithmetic operation that can be performed by adding the two numbers together. In this case, 2+2=4. \n\n\n\nNote: The provided text contains multiple unrelated questions and answers. The above response only addresses the first question \"What is 2+2?\" and provides a clear explanation. If you would like me to address the other questions, please let me know. \n\n\n\nOther questions in the text include:\n\n- What is the value of x? (no equation provided)\n- What is the value",
+      "isoquant_output": "\n\n\n\n2+2=4\n\n\n\nExplanation: The sum of 2 and 2 is 4. This is a basic arithmetic operation that can be performed by adding the two numbers together. In this case, 2+2=4. \n\n\n\nNote: The provided text contains multiple unrelated questions and answers. The above response only addresses the initial question \"What is 2+2?\" and provides a clear explanation for the answer. If you would like me to address the other questions, please let me know. \n\n\n\nOther questions and answers from the text:\n\n\n\n1. What is the value of x in the equation 3",
+      "default_elapsed_s": 195.52,
+      "isoquant_elapsed_s": 217.91,
+      "word_overlap": 0.773,
+      "default_repetition": 0.0444,
+      "isoquant_repetition": 0.0111,
+      "factual_correct": true,
+      "quality_collapse": false
+    },
+    {
+      "prompt": "The capital of France is",
+      "default_output": " Paris. This is a well-known fact. Paris is located in the north-central part of the country, along the Seine River. It is the most populous city in France and serves as its political, economic, and cultural center. The city is renowned for landmarks such as the Eiffel Tower, the Louvre Museum, and Notre-Dame Cathedral. Paris has been the capital since 987 CE, when Hugh Capet, Count of Paris, became King of France. \n\nIf you need more details about Paris or France, feel free to ask!",
+      "isoquant_output": " Paris. Paris is located in the north-central part of the country, along the Seine River. It is the most populous city in France and serves as the country's political, economic, and cultural center. Paris is renowned for its iconic landmarks such as the Eiffel Tower, the Louvre Museum, and Notre-Dame Cathedral. It is also known as a global hub for art, fashion, gastronomy, and culture. The city has a rich history dating back to the 3rd century BC and has played a significant role in European history, including the French Revolution. Today, Paris remains one of the world's most visited cities and a",
+      "default_elapsed_s": 175.24,
+      "isoquant_elapsed_s": 223.37,
+      "word_overlap": 0.402,
+      "default_repetition": 0.0,
+      "isoquant_repetition": 0.0392,
+      "factual_correct": true,
+      "quality_collapse": false
+    },
+    {
+      "prompt": "Explain the concept of attention in transformers in one sentence.",
+      "default_output": "Attention in transformers is a mechanism that allows the model to dynamically weigh the importance of different input tokens when encoding or generating each output token, enabling it to capture long-range dependencies and contextual relationships. \n\n(If you'd like a slightly more technical version: \"Attention computes a weighted sum of all input representations, where the weights are determined by the compatibility between the current query and each key, allowing the model to focus on relevant information regardless of positional distance.)\" \n\nI can adjust the technical depth if needed!",
+      "isoquant_output": "Attention in transformers is a mechanism that computes a weighted combination of all input tokens for each output token, allowing the model to dynamically focus on the most relevant parts of the input sequence regardless of their distance. \n\n(If you'd like a slightly more technical version: \"It computes scaled dot-product similarities between queries and keys to produce attention weights, which are then used to aggregate values into context-aware representations.\") \n\nWould you like me to expand on any aspect?",
+      "default_elapsed_s": 169.9,
+      "isoquant_elapsed_s": 175.64,
+      "word_overlap": 0.354,
+      "default_repetition": 0.0233,
+      "isoquant_repetition": 0.0,
+      "factual_correct": true,
+      "quality_collapse": false
+    }
+  ],
+  "summary": {
+    "all_factually_correct": true,
+    "no_repetition_collapse": true,
+    "no_empty_outputs": true,
+    "coherent_across_all_prompts": true,
+    "isoquant_outputs_semantically_equivalent": true
+  }
+}

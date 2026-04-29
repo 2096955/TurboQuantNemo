@@ -2,7 +2,6 @@
 
 import math
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Dict, Optional
 
 import mlx.core as mx
@@ -154,14 +153,22 @@ class DeepseekV3Attention(nn.Module):
 
         if L == 1:
             q_nope = self.embed_q(q_nope)
-            k = v = kv_latent
+            if cache is not None and getattr(
+                cache, "supports_fused_latent_attention", False
+            ):
+                output = cache.fused_latent_attention(q_nope, pe_scores, self.scale)
+            else:
+                k = v = kv_latent
+                output = scaled_dot_product_attention(
+                    q_nope, k, v, cache=cache, scale=self.scale, mask=pe_scores
+                )
         else:
             k = self.embed_q(kv_latent, transpose=False)
             v = self.unembed_out(kv_latent)
+            output = scaled_dot_product_attention(
+                q_nope, k, v, cache=cache, scale=self.scale, mask=pe_scores
+            )
 
-        output = scaled_dot_product_attention(
-            q_nope, k, v, cache=cache, scale=self.scale, mask=pe_scores
-        )
         if L == 1:
             output = self.unembed_out(output)
 
@@ -199,7 +206,6 @@ def group_expert_select(
     routed_scaling_factor,
     norm_topk_prob,
 ):
-
     scores = mx.sigmoid(gates.astype(mx.float32))
     orig_scores = scores
     scores = scores + e_score_correction_bias

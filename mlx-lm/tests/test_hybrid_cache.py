@@ -11,13 +11,21 @@ import subprocess
 import sys
 import time
 import urllib.request
+import os
 import urllib.error
+import pytest
 
 # Test configuration
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 1117
 MODEL_PATH = "/Users/sombrax/.lmstudio/models/sombra/QWEN-3.5-MXFP4"
 CHAT_TEMPLATE_PATH = "/Users/sombrax/VibeCoding/mlx_server/templates/qwen35.jinja"
+
+if not os.path.isdir(MODEL_PATH):
+    pytest.skip(
+        f"Integration test requires local model at {MODEL_PATH}",
+        allow_module_level=True,
+    )
 SERVER_STARTUP_TIMEOUT = 120  # seconds
 REQUEST_TIMEOUT = 180  # seconds
 
@@ -28,20 +36,24 @@ def start_server():
         chat_template = f.read()
 
     cmd = [
-        "python3", "-m", "mlx_lm.server",
-        "--host", SERVER_HOST,
-        "--port", str(SERVER_PORT),
-        "--model", MODEL_PATH,
+        "python3",
+        "-m",
+        "mlx_lm.server",
+        "--host",
+        SERVER_HOST,
+        "--port",
+        str(SERVER_PORT),
+        "--model",
+        MODEL_PATH,
         "--trust-remote-code",
-        "--log-level", "INFO",
-        "--chat-template", chat_template,
+        "--log-level",
+        "INFO",
+        "--chat-template",
+        chat_template,
     ]
 
     proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
 
     # Wait for server to be ready
@@ -49,8 +61,7 @@ def start_server():
     while time.time() - start_time < SERVER_STARTUP_TIMEOUT:
         try:
             req = urllib.request.urlopen(
-                f"http://{SERVER_HOST}:{SERVER_PORT}/health",
-                timeout=5
+                f"http://{SERVER_HOST}:{SERVER_PORT}/health", timeout=5
             )
             if req.status == 200:
                 return proc
@@ -78,14 +89,14 @@ def make_request(messages, max_tokens=50, enable_thinking=False):
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.0,
-        "chat_template_kwargs": {"enable_thinking": enable_thinking}
+        "chat_template_kwargs": {"enable_thinking": enable_thinking},
     }
 
     req = urllib.request.Request(
         f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
         data=json.dumps(data).encode(),
         headers={"Content-Type": "application/json"},
-        method="POST"
+        method="POST",
     )
 
     try:
@@ -100,7 +111,7 @@ def test_basic_generation():
     print("\n=== Test: Basic Generation ===")
     messages = [
         {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Say hello"}
+        {"role": "user", "content": "Say hello"},
     ]
     response = make_request(messages, enable_thinking=False)
 
@@ -108,7 +119,11 @@ def test_basic_generation():
         print(f"FAILED: {response['error']}")
         return False
 
-    cached = response.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached = (
+        response.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
 
     print(f"Prompt tokens: {response.get('usage', {}).get('prompt_tokens', 'N/A')}")
@@ -129,7 +144,7 @@ def test_prompt_chaining():
     # First request
     messages1 = [
         {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "What is the capital of France?"}
+        {"role": "user", "content": "What is the capital of France?"},
     ]
     response1 = make_request(messages1, enable_thinking=False)
 
@@ -142,8 +157,11 @@ def test_prompt_chaining():
 
     # Second request (extending the conversation)
     messages2 = messages1 + [
-        {"role": "assistant", "content": content1.split('.')[0] + "."},  # Use part of the actual response
-        {"role": "user", "content": "What about Germany?"}
+        {
+            "role": "assistant",
+            "content": content1.split(".")[0] + ".",
+        },  # Use part of the actual response
+        {"role": "user", "content": "What about Germany?"},
     ]
     response2 = make_request(messages2, enable_thinking=False)
 
@@ -151,10 +169,16 @@ def test_prompt_chaining():
         print(f"FAILED (request 2): {response2['error']}")
         return False
 
-    cached2 = response2.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached2 = (
+        response2.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     content2 = response2.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-    print(f"Second request prompt tokens: {response2.get('usage', {}).get('prompt_tokens', 'N/A')}")
+    print(
+        f"Second request prompt tokens: {response2.get('usage', {}).get('prompt_tokens', 'N/A')}"
+    )
     print(f"Second request cached tokens: {cached2}")
     print(f"Second response: {content2[:100]}")
 
@@ -170,6 +194,7 @@ def test_extended_prompt_chaining():
 
     # Use unique system prompt to avoid interference from other tests
     import time
+
     unique_id = str(int(time.time() * 1000))
 
     # Build up a conversation
@@ -186,8 +211,12 @@ def test_extended_prompt_chaining():
         print(f"FAILED (turn 1): {response['error']}")
         return False
     content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
-    messages.append({"role": "assistant", "content": content.split('.')[0] + "."})
-    cached = response.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    messages.append({"role": "assistant", "content": content.split(".")[0] + "."})
+    cached = (
+        response.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     cached_tokens_history.append(cached)
     print(f"Turn 1: cached={cached}, response={content[:50]}...")
 
@@ -198,8 +227,12 @@ def test_extended_prompt_chaining():
         print(f"FAILED (turn 2): {response['error']}")
         return False
     content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
-    messages.append({"role": "assistant", "content": content.split('.')[0] + "."})
-    cached = response.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    messages.append({"role": "assistant", "content": content.split(".")[0] + "."})
+    cached = (
+        response.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     cached_tokens_history.append(cached)
     print(f"Turn 2: cached={cached}, response={content[:50]}...")
 
@@ -209,14 +242,20 @@ def test_extended_prompt_chaining():
     if "error" in response:
         print(f"FAILED (turn 3): {response['error']}")
         return False
-    cached = response.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached = (
+        response.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     cached_tokens_history.append(cached)
     print(f"Turn 3: cached={cached}")
 
     # Verify cache is being used
     assert cached_tokens_history[0] == 0, "First request should have 0 cached tokens"
     assert cached_tokens_history[1] > 0, "Second request should use cache"
-    assert cached_tokens_history[2] > cached_tokens_history[1], "Third request should use more cache"
+    assert cached_tokens_history[2] > cached_tokens_history[1], (
+        "Third request should use more cache"
+    )
 
     print("PASSED")
     return True
@@ -228,12 +267,13 @@ def test_cache_persistence():
 
     # Use unique system prompt to avoid interference from other tests
     import time
+
     unique_id = str(int(time.time() * 1000))
 
     # First request
     messages1 = [
         {"role": "system", "content": f"You are a helpful assistant. [{unique_id}]"},
-        {"role": "user", "content": "My favorite color is blue."}
+        {"role": "user", "content": "My favorite color is blue."},
     ]
     response1 = make_request(messages1, enable_thinking=False)
     if "error" in response1:
@@ -244,33 +284,43 @@ def test_cache_persistence():
     # Second request - extend with actual generated response (should use cache from first)
     messages2 = messages1 + [
         {"role": "assistant", "content": content1.strip()},
-        {"role": "user", "content": "What is my favorite color?"}
+        {"role": "user", "content": "What is my favorite color?"},
     ]
     response2 = make_request(messages2, enable_thinking=False)
     if "error" in response2:
         print(f"FAILED (request 2): {response2['error']}")
         return False
-    cached2 = response2.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached2 = (
+        response2.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     content2 = response2.get("choices", [{}])[0].get("message", {}).get("content", "")
 
     # Third request - continue extending with actual generated response (should use cache from second)
     messages3 = messages2 + [
         {"role": "assistant", "content": content2.strip()},
-        {"role": "user", "content": "Do you remember my favorite color?"}
+        {"role": "user", "content": "Do you remember my favorite color?"},
     ]
     response3 = make_request(messages3, enable_thinking=False)
     if "error" in response3:
         print(f"FAILED (request 3): {response3['error']}")
         return False
-    cached3 = response3.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached3 = (
+        response3.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
 
-    print(f"Request 1 cached: 0 (first request)")
+    print("Request 1 cached: 0 (first request)")
     print(f"Request 2 cached: {cached2}")
     print(f"Request 3 cached: {cached3}")
 
     # Each subsequent request should have more cached tokens than the previous
     assert cached2 > 0, f"Request 2 should use cache, but cached_tokens={cached2}"
-    assert cached3 > cached2, f"Request 3 should have more cached tokens than request 2, but cached3={cached3} vs cached2={cached2}"
+    assert cached3 > cached2, (
+        f"Request 3 should have more cached tokens than request 2, but cached3={cached3} vs cached2={cached2}"
+    )
 
     print("PASSED")
     return True
@@ -282,12 +332,13 @@ def test_cache_invalidation():
 
     # Use unique system prompts to avoid interference
     import time
+
     unique_id = str(int(time.time() * 1000))
 
     # Conversation A
     messages_a = [
         {"role": "system", "content": f"You are a helpful assistant. [{unique_id}A]"},
-        {"role": "user", "content": "Remember the number 42."}
+        {"role": "user", "content": "Remember the number 42."},
     ]
     response_a1 = make_request(messages_a, enable_thinking=False)
     if "error" in response_a1:
@@ -296,18 +347,27 @@ def test_cache_invalidation():
 
     # Conversation B (different system prompt)
     messages_b = [
-        {"role": "system", "content": f"You are a pirate assistant. Arr! [{unique_id}B]"},
-        {"role": "user", "content": "Remember the number 42."}
+        {
+            "role": "system",
+            "content": f"You are a pirate assistant. Arr! [{unique_id}B]",
+        },
+        {"role": "user", "content": "Remember the number 42."},
     ]
     response_b = make_request(messages_b, enable_thinking=False)
     if "error" in response_b:
         print(f"FAILED (conv B): {response_b['error']}")
         return False
 
-    cached_b = response_b.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached_b = (
+        response_b.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
 
     # Conversation B should not use cache from conversation A (different system prompt)
-    assert cached_b == 0, f"Different conversations should not share cache, but cached_tokens={cached_b}"
+    assert cached_b == 0, (
+        f"Different conversations should not share cache, but cached_tokens={cached_b}"
+    )
 
     print("PASSED")
     return True
@@ -324,13 +384,14 @@ def test_conversation_branching():
 
     # Use unique system prompt to avoid interference
     import time
+
     unique_id = str(int(time.time() * 1000))
     system_prompt = f"You are a math bot. Answer briefly. [{unique_id}]"
 
     # Request 1: Establish conversation
     messages1 = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": "1+1=?"}
+        {"role": "user", "content": "1+1=?"},
     ]
     response1 = make_request(messages1, enable_thinking=False)
     if "error" in response1:
@@ -338,7 +399,11 @@ def test_conversation_branching():
         return False
 
     content1 = response1.get("choices", [{}])[0].get("message", {}).get("content", "")
-    cached1 = response1.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached1 = (
+        response1.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     print(f"Request 1 (first): {cached1} cached")
 
     # Request 2: Extend conversation (should use cache from request 1)
@@ -346,7 +411,7 @@ def test_conversation_branching():
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": "1+1=?"},
         {"role": "assistant", "content": content1.strip()},
-        {"role": "user", "content": "2+2=?"}
+        {"role": "user", "content": "2+2=?"},
     ]
     response2 = make_request(messages2, enable_thinking=False)
     if "error" in response2:
@@ -354,7 +419,11 @@ def test_conversation_branching():
         return False
 
     content2 = response2.get("choices", [{}])[0].get("message", {}).get("content", "")
-    cached2 = response2.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached2 = (
+        response2.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     print(f"Request 2 (extend): {cached2} cached")
 
     # Request 3: Extend further (should use cache from request 2)
@@ -364,20 +433,24 @@ def test_conversation_branching():
         {"role": "assistant", "content": content1.strip()},
         {"role": "user", "content": "2+2=?"},
         {"role": "assistant", "content": content2.strip()},
-        {"role": "user", "content": "3+3=?"}
+        {"role": "user", "content": "3+3=?"},
     ]
     response3 = make_request(messages3, enable_thinking=False)
     if "error" in response3:
         print(f"FAILED (request 3): {response3['error']}")
         return False
 
-    cached3 = response3.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached3 = (
+        response3.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     print(f"Request 3 (extend further): {cached3} cached")
 
     # Verify caching behavior: each extension should have more cached tokens
     assert cached1 == 0, "First request should have 0 cached tokens"
-    assert cached2 > cached1, f"Request 2 should have more cache than request 1"
-    assert cached3 > cached2, f"Request 3 should have more cache than request 2"
+    assert cached2 > cached1, "Request 2 should have more cache than request 1"
+    assert cached3 > cached2, "Request 3 should have more cache than request 2"
 
     print("PASSED")
     return True
@@ -393,40 +466,50 @@ def test_cache_survives_multiple_branches():
 
     # Use unique system prompt to avoid interference
     import time
+
     unique_id = str(int(time.time() * 1000))
     system_prompt = f"You are a helpful assistant. Be very brief. [{unique_id}]"
 
     # Establish conversation
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": "First message"}
+        {"role": "user", "content": "First message"},
     ]
     response = make_request(messages, enable_thinking=False)
     if "error" in response:
         print(f"FAILED (initial): {response['error']}")
         return False
 
-    last_content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+    last_content = (
+        response.get("choices", [{}])[0].get("message", {}).get("content", "")
+    )
     cached_tokens_list = [0]
 
     # Multiple extensions should each use the previous cache
     for i in range(5):
         messages.append({"role": "assistant", "content": last_content.strip()})
-        messages.append({"role": "user", "content": f"Message {i+2}"})
+        messages.append({"role": "user", "content": f"Message {i + 2}"})
         response = make_request(messages, enable_thinking=False)
         if "error" in response:
             print(f"FAILED (extension {i}): {response['error']}")
             return False
 
-        cached = response.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+        cached = (
+            response.get("usage", {})
+            .get("prompt_tokens_details", {})
+            .get("cached_tokens", 0)
+        )
         cached_tokens_list.append(cached)
-        last_content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
-        print(f"Extension {i+1}: {cached} cached")
+        last_content = (
+            response.get("choices", [{}])[0].get("message", {}).get("content", "")
+        )
+        print(f"Extension {i + 1}: {cached} cached")
 
     # Each extension should have more cached tokens than the previous
     for i in range(1, len(cached_tokens_list)):
-        assert cached_tokens_list[i] > cached_tokens_list[i-1], \
-            f"Extension {i} should have more cache than extension {i-1}"
+        assert cached_tokens_list[i] > cached_tokens_list[i - 1], (
+            f"Extension {i} should have more cache than extension {i - 1}"
+        )
 
     print("PASSED")
     return True
@@ -438,11 +521,12 @@ def test_exact_match_reuse():
 
     # Use unique system prompt to avoid interference
     import time
+
     unique_id = str(int(time.time() * 1000))
 
     messages = [
         {"role": "system", "content": f"You are a helpful assistant. [{unique_id}]"},
-        {"role": "user", "content": "What is 2+2?"}
+        {"role": "user", "content": "What is 2+2?"},
     ]
 
     # First request
@@ -450,7 +534,11 @@ def test_exact_match_reuse():
     if "error" in response1:
         print(f"FAILED (request 1): {response1['error']}")
         return False
-    cached1 = response1.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached1 = (
+        response1.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     print(f"First request cached: {cached1}")
 
     # Second identical request (should get exact match)
@@ -458,13 +546,19 @@ def test_exact_match_reuse():
     if "error" in response2:
         print(f"FAILED (request 2): {response2['error']}")
         return False
-    cached2 = response2.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached2 = (
+        response2.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     prompt_tokens2 = response2.get("usage", {}).get("prompt_tokens", 0)
     print(f"Second request cached: {cached2}, prompt_tokens: {prompt_tokens2}")
 
     # Second request should have all tokens cached (exact match)
     assert cached1 == 0, "First request should have 0 cached tokens"
-    assert cached2 == prompt_tokens2, f"Second request should have all tokens cached (exact match), got {cached2}/{prompt_tokens2}"
+    assert cached2 == prompt_tokens2, (
+        f"Second request should have all tokens cached (exact match), got {cached2}/{prompt_tokens2}"
+    )
 
     print("PASSED")
     return True
@@ -476,11 +570,12 @@ def test_thinking_mode_caching():
 
     # Use unique system prompt
     import time
+
     unique_id = str(int(time.time() * 1000))
 
     messages1 = [
         {"role": "system", "content": f"You are a helpful assistant. [{unique_id}]"},
-        {"role": "user", "content": "Think about what 5+5 equals."}
+        {"role": "user", "content": "Think about what 5+5 equals."},
     ]
 
     # First request with thinking enabled
@@ -488,22 +583,32 @@ def test_thinking_mode_caching():
     if "error" in response1:
         print(f"FAILED (request 1): {response1['error']}")
         return False
-    cached1 = response1.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached1 = (
+        response1.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     content1 = response1.get("choices", [{}])[0].get("message", {}).get("content", "")
-    reasoning1 = response1.get("choices", [{}])[0].get("message", {}).get("reasoning", "")
+    reasoning1 = (
+        response1.get("choices", [{}])[0].get("message", {}).get("reasoning", "")
+    )
     print(f"First request cached: {cached1}")
     print(f"Has reasoning: {len(reasoning1) > 0}")
 
     # Second request extending the conversation
     messages2 = messages1 + [
         {"role": "assistant", "content": content1[:50] if content1 else "10"},
-        {"role": "user", "content": "Now what about 6+6?"}
+        {"role": "user", "content": "Now what about 6+6?"},
     ]
     response2 = make_request(messages2, max_tokens=100, enable_thinking=True)
     if "error" in response2:
         print(f"FAILED (request 2): {response2['error']}")
         return False
-    cached2 = response2.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached2 = (
+        response2.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     print(f"Second request cached: {cached2}")
 
     assert cached1 == 0, "First request should have 0 cached tokens"
@@ -518,54 +623,67 @@ def test_interleaved_conversations():
     print("\n=== Test: Interleaved Conversations ===")
 
     import time
+
     unique_id = str(int(time.time() * 1000))
 
     # Conversation A
     messages_a = [
         {"role": "system", "content": f"You are a math bot. [{unique_id}A]"},
-        {"role": "user", "content": "Remember the number 100."}
+        {"role": "user", "content": "Remember the number 100."},
     ]
     response_a1 = make_request(messages_a, enable_thinking=False)
     if "error" in response_a1:
         print(f"FAILED (conv A1): {response_a1['error']}")
         return False
-    content_a1 = response_a1.get("choices", [{}])[0].get("message", {}).get("content", "")
-    print(f"Conv A1: Got response")
+    content_a1 = (
+        response_a1.get("choices", [{}])[0].get("message", {}).get("content", "")
+    )
+    print("Conv A1: Got response")
 
     # Conversation B (different)
     messages_b = [
         {"role": "system", "content": f"You are a math bot. [{unique_id}B]"},
-        {"role": "user", "content": "Remember the number 200."}
+        {"role": "user", "content": "Remember the number 200."},
     ]
     response_b1 = make_request(messages_b, enable_thinking=False)
     if "error" in response_b1:
         print(f"FAILED (conv B1): {response_b1['error']}")
         return False
-    content_b1 = response_b1.get("choices", [{}])[0].get("message", {}).get("content", "")
-    print(f"Conv B1: Got response")
+    content_b1 = (
+        response_b1.get("choices", [{}])[0].get("message", {}).get("content", "")
+    )
+    print("Conv B1: Got response")
 
     # Extend conversation A
     messages_a2 = messages_a + [
         {"role": "assistant", "content": content_a1[:50]},
-        {"role": "user", "content": "What number did I tell you?"}
+        {"role": "user", "content": "What number did I tell you?"},
     ]
     response_a2 = make_request(messages_a2, enable_thinking=False)
     if "error" in response_a2:
         print(f"FAILED (conv A2): {response_a2['error']}")
         return False
-    cached_a2 = response_a2.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached_a2 = (
+        response_a2.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     print(f"Conv A2: cached={cached_a2}")
 
     # Extend conversation B
     messages_b2 = messages_b + [
         {"role": "assistant", "content": content_b1[:50]},
-        {"role": "user", "content": "What number did I tell you?"}
+        {"role": "user", "content": "What number did I tell you?"},
     ]
     response_b2 = make_request(messages_b2, enable_thinking=False)
     if "error" in response_b2:
         print(f"FAILED (conv B2): {response_b2['error']}")
         return False
-    cached_b2 = response_b2.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached_b2 = (
+        response_b2.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     print(f"Conv B2: cached={cached_b2}")
 
     # Both conversations should use their own cache
@@ -581,30 +699,38 @@ def test_long_conversation_chain():
     print("\n=== Test: Long Conversation Chain ===")
 
     import time
+
     unique_id = str(int(time.time() * 1000))
 
     messages = [
-        {"role": "system", "content": f"You are a helpful assistant. Be very brief. [{unique_id}]"}
+        {
+            "role": "system",
+            "content": f"You are a helpful assistant. Be very brief. [{unique_id}]",
+        }
     ]
 
     cached_tokens_history = []
 
     # Build up a conversation with 10 turns
     for i in range(10):
-        messages.append({"role": "user", "content": f"Turn {i+1}: Say 'ok'."})
+        messages.append({"role": "user", "content": f"Turn {i + 1}: Say 'ok'."})
         response = make_request(messages, max_tokens=5, enable_thinking=False)
         if "error" in response:
-            print(f"FAILED (turn {i+1}): {response['error']}")
+            print(f"FAILED (turn {i + 1}): {response['error']}")
             return False
 
-        cached = response.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+        cached = (
+            response.get("usage", {})
+            .get("prompt_tokens_details", {})
+            .get("cached_tokens", 0)
+        )
         cached_tokens_history.append(cached)
 
         content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
         messages.append({"role": "assistant", "content": content[:20]})
 
         if i < 3 or i >= 8:  # Print first few and last few
-            print(f"Turn {i+1}: cached={cached}")
+            print(f"Turn {i + 1}: cached={cached}")
 
     # Verify cache grows with each turn
     assert cached_tokens_history[0] == 0, "First request should have 0 cached tokens"
@@ -612,8 +738,9 @@ def test_long_conversation_chain():
     # Check that cache generally increases (with some tolerance for slight variations)
     for i in range(1, len(cached_tokens_history)):
         # Allow small variations due to tokenization differences
-        assert cached_tokens_history[i] >= cached_tokens_history[i-1] - 5, \
-            f"Turn {i+1} cache ({cached_tokens_history[i]}) should not be much less than turn {i} ({cached_tokens_history[i-1]})"
+        assert cached_tokens_history[i] >= cached_tokens_history[i - 1] - 5, (
+            f"Turn {i + 1} cache ({cached_tokens_history[i]}) should not be much less than turn {i} ({cached_tokens_history[i - 1]})"
+        )
 
     print(f"Final cached tokens: {cached_tokens_history[-1]}")
     print("PASSED")
@@ -625,11 +752,12 @@ def test_cache_with_different_params():
     print("\n=== Test: Cache with Different Generation Params ===")
 
     import time
+
     unique_id = str(int(time.time() * 1000))
 
     messages = [
         {"role": "system", "content": f"You are a helpful assistant. [{unique_id}]"},
-        {"role": "user", "content": "Count to 3."}
+        {"role": "user", "content": "Count to 3."},
     ]
 
     # First request with temp 0
@@ -638,19 +766,25 @@ def test_cache_with_different_params():
         "messages": messages,
         "max_tokens": 10,
         "temperature": 0.0,
-        "chat_template_kwargs": {"enable_thinking": False}
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     req1 = urllib.request.Request(
         f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
         data=json.dumps(data1).encode(),
         headers={"Content-Type": "application/json"},
-        method="POST"
+        method="POST",
     )
-    response1 = json.loads(urllib.request.urlopen(req1, timeout=REQUEST_TIMEOUT).read().decode())
+    response1 = json.loads(
+        urllib.request.urlopen(req1, timeout=REQUEST_TIMEOUT).read().decode()
+    )
     if "error" in response1:
         print(f"FAILED (request 1): {response1['error']}")
         return False
-    cached1 = response1.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached1 = (
+        response1.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     print(f"Request 1 (temp=0.0): cached={cached1}")
 
     # Second request with temp 1.0 (different generation param)
@@ -659,25 +793,33 @@ def test_cache_with_different_params():
         "messages": messages,
         "max_tokens": 10,
         "temperature": 1.0,
-        "chat_template_kwargs": {"enable_thinking": False}
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     req2 = urllib.request.Request(
         f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
         data=json.dumps(data2).encode(),
         headers={"Content-Type": "application/json"},
-        method="POST"
+        method="POST",
     )
-    response2 = json.loads(urllib.request.urlopen(req2, timeout=REQUEST_TIMEOUT).read().decode())
+    response2 = json.loads(
+        urllib.request.urlopen(req2, timeout=REQUEST_TIMEOUT).read().decode()
+    )
     if "error" in response2:
         print(f"FAILED (request 2): {response2['error']}")
         return False
-    cached2 = response2.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached2 = (
+        response2.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     prompt_tokens2 = response2.get("usage", {}).get("prompt_tokens", 0)
     print(f"Request 2 (temp=1.0): cached={cached2}, prompt_tokens={prompt_tokens2}")
 
     # Second request should get exact match (all tokens cached) despite different temperature
     assert cached1 == 0, "First request should have 0 cached tokens"
-    assert cached2 == prompt_tokens2, f"Second request should have all tokens cached (exact match), got {cached2}/{prompt_tokens2}"
+    assert cached2 == prompt_tokens2, (
+        f"Second request should have all tokens cached (exact match), got {cached2}/{prompt_tokens2}"
+    )
 
     print("PASSED")
     return True
@@ -688,48 +830,59 @@ def test_partial_cache_extension():
     print("\n=== Test: Partial Cache Extension ===")
 
     import time
+
     unique_id = str(int(time.time() * 1000))
 
     # First, establish a base conversation
     messages1 = [
         {"role": "system", "content": f"You are a helpful assistant. [{unique_id}]"},
-        {"role": "user", "content": "My name is Test."}
+        {"role": "user", "content": "My name is Test."},
     ]
     response1 = make_request(messages1, enable_thinking=False)
     if "error" in response1:
         print(f"FAILED (request 1): {response1['error']}")
         return False
     content1 = response1.get("choices", [{}])[0].get("message", {}).get("content", "")
-    print(f"Request 1: Base conversation established")
+    print("Request 1: Base conversation established")
 
     # Extend the conversation
     messages2 = messages1 + [
         {"role": "assistant", "content": content1[:30]},
-        {"role": "user", "content": "What is my name?"}
+        {"role": "user", "content": "What is my name?"},
     ]
     response2 = make_request(messages2, enable_thinking=False)
     if "error" in response2:
         print(f"FAILED (request 2): {response2['error']}")
         return False
-    cached2 = response2.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached2 = (
+        response2.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     content2 = response2.get("choices", [{}])[0].get("message", {}).get("content", "")
     print(f"Request 2: cached={cached2}")
 
     # Extend further
     messages3 = messages2 + [
         {"role": "assistant", "content": content2[:30]},
-        {"role": "user", "content": "Can you spell it?"}
+        {"role": "user", "content": "Can you spell it?"},
     ]
     response3 = make_request(messages3, enable_thinking=False)
     if "error" in response3:
         print(f"FAILED (request 3): {response3['error']}")
         return False
-    cached3 = response3.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    cached3 = (
+        response3.get("usage", {})
+        .get("prompt_tokens_details", {})
+        .get("cached_tokens", 0)
+    )
     print(f"Request 3: cached={cached3}")
 
     # Verify cache increases with each extension
     assert cached2 > 0, f"Request 2 should use cache, got {cached2}"
-    assert cached3 > cached2, f"Request 3 ({cached3}) should have more cache than request 2 ({cached2})"
+    assert cached3 > cached2, (
+        f"Request 3 ({cached3}) should have more cache than request 2 ({cached2})"
+    )
 
     print("PASSED")
     return True
@@ -756,7 +909,9 @@ def run_tests():
         results["cache_persistence"] = test_cache_persistence()
         results["cache_invalidation"] = test_cache_invalidation()
         results["conversation_branching"] = test_conversation_branching()
-        results["cache_survives_multiple_branches"] = test_cache_survives_multiple_branches()
+        results["cache_survives_multiple_branches"] = (
+            test_cache_survives_multiple_branches()
+        )
         results["exact_match_reuse"] = test_exact_match_reuse()
         results["thinking_mode_caching"] = test_thinking_mode_caching()
         results["interleaved_conversations"] = test_interleaved_conversations()

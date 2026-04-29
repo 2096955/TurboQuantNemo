@@ -1,0 +1,37 @@
+{
+  "phase": "Phase 2",
+  "description": "Load + decode smoke (16+32 tokens)",
+  "model_path": "/Volumes/Samsung9904tb/Kimi-K2.6",
+  "model_type": "kimi_k25",
+  "expert_offload": true,
+  "max_resident_experts": 32,
+  "max_cached_shards": 1,
+  "expert_table_size": 23040,
+  "attached_layers": 60,
+  "total_layers": 61,
+  "load_time_s": 4.28,
+  "prompts": [
+    {
+      "prompt": "Hello, how are you today?",
+      "max_tokens": 16,
+      "response": " Welcome to our blog about Art. We hope you are very well and looking forward",
+      "gen_time_s": 26.62,
+      "tok_per_s": 0.6
+    },
+    {
+      "prompt": "Explain quantum computing in simple terms:",
+      "max_tokens": 32,
+      "response": " Quantum computing is a type of computing that uses quantum-mechanical phenomena, such as superposition and entanglement, to perform operations on data. Unlike classical computers",
+      "gen_time_s": 49.75,
+      "tok_per_s": 0.64
+    }
+  ],
+  "total_time_s": 80.65,
+  "peak_rss_gb": 22.88,
+  "notes": [
+    "Smoke run only: validates load/decode liveness with default MLA cache, not a full quality gate.",
+    "No IsoQuant/RotaryQuant MLA cache path was enabled in this run.",
+    "Tokenizer emitted TikToken fallback / regex warnings during the run."
+  ],
+  "status": "success"
+}

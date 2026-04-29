@@ -1,0 +1,25 @@
+{
+  "phase": "Phase 2 Step 1",
+  "description": "Load liveness check (1-token generation to confirm model loads without OOM)",
+  "model_path": "/Volumes/Samsung9904tb/Kimi-K2.6",
+  "model_type": "kimi_k25",
+  "expert_offload": true,
+  "max_resident_experts": 32,
+  "max_cached_shards": 1,
+  "expert_table_size": 23040,
+  "attached_layers": 60,
+  "total_layers": 61,
+  "non_expert_tensors": 1190,
+  "load_time_s": 8.42,
+  "gen_time_s": 5.06,
+  "total_time_s": 13.48,
+  "peak_rss_gb": 22.66,
+  "response": " |",
+  "notes": [
+    "Liveness check only; coherent generation quality is covered by kimi_k26_default_decode_smoke.json.",
+    "Programmatic load requires model_config={\"expert_offload\": true}; CLI --expert-offload flag sets this automatically.",
+    "mx.load on safetensors is mmap-backed; non-expert keys span all 64 shards but peak RSS stayed bounded.",
+    "Tokenizer uses TikToken fallback (cosmetic regex warning, non-blocking)."
+  ],
+  "status": "success"
+}

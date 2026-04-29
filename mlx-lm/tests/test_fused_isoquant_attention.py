@@ -540,5 +540,50 @@ class TestKernelSafetyGuards(unittest.TestCase):
             self.fail("fused_attention raised ValueError for head_dim=128")
 
 
+class TestFusedAttentionEdgeCases(unittest.TestCase):
+    def test_fused_attention_empty_cache_returns_zeros(self):
+        from mlx_lm.models.mlx_isoquant import IsoQuantKVCache
+        from mlx_lm.models.mlx_turboquant import get_default_codebook_dir
+
+        cache = IsoQuantKVCache(
+            num_heads=2,
+            head_dim=128,
+            bit_width=3,
+            codebook_dir=get_default_codebook_dir(),
+        )
+        q = mx.random.normal((1, 2, 1, 128))
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = cache.fused_attention(q, scale=1.0 / (128**0.5))
+        mx.eval(result)
+        self.assertEqual(result.shape, (1, 2, 1, 128))
+
+
+class TestHeadDimVariations(unittest.TestCase):
+    def test_head_dim_256_fused_attention(self):
+        cache = _make_populated_cache(
+            num_heads=2, head_dim=256, seq_len=16, bit_width=3
+        )
+        if cache._fallback_cache is not None:
+            self.skipTest("No codebook available")
+        q = mx.random.normal((1, 2, 1, 256))
+        result = cache.fused_attention(q, scale=1.0 / (256**0.5))
+        mx.eval(result)
+        self.assertEqual(result.shape, (1, 2, 1, 256))
+        self.assertTrue(mx.isfinite(result).all().item())
+
+    def test_head_dim_64_fused_attention(self):
+        cache = _make_populated_cache(num_heads=4, head_dim=64, seq_len=16, bit_width=3)
+        if cache._fallback_cache is not None:
+            self.skipTest("No codebook available")
+        q = mx.random.normal((1, 4, 1, 64))
+        result = cache.fused_attention(q, scale=1.0 / (64**0.5))
+        mx.eval(result)
+        self.assertEqual(result.shape, (1, 4, 1, 64))
+        self.assertTrue(mx.isfinite(result).all().item())
+
+
 if __name__ == "__main__":
     unittest.main()
