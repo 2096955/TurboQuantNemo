@@ -1,0 +1,83 @@
+{
+  "timestamp": "2026-04-29T20:44:35Z",
+  "model": "/Volumes/Samsung9904tb/Kimi-K2.6",
+  "max_resident_experts": 2000,
+  "prompt_tokens": 32,
+  "decode_steps": 10,
+  "n_layers": 61,
+  "step_times_ms": [
+    4608.78275000141,
+    5132.916749978904,
+    4979.042667022441,
+    4982.333583000582,
+    6113.3013750077225,
+    7803.462332987692,
+    5260.99629199598,
+    3647.8950830060057,
+    5405.072833993472,
+    2976.801416982198
+  ],
+  "step_summary": {
+    "median_ms": 5057.625166489743,
+    "mean_ms": 5091.060508397641,
+    "min_ms": 2976.801416982198,
+    "max_ms": 7803.462332987692
+  },
+  "per_call_stats": {
+    "decoder_layer_call": {
+      "count": 610,
+      "total_ms": 45970.18277802272,
+      "median_ms": 58.876582988887094,
+      "mean_ms": 75.36095537380774,
+      "p95_ms": 179.47944129555248,
+      "min_ms": 8.091041003353894,
+      "max_ms": 1290.1116250141058
+    },
+    "prepare_gather_triple_quantized": {
+      "count": 600,
+      "total_ms": 31976.49517923128,
+      "median_ms": 41.862666490487754,
+      "mean_ms": 53.29415863205213,
+      "p95_ms": 97.43771220091726,
+      "min_ms": 4.998582997359335,
+      "max_ms": 1263.6879999772646
+    },
+    "offload_quantized_switch_glu_call": {
+      "count": 600,
+      "total_ms": 39971.46083417465,
+      "median_ms": 49.78822900739033,
+      "mean_ms": 66.61910139029108,
+      "p95_ms": 132.1320857605303,
+      "min_ms": 6.525165983475745,
+      "max_ms": 1273.8437919761054
+    }
+  },
+  "per_step_decomposition_ms": {
+    "prepare_gather_triple_quantized": 3197.649517923128,
+    "gather_qmm_plus_activation": 799.4965654943371,
+    "all_offload_glu_calls": 3997.146083417465,
+    "all_decoder_layers": 4597.018277802272,
+    "above_decoder_layer_overhead": 460.6068886874709
+  },
+  "expert_cache_stats": {
+    "hits": 3926,
+    "misses": 874,
+    "evictions": 111,
+    "hit_rate": 0.8179166666666666,
+    "prefill_hits": 0,
+    "prefill_misses": 0,
+    "prefill_hit_rate": 0.0,
+    "decode_hits": 3926,
+    "decode_misses": 874,
+    "decode_hit_rate": 0.8179166666666666,
+    "avg_load_ms": 3.3300898100254264,
+    "load_count": 874,
+    "load_time_ms_total": 2910.4984939622227,
+    "resident_slots": 2000,
+    "prefill_gather_calls": 0,
+    "decode_gather_calls": 600,
+    "prefetch_requests": 0,
+    "prefetch_already_cached": 0
+  },
+  "interpretation_note": "All times inflated by mx.synchronize fences. Use relative attribution, not absolute. The prepare/GLU/layer numbers reflect Python+MLX-dispatch+small-op overhead per layer per step. Attention path (deepseek_v3 self_attn) is NOT separately timed here; subtract gather_qmm from layer time to bound it."
+}

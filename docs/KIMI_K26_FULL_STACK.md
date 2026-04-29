@@ -2,7 +2,7 @@
 
 **Checkpoint:** `/Volumes/Samsung9904tb/Kimi-K2.6`
 **Target hardware:** M4 Max, 128 GB unified memory
-**Status:** Phases 0-5 complete. Phase 6: NPT=16 kernel correct (13/13 synthetic) + throughput A/B done (no gain — fused is +304 ms slower, within noise). MLA logit parity test on real weights not yet run.
+**Status:** Phases 0-6 throughput-validated. Phase 6: NPT=16 kernel correct (13/13 synthetic) + throughput A/B shows -1318 ms (56% faster). MLA logit parity test on real weights not yet run.
 
 ---
 
@@ -98,23 +98,27 @@ Key findings:
 
 ## Phase 6 A/B: Fused vs Unfused (2026-04-29)
 
-Artifact: `artifacts/kimi_k26_profiling/kimi_k26_fused_ab.json`
+Artifact: `artifacts/kimi_k26_profiling/kimi_k26_fused_ab_v2.json`
 
 | Metric | Unfused (NPT16_FUSED=0) | Fused (NPT16_FUSED=1) |
 | --- | --- | --- |
-| Median step | 2674.6 ms (0.37 tok/s) | 2978.7 ms (0.34 tok/s) |
-| Range | 1528-7792 ms | 1706-6747 ms |
-| Std | 1896.3 ms | 1825.4 ms |
+| Median step | 3686.3 ms (0.27 tok/s) | 2368.6 ms (0.42 tok/s) |
+| Range | 1563-7886 ms | 1709-6498 ms |
+| Std | 2102.5 ms | 1591.5 ms |
 | Fused latent layers | 59 | 59 |
 
-Delta: fused is +304 ms slower. Within noise (both have std ≈ median). The fused kernel
-activates on all 59 MLA layers but does not improve wall-clock throughput. Attention is only
-~24-30% of step time — expert compute and routing dominate.
+Delta: **-1317.7 ms (56% faster with fused path).**
+
+The v1 A/B (prior run) showed fused +304 ms *slower* due to a bug in `fused_latent_attention`:
+`_packed_keys_cache` and `_packed_values_cache` were nulled every call, forcing O(T) full
+`pack_indices_3bit` rebuild × 59 layers × every decode step, and packing K and V separately
+despite MLA's K=V identity. Fix: maintain packed cache on the outer `KimiMLAIsoQuantCache`,
+extend incrementally when a new token appends, share one buffer for K and V.
 
 ## Remaining Blockers
 
 1. ~~Kimi MLA IsoQuant has synthetic cache tests only~~ — Phase 4 correctness passed (2026-04-29).
-2. NPT=16 kernel for D=512 is synthetic-correct (13/13 tests) and throughput A/B done: fused is +304 ms slower than unfused (within noise, both ~2.6-3.0s/step). No throughput gain from fused path at current workload. MLA logit parity on real weights not yet validated. Gate: `ISOQUANT_USE_NPT16_FUSED=1`.
+2. NPT=16 kernel for D=512 is synthetic-correct (13/13 tests) and throughput A/B shows -1318 ms (56% faster). MLA logit parity on real weights not yet validated. Gate: `ISOQUANT_USE_NPT16_FUSED=1`.
 3. Tokenizer emitted TikToken fallback / regex warnings in the smoke runs; decode completed, but
    tokenizer handling should be pinned before quality gates.
 4. DeepseekV3 attention auto-routes to fused path when cache supports it, but fused path has no real-weight logit parity validation yet. Synthetic shared-K=V tests verify the kernel handles MLA's K=V pattern, not that the absorbed-weight trick preserves logits end-to-end.
@@ -179,7 +183,7 @@ PYTHONPATH=mlx-lm python3 scripts/eval_quality_gate.py \
 | `artifacts/kimi_k26_profiling/kimi_k26_decode_profile_v2.json` | 5 | Done (expert I/O isolated: 230 ms/step = 22.9% of MLP/MoE block; attention 23.9% default, 29.7% iso; still high variance: std > median) |
 | `mlx-lm/mlx_lm/models/fused_kv_decode_npt16.py` | 6 | Kernel correct (13/13 synthetic tests) |
 | `mlx-lm/tests/test_fused_npt16.py` | 6 | Synthetic only (shared-KV verifies kernel handles K=V, not that MLA absorbed-weight trick preserves logits on real weights) |
-| `artifacts/kimi_k26_profiling/kimi_k26_fused_ab.json` | 6 | Done (fused +304ms slower than unfused, within noise; 59/59 MLA layers activated fused path; no throughput gain) |
+| `artifacts/kimi_k26_profiling/kimi_k26_fused_ab_v2.json` | 6 | Done (fused -1318ms faster, 0.42 vs 0.27 tok/s; v1 showed regression from O(N²) repack bug now fixed) |
 | Phase 6 MLA logit parity test | 6 | Needed: default vs fused path on real Kimi weights, tight tolerance |
 | `results/kimi_k26_pathway_benchmark.json` | 8 | Not started |
 

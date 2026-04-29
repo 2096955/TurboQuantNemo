@@ -1,0 +1,122 @@
+{
+  "timestamp": "2026-04-29T20:55:54Z",
+  "model": "/Volumes/Samsung9904tb/Kimi-K2.6",
+  "max_resident_experts": 2000,
+  "decode_steps": 10,
+  "n_prepare_calls": 600,
+  "phase_stats_ms": {
+    "1_plan_expert_loads": {
+      "count": 600,
+      "total_ms": 16944.316447450547,
+      "median_ms": 32.58635399106424,
+      "mean_ms": 28.240527412417578,
+      "p95_ms": 57.66971249249763,
+      "min_ms": 4.767667007399723,
+      "max_ms": 404.4457499985583
+    },
+    "2_disk_loads": {
+      "count": 600,
+      "total_ms": 3057.330120675033,
+      "median_ms": 5.538978992262855,
+      "mean_ms": 5.095550201125055,
+      "p95_ms": 6.788950001646299,
+      "min_ms": 0.013209006283432245,
+      "max_ms": 66.61145799444057
+    },
+    "3a_python_lookup_gate": {
+      "count": 600,
+      "total_ms": 4.037298116600141,
+      "median_ms": 0.006499991286545992,
+      "mean_ms": 0.006728830194333568,
+      "p95_ms": 0.009669111750554292,
+      "min_ms": 0.003374996595084667,
+      "max_ms": 0.02441700780764222
+    },
+    "3b_mx_stack_gate": {
+      "count": 600,
+      "total_ms": 6067.884449119447,
+      "median_ms": 9.789436997380108,
+      "mean_ms": 10.11314074853241,
+      "p95_ms": 17.812178873282384,
+      "min_ms": 1.3770000077784061,
+      "max_ms": 247.95908300438896
+    },
+    "3a_python_lookup_up": {
+      "count": 600,
+      "total_ms": 6.5994128526654094,
+      "median_ms": 0.010749994544312358,
+      "mean_ms": 0.010999021421109015,
+      "p95_ms": 0.015172305575106288,
+      "min_ms": 0.004583998816087842,
+      "max_ms": 0.047250010538846254
+    },
+    "3b_mx_stack_up": {
+      "count": 600,
+      "total_ms": 10578.511836502003,
+      "median_ms": 9.7067290043924,
+      "mean_ms": 17.63085306083667,
+      "p95_ms": 28.38536218623629,
+      "min_ms": 1.3270000054035336,
+      "max_ms": 1030.1873330026865
+    },
+    "3a_python_lookup_down": {
+      "count": 600,
+      "total_ms": 6.987280037719756,
+      "median_ms": 0.011208001524209976,
+      "mean_ms": 0.011645466729532927,
+      "p95_ms": 0.017091337940655642,
+      "min_ms": 0.00462500611320138,
+      "max_ms": 0.042750005377456546
+    },
+    "3b_mx_stack_down": {
+      "count": 600,
+      "total_ms": 11127.77796247974,
+      "median_ms": 9.76606250333134,
+      "mean_ms": 18.546296604132902,
+      "p95_ms": 29.269044114334942,
+      "min_ms": 1.1744999792426825,
+      "max_ms": 1445.5599169887137
+    },
+    "4_lut_build": {
+      "count": 600,
+      "total_ms": 180.37471963907592,
+      "median_ms": 0.24947948986664414,
+      "mean_ms": 0.3006245327317932,
+      "p95_ms": 0.5414902101620099,
+      "min_ms": 0.17250000382773578,
+      "max_ms": 3.6397499789018184
+    }
+  },
+  "per_step_total_ms": {
+    "phase_1_plan": 1694.4316447450547,
+    "phase_2_disk_loads": 305.7330120675033,
+    "phase_3a_python_lookups": 1.7623991006985307,
+    "phase_3b_mx_stacks": 2777.417424810119,
+    "phase_4_lut_build": 18.037471963907592,
+    "grand_total_accounted": 4797.381952687283
+  },
+  "counters": {
+    "unique_eids_total": 4800,
+    "to_load_total": 874
+  },
+  "expert_cache_stats": {
+    "hits": 3926,
+    "misses": 874,
+    "evictions": 111,
+    "hit_rate": 0.8179166666666666,
+    "prefill_hits": 0,
+    "prefill_misses": 0,
+    "prefill_hit_rate": 0.0,
+    "decode_hits": 3926,
+    "decode_misses": 874,
+    "decode_hit_rate": 0.8179166666666666,
+    "avg_load_ms": 3.468525356006248,
+    "load_count": 874,
+    "load_time_ms_total": 3031.491161149461,
+    "resident_slots": 2000,
+    "prefill_gather_calls": 0,
+    "decode_gather_calls": 600,
+    "prefetch_requests": 0,
+    "prefetch_already_cached": 0
+  }
+}
