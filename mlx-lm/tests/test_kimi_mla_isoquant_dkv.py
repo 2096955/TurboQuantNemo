@@ -2,12 +2,14 @@
 """Tests for KimiMLAIsoQuantCache — synthetic tensors, no checkpoint needed."""
 
 import tempfile
+import unittest
 from types import SimpleNamespace
 
 import mlx.core as mx
 import numpy as np
 
 from mlx_lm.models.cache import load_prompt_cache, make_prompt_cache, save_prompt_cache
+from mlx_lm.models.kimi_mla_isoquant_dkv import KimiMLAIsoQuantCache
 from mlx_lm.models.mlx_turboquant import get_default_codebook_dir
 
 
@@ -277,3 +279,103 @@ class TestStateRoundTrip:
 
         expected_pe = mx.concatenate([pe, pe_dec], axis=2)
         np.testing.assert_array_equal(np.array(out_pe), np.array(expected_pe))
+
+
+class TestTrim(unittest.TestCase):
+    """Trim must restore the cache to the state it was in N tokens ago.
+
+    Required for speculative_generate_step's cache rewind path. When the
+    target rejects K-1 of K draft tokens, the cache must be trimmed back
+    to the accepted prefix length.
+    """
+
+    def _build_with_n_tokens(self, n: int) -> KimiMLAIsoQuantCache:
+        cb = get_default_codebook_dir()
+        cache = KimiMLAIsoQuantCache(
+            kv_lora_rank=512,
+            qk_rope_head_dim=64,
+            bit_width=3,
+            layer_idx=0,
+            codebook_dir=cb,
+        )
+        rng = np.random.default_rng(42)
+        for _ in range(n):
+            kv_latent = mx.array(rng.normal(size=(1, 1, 1, 512)).astype(np.float32))
+            k_pe = mx.array(rng.normal(size=(1, 1, 1, 64)).astype(np.float32))
+            cache.update_and_fetch(kv_latent, k_pe)
+        cache.finalize_deferred_prefill()
+        return cache
+
+    def test_trim_reduces_offset(self):
+        cache = self._build_with_n_tokens(8)
+        self.assertEqual(cache.offset, 8)
+        cache.trim(3)
+        self.assertEqual(cache.offset, 5)
+
+    def test_trim_to_zero_clears_state(self):
+        cache = self._build_with_n_tokens(4)
+        cache.trim(4)
+        self.assertEqual(cache.offset, 0)
+
+    def test_trim_then_extend_matches_direct_build(self):
+        """Build to T=8, trim to T=5, append 3 more, compare against direct build to T=8."""
+        ref = self._build_with_n_tokens(8)
+        ref_lat, ref_pe = ref.update_and_fetch(
+            mx.zeros((1, 1, 0, 512)), mx.zeros((1, 1, 0, 64))
+        )
+
+        rng = np.random.default_rng(42)
+        cache = KimiMLAIsoQuantCache(
+            kv_lora_rank=512,
+            qk_rope_head_dim=64,
+            bit_width=3,
+            layer_idx=0,
+            codebook_dir=get_default_codebook_dir(),
+        )
+        for _ in range(8):
+            kv_latent = mx.array(rng.normal(size=(1, 1, 1, 512)).astype(np.float32))
+            k_pe = mx.array(rng.normal(size=(1, 1, 1, 64)).astype(np.float32))
+            cache.update_and_fetch(kv_latent, k_pe)
+        cache.finalize_deferred_prefill()
+
+        cache.trim(3)
+        self.assertEqual(cache.offset, 5)
+
+        rng2 = np.random.default_rng(42)
+        for _ in range(5):
+            _ = mx.array(rng2.normal(size=(1, 1, 1, 512)).astype(np.float32))
+            _ = mx.array(rng2.normal(size=(1, 1, 1, 64)).astype(np.float32))
+        for _ in range(3):
+            kv_latent = mx.array(rng2.normal(size=(1, 1, 1, 512)).astype(np.float32))
+            k_pe = mx.array(rng2.normal(size=(1, 1, 1, 64)).astype(np.float32))
+            cache.update_and_fetch(kv_latent, k_pe)
+
+        self.assertEqual(cache.offset, 8)
+
+        new_lat, new_pe = cache.update_and_fetch(
+            mx.zeros((1, 1, 0, 512)), mx.zeros((1, 1, 0, 64))
+        )
+        self.assertEqual(new_lat.shape, ref_lat.shape)
+        self.assertEqual(new_pe.shape, ref_pe.shape)
+
+    def test_trim_invalidates_packed_cache(self):
+        cache = self._build_with_n_tokens(8)
+        q = mx.array(np.random.randn(1, 64, 1, 512).astype(np.float32))
+        pe = mx.array(np.random.randn(1, 64, 1, 8).astype(np.float32))
+        scale = 1.0 / (512**0.5)
+        _ = cache.fused_latent_attention(q, pe, scale)
+        self.assertIsNotNone(cache._packed_latent_cache)
+        cache.trim(3)
+        if cache._packed_latent_cache is not None:
+            self.assertEqual(cache._packed_latent_cache.shape[1], cache.offset)
+        self.assertEqual(cache.offset, 5)
+
+    def test_trim_zero_is_noop(self):
+        cache = self._build_with_n_tokens(4)
+        cache.trim(0)
+        self.assertEqual(cache.offset, 4)
+
+    def test_trim_more_than_offset_raises(self):
+        cache = self._build_with_n_tokens(4)
+        with self.assertRaises((ValueError, AssertionError)):
+            cache.trim(5)
