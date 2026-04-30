@@ -188,6 +188,42 @@ class KimiMLAIsoQuantCache:
         self._fp16_latent.clear()
         self._fp16_pe.clear()
 
+    def trim(self, n: int) -> int:
+        """Trim the last n tokens from the cache.
+
+        Required for speculative_generate_step. When the target model
+        rejects K-1 of K draft tokens, the cache must be rewound to
+        the accepted prefix length.
+
+        Args:
+            n: Number of tokens to remove from the end. Must be 0 <= n <= offset.
+
+        Returns:
+            The new offset after trimming.
+        """
+        if n == 0:
+            return self.offset
+        if n < 0:
+            raise ValueError(f"trim(n) requires n >= 0, got {n}")
+        if n > self.offset:
+            raise ValueError(f"trim({n}) exceeds current offset {self.offset}")
+
+        new_T = self.offset - n
+
+        if self._compressed_latent is not None:
+            self._compressed_latent = {
+                k: v[:, :new_T, :] for k, v in self._compressed_latent.items()
+            }
+
+        if self._pe_buffer is not None:
+            self._pe_buffer = self._pe_buffer[:, :new_T, :]
+
+        if self._packed_latent_cache is not None:
+            self._packed_latent_cache = self._packed_latent_cache[:, :new_T, :]
+
+        self.offset = new_T
+        return self.offset
+
     @property
     def state(self):
         return {
