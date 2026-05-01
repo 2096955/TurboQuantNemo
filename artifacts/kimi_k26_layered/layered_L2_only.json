@@ -1,0 +1,82 @@
+{
+  "timestamp": "2026-05-01T13:21:06Z",
+  "model": "/Volumes/Samsung9904tb/Kimi-K2.6",
+  "max_resident_experts": 200,
+  "prompt_tokens": 32,
+  "warmup": 30,
+  "decode_steps": 30,
+  "cliques_file": null,
+  "arms_requested": [
+    "L2"
+  ],
+  "arms": {
+    "L2": {
+      "config": {
+        "cache_type": "isoquant",
+        "npt16": "1",
+        "use_dedekimi_observer": false,
+        "use_predictor": false,
+        "use_cliques": false
+      },
+      "step_times_ms": [
+        18370.98166596843,
+        108919.82675000327,
+        159769.86929198029,
+        173094.86479201587,
+        202093.84612500435,
+        189620.82800001372,
+        193246.5709579992,
+        194825.97712497227,
+        125329.9726669793,
+        10512.834499997552,
+        13437.75695801014,
+        13160.101874964312,
+        12641.877792018931,
+        11275.129874993581,
+        12498.699916992337,
+        11460.396374983247,
+        13472.171708010137,
+        11676.248667004984,
+        11992.396457993891,
+        14850.526250025723,
+        4299.529042036738,
+        1965.1882500038482,
+        1789.8268749704584,
+        1818.8191670342349,
+        1803.406624996569,
+        1747.363124974072,
+        1790.96179100452,
+        1691.0705839982256,
+        1776.1520839994773,
+        1680.189834034536
+      ],
+      "median_ms": 12245.548187493114,
+      "mean_ms": 50753.77950423281,
+      "std_ms": 73026.49009570411,
+      "min_ms": 1680.189834034536,
+      "max_ms": 202093.84612500435,
+      "tok_per_s": 0.08166233023535373,
+      "expert_stats": {
+        "hits": 0,
+        "misses": 14400,
+        "evictions": 14400,
+        "hit_rate": 0.0,
+        "prefill_hits": 0,
+        "prefill_misses": 0,
+        "prefill_hit_rate": 0.0,
+        "decode_hits": 0,
+        "decode_misses": 14400,
+        "decode_hit_rate": 0.0,
+        "avg_load_ms": 1.3920951168216158,
+        "load_count": 14400,
+        "load_time_ms_total": 20046.169682231266,
+        "resident_slots": 200,
+        "prefill_gather_calls": 0,
+        "decode_gather_calls": 1800,
+        "prefetch_requests": 0,
+        "prefetch_already_cached": 0
+      }
+    }
+  },
+  "deltas": {}
+}

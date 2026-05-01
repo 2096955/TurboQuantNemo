@@ -1,0 +1,26 @@
+{
+  "decode_tokens_per_prompt": 32,
+  "max_resident_experts": 200,
+  "model": "/Volumes/Samsung9904tb/Kimi-K2.6",
+  "recording_mechanism": "ExpertOffloadManager.prepare_gather_triple_quantized spy (monkey-patched per-instance; non-intrusive).",
+  "seed": 0,
+  "task_categories": [
+    "code",
+    "reasoning",
+    "general",
+    "math"
+  ],
+  "task_expert_counts": {
+    "code": 480,
+    "general": 480,
+    "math": 480,
+    "reasoning": 480
+  },
+  "task_layer_counts": {
+    "code": 60,
+    "general": 60,
+    "math": 60,
+    "reasoning": 60
+  },
+  "top_k": 8
+}

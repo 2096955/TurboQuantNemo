@@ -1,0 +1,175 @@
+{
+  "timestamp": "2026-05-01T13:20:45Z",
+  "model": "/Volumes/Samsung9904tb/Kimi-K2.6",
+  "max_resident_experts": 20,
+  "prompt_tokens": 32,
+  "warmup": 5,
+  "decode_steps": 10,
+  "cliques_file": null,
+  "arms_requested": [
+    "L0",
+    "L1",
+    "L2"
+  ],
+  "arms": {
+    "L0": {
+      "config": {
+        "cache_type": "default",
+        "npt16": "0",
+        "use_dedekimi_observer": false,
+        "use_predictor": false,
+        "use_cliques": false
+      },
+      "step_times_ms": [
+        5744.236542028375,
+        5768.191124952864,
+        6308.167374983896,
+        6241.363041976001,
+        5893.760207982268,
+        5727.888124994934,
+        5770.847708045039,
+        7374.103625013959,
+        8848.306416999549,
+        13013.908499968238
+      ],
+      "median_ms": 6067.561624979135,
+      "mean_ms": 7069.077266694512,
+      "std_ms": 2194.923158804186,
+      "min_ms": 5727.888124994934,
+      "max_ms": 13013.908499968238,
+      "tok_per_s": 0.1648108518392574,
+      "expert_stats": {
+        "hits": 0,
+        "misses": 4800,
+        "evictions": 4800,
+        "hit_rate": 0.0,
+        "prefill_hits": 0,
+        "prefill_misses": 0,
+        "prefill_hit_rate": 0.0,
+        "decode_hits": 0,
+        "decode_misses": 4800,
+        "decode_hit_rate": 0.0,
+        "avg_load_ms": 0.8816618692314174,
+        "load_count": 4800,
+        "load_time_ms_total": 4231.976972310804,
+        "resident_slots": 20,
+        "prefill_gather_calls": 0,
+        "decode_gather_calls": 600,
+        "prefetch_requests": 0,
+        "prefetch_already_cached": 0
+      }
+    },
+    "L1": {
+      "config": {
+        "cache_type": "isoquant",
+        "npt16": "0",
+        "use_dedekimi_observer": false,
+        "use_predictor": false,
+        "use_cliques": false
+      },
+      "step_times_ms": [
+        11529.944208974484,
+        11225.180250010453,
+        10816.641416982748,
+        10935.771625023335,
+        9501.994999998715,
+        11432.82258301042,
+        18003.733916964848,
+        104338.69866700843,
+        155284.77895801188,
+        165606.84279201087
+      ],
+      "median_ms": 11481.383395992452,
+      "mean_ms": 50867.64094179962,
+      "std_ms": 61311.54127820937,
+      "min_ms": 9501.994999998715,
+      "max_ms": 165606.84279201087,
+      "tok_per_s": 0.08709751826152304,
+      "expert_stats": {
+        "hits": 0,
+        "misses": 4800,
+        "evictions": 4800,
+        "hit_rate": 0.0,
+        "prefill_hits": 0,
+        "prefill_misses": 0,
+        "prefill_hit_rate": 0.0,
+        "decode_hits": 0,
+        "decode_misses": 4800,
+        "decode_hit_rate": 0.0,
+        "avg_load_ms": 1.0659706497002237,
+        "load_count": 4800,
+        "load_time_ms_total": 5116.659118561074,
+        "resident_slots": 20,
+        "prefill_gather_calls": 0,
+        "decode_gather_calls": 600,
+        "prefetch_requests": 0,
+        "prefetch_already_cached": 0
+      }
+    },
+    "L2": {
+      "config": {
+        "cache_type": "isoquant",
+        "npt16": "1",
+        "use_dedekimi_observer": false,
+        "use_predictor": false,
+        "use_cliques": false
+      },
+      "step_times_ms": [
+        13100.592917005997,
+        12468.470792053267,
+        11633.586374984588,
+        12261.655875016004,
+        12335.470791033003,
+        13726.21395799797,
+        10261.291208968032,
+        13383.791374973953,
+        14539.921167015564,
+        11021.535000007134
+      ],
+      "median_ms": 12401.970791543135,
+      "mean_ms": 12473.252945905551,
+      "std_ms": 1217.8975443840711,
+      "min_ms": 10261.291208968032,
+      "max_ms": 14539.921167015564,
+      "tok_per_s": 0.0806323460043864,
+      "expert_stats": {
+        "hits": 0,
+        "misses": 4800,
+        "evictions": 4800,
+        "hit_rate": 0.0,
+        "prefill_hits": 0,
+        "prefill_misses": 0,
+        "prefill_hit_rate": 0.0,
+        "decode_hits": 0,
+        "decode_misses": 4800,
+        "decode_hit_rate": 0.0,
+        "avg_load_ms": 1.1861680349102244,
+        "load_count": 4800,
+        "load_time_ms_total": 5693.606567569077,
+        "resident_slots": 20,
+        "prefill_gather_calls": 0,
+        "decode_gather_calls": 600,
+        "prefetch_requests": 0,
+        "prefetch_already_cached": 0
+      }
+    }
+  },
+  "deltas": {
+    "L1_vs_L0": {
+      "step_ms_delta": 5413.821771013318,
+      "median_ms_pct_delta": 89.2256577786622,
+      "tok_per_s_delta": -0.07771333357773436,
+      "decode_hit_rate_delta": 0.0,
+      "load_count_delta": 0,
+      "load_time_ms_total_delta": 884.6821462502703
+    },
+    "L2_vs_L1": {
+      "step_ms_delta": 920.5873955506831,
+      "median_ms_pct_delta": 8.018087749530356,
+      "tok_per_s_delta": -0.006465172257136637,
+      "decode_hit_rate_delta": 0.0,
+      "load_count_delta": 0,
+      "load_time_ms_total_delta": 576.9474490080029
+    }
+  }
+}
