@@ -267,6 +267,33 @@ def load_config(model_path: Path) -> dict:
     return config
 
 
+def _has_per_expert_scales_for_offload(
+    weight_map: Dict[str, str], model_type: str
+) -> bool:
+    """True iff weight_map contains per-expert scale tensors that the
+    ExpertOffloadManager can use for the given model_type.
+
+    Accepts both naming conventions for Kimi:
+      - .weight_scale (compressed-tensors source, e.g. the upstream Kimi K2.x
+        checkpoint as distributed)
+      - .scales (MLX-native, e.g. the output of ``mlx_lm.convert --quantize``
+        followed by an unstack into per-expert keys)
+
+    For other model types, only the MLX-native .scales suffix is accepted
+    today.
+    """
+    from .expert_offload import is_expert_weight_key
+
+    if model_type in ("kimi_k25", "kimi_k2"):
+        scale_suffixes = (".weight_scale", ".scales")
+    else:
+        scale_suffixes = (".scales",)
+    return any(
+        k.endswith(scale_suffixes) and is_expert_weight_key(k, model_type=model_type)
+        for k in weight_map
+    )
+
+
 def load_model(
     model_path: Path,
     lazy: bool = False,
@@ -300,6 +327,10 @@ def load_model(
     config = load_config(model_path)
     if model_config is not None:
         config.update(model_config)
+    if "quantization_config" not in config:
+        text_config = config.get("text_config", {})
+        if "quantization_config" in text_config:
+            config["quantization_config"] = text_config["quantization_config"]
 
     model_path = Path(model_path)
     _offload_supported_types = {
@@ -308,6 +339,8 @@ def load_model(
         "gemma4",
         "qwen3_moe",
         "qwen3_5_moe",
+        "kimi_k25",
+        "kimi_k2",
     }
     requested_expert_offload = bool(config.get("expert_offload"))
     if (
@@ -342,33 +375,33 @@ def load_model(
         wm = resolve_weight_map(ckpt_root)
         _mt = config.get("model_type", "nemotron_h")
 
-        if _mt in ("gemma4_text", "gemma4", "qwen3_moe", "qwen3_5_moe"):
+        if _mt in (
+            "gemma4_text",
+            "gemma4",
+            "qwen3_moe",
+            "qwen3_5_moe",
+            "kimi_k25",
+            "kimi_k2",
+        ):
             from .expert_offload import is_expert_weight_key
 
-            has_repacked_experts = any(
+            has_per_expert_weights = any(
                 is_expert_weight_key(k, model_type=_mt) for k in wm
             )
-            if not has_repacked_experts:
+            if not has_per_expert_weights:
                 raise ValueError(
-                    f"expert_offload for {_mt} requires repacked per-expert "
-                    "weights. You must run `python -m mlx_lm.repack_experts` on "
-                    "this checkpoint first to split stacked SwitchGLU tensors."
+                    f"expert_offload for {_mt} requires per-expert routed expert "
+                    "weights in the checkpoint or expert_offload_dir."
                 )
 
         # Conditional guard: if the config has quantization but the weight map doesn't contain
         # the repacked per-expert .scales keys, it hasn't been repacked yet.
         if config.get("quantization") or config.get("quantization_config"):
-            from .expert_offload import is_expert_weight_key
-
-            has_repacked_scales = any(
-                k.endswith(".scales") and is_expert_weight_key(k, model_type=_mt)
-                for k in wm
-            )
-            if not has_repacked_scales:
+            if not _has_per_expert_scales_for_offload(wm, _mt):
                 raise ValueError(
-                    f"expert_offload for {_mt} is not yet compatible with stacked "
-                    "quantized weights. You must run `python -m mlx_lm.repack_experts` "
-                    "on this checkpoint first to unpack the experts for offloading."
+                    f"expert_offload for {_mt} is not compatible with this quantized "
+                    "checkpoint layout. Routed expert scale tensors must be available "
+                    "as per-expert keys for offloading."
                 )
 
         weights = load_non_expert_weights(ckpt_root, wm)
@@ -489,7 +522,7 @@ def load_model(
         _is_quantized = bool(
             config.get("quantization") or config.get("quantization_config")
         )
-        if _mt in ("qwen3_moe", "qwen3_5_moe"):
+        if _mt in ("qwen3_moe", "qwen3_5_moe", "kimi_k25", "kimi_k2"):
             _swap_qwen3_offload_modules(model, _is_quantized, config)
         elif _mt in ("gemma4_text", "gemma4"):
             _swap_gemma4_offload_modules(model, _is_quantized, config)
@@ -510,6 +543,7 @@ def load_model(
             SimulatedAttnResPredictor,
             attach_expert_offload_manager,
             build_gemma4_expert_key_table,
+            build_kimi_expert_key_table,
             build_nemotron_expert_key_table,
             build_qwen3_expert_key_table,
         )
@@ -522,6 +556,9 @@ def load_model(
         elif _model_type in ("qwen3_moe", "qwen3_5_moe"):
             expert_table = build_qwen3_expert_key_table(wm)
             projections = ("gate", "up", "down")
+        elif _model_type in ("kimi_k25", "kimi_k2"):
+            expert_table = build_kimi_expert_key_table(wm)
+            projections = ("gate", "up", "down")
         else:
             expert_table = build_nemotron_expert_key_table(wm)
             projections = ("fc1", "fc2")
@@ -531,8 +568,11 @@ def load_model(
         # NOT every expert that could ever be active (that defeats offloading).
         # Cap at 64 to stay within ~16GB-class memory budgets.
         default_max_experts = 16
-        if _model_type in ("qwen3_moe", "qwen3_5_moe"):
-            top_k = config.get("num_experts_per_tok", 2)
+        if _model_type in ("qwen3_moe", "qwen3_5_moe", "kimi_k25", "kimi_k2"):
+            text_config = config.get("text_config", {})
+            top_k = config.get(
+                "num_experts_per_tok", text_config.get("num_experts_per_tok", 2)
+            )
             # 4 layers worth of unique experts is generous headroom
             default_max_experts = min(top_k * 4, 64)
 
@@ -685,6 +725,8 @@ def _swap_qwen3_offload_modules(model, is_quantized: bool, config: dict) -> None
             for prefix in (
                 f"language_model.model.layers.{layer_idx}.mlp.switch_mlp.gate_proj",
                 f"model.layers.{layer_idx}.mlp.switch_mlp.gate_proj",
+                f"language_model.model.layers.{layer_idx}.mlp.experts.0.gate_proj",
+                f"model.layers.{layer_idx}.mlp.experts.0.gate_proj",
                 f"layers.{layer_idx}.mlp.switch_mlp.gate_proj",
             ):
                 override = quant_cfg.get(prefix)
