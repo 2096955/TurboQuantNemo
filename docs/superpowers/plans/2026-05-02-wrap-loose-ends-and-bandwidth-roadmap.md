@@ -8,7 +8,12 @@
 
 ## Goal
 
-Converge the current MLX constrained-memory work into one release-grade path while preserving a small, measurement-first research lane for bandwidth-limit ideas. The immediate priority is not to add more speculative mechanisms. It is to close validation gaps, stabilize the NPT8/tiled decode state, finish write-path attribution, and decide which math ideas deserve implementation.
+Converge the current MLX constrained-memory work into one release-grade path while preserving two explicitly scoped research lanes:
+
+1. bandwidth / KV-cache math for models where IsoQuant is the active path, and
+2. Kimi K2.6 decode acceleration on 128 GB Apple Silicon.
+
+The immediate priority is not to add more speculative mechanisms. It is to close validation gaps, stabilize the MLX/Metal measurement environment, run the already-wired write-path attribution, and decide which math or Kimi speed ideas deserve implementation.
 
 ## Current Ground Truth
 
@@ -19,7 +24,10 @@ Converge the current MLX constrained-memory work into one release-grade path whi
 - **Gemma4:** layer-aware path is strong, but the real 16 GB hardware proof remains open.
 - **Decode tiling:** NPT8 + T-tiled decode is merged and opt-in. It improves read-side scaling but does not close the IsoQuant/default KV gap.
 - **Profiling conclusion:** the next material performance lever is the write path: `_compress_batch` and 3-bit packing, not more read-kernel tiling.
-- **Current machine caveat:** the latest focused NPT8 pytest run aborted and left a Python process in `UEs`; reboot before trusting any new MLX/Metal benchmark numbers.
+- **Write-path profiler status:** `scripts/profile_metal_counters.py` already includes read components, write components (`compress_python`, `compress_fused_metal`, `pack_3bit`, `cache_concat`, `cache_prealloc`), active-mode selection, and K/V `2x` write accounting. The remaining work is to run it in a clean MLX state and compare artifacts.
+- **Kimi K2.6 status:** Kimi is an active exploratory lane, not a release path. Load/decode smoke, expert offload, Kimi MLA IsoQuant cache, `trim()`, NPT16 synthetic kernel tests, Kimi profiling, predictor/clique A/B, and speculative harness scaffolding exist. Current measurements favor the default MLA cache over Kimi IsoQuant for speed; Kimi speed work should focus on default-cache expert residency/offload, 2-bit expert regeneration, and speculative decoding rather than more KV compression by default.
+- **Apple `ml-ssd` status:** useful only as optional post-training / code-quality work. It is not a runtime, memory, expert-residency, or bandwidth lever.
+- **Current machine caveat:** the latest focused pytest run aborted while importing `mlx.core` during test collection and left a Python process in `UEs`. Treat this first as an MLX/Metal import/runtime-health blocker, not as proven NPT8-kernel failure. Reboot before trusting any new MLX/Metal benchmark numbers.
 
 ## File Map
 
@@ -33,7 +41,14 @@ Converge the current MLX constrained-memory work into one release-grade path whi
 | `docs/superpowers/plans/2026-04-29-metal-profiling-handover.md` | Write-path profiler handover |
 | `mlx-lm/mlx_lm/models/mlx_isoquant.py` | IsoQuant cache, fused/tiled decode dispatch |
 | `mlx-lm/mlx_lm/models/fused_kv_decode_npt8_tiled.py` | T-tiled NPT8 decode kernel |
+| `mlx-lm/mlx_lm/models/fused_kv_decode_npt16.py` | Kimi MLA D=512 NPT16 fused latent-attention kernel |
+| `mlx-lm/mlx_lm/models/kimi_mla_isoquant_dkv.py` | Kimi MLA cache: compress 512-D `kv_latent`, keep 64-D `k_pe` raw, support `trim()` |
 | `scripts/profile_metal_counters.py` | Synthetic read/write component profiler |
+| `scripts/ab_kimi_layered_stack.py` | Kimi layered A/B harness for default/IsoQuant/expert levers |
+| `scripts/sweep_kimi_default_cache_residency.py` | L0-only sweep of `max_resident_experts` → `default_cache_sweep.json` |
+| `scripts/run_kimi_npt16_parity_gate.py` | Records synthetic `test_fused_npt16.py` result + real-weight MLA parity placeholder |
+| `scripts/profile_kimi_speculative.py` | Kimi target/draft speculative decode smoke harness |
+| `docs/KIMI_K26_FULL_STACK.md` | Kimi runbook, evidence, and remaining blockers |
 | `scripts/eval_quality_gate.py` | Quality gate and strict-mode artifacts |
 | `scripts/benchmark_moe_offload.py` | Throughput/memory benchmark |
 
@@ -48,7 +63,15 @@ Converge the current MLX constrained-memory work into one release-grade path whi
   - Check for stuck `Python -m pytest`, `benchmark_nvfp4_isoquant.py`, or `mlx_lm.generate` processes.
   - Record result in `artifacts/metal-counters/system_state_YYYYMMDD.json` or a short markdown note.
 
-- [ ] **Step 0.2: Re-run the focused NPT8 tests after clean boot**
+- [ ] **Step 0.2: Run minimal MLX import smoke before focused tests**
+  - Command:
+    ```bash
+    PYTHONPATH=mlx-lm python -c "import mlx.core as mx; print(mx.default_device())"
+    ```
+  - Pass condition: import exits cleanly and leaves no stuck `UEs` process.
+  - If this fails, stop all Metal benchmark/test work and treat the session as MLX/runtime unhealthy.
+
+- [ ] **Step 0.3: Re-run the focused NPT8 tests only after import smoke passes**
   - Command:
     ```bash
     PYTHONPATH=mlx-lm python -m pytest \
@@ -56,9 +79,9 @@ Converge the current MLX constrained-memory work into one release-grade path whi
       mlx-lm/tests/test_fused_npt8_tiled.py -q
     ```
   - Pass condition: tests complete without Metal abort or stuck `UEs` process.
-  - If this fails again, stop decode-kernel benchmarking and open a focused stability task.
+  - If this fails after the import smoke passes, then open a focused NPT8/tiled stability task.
 
-- [ ] **Step 0.3: Capture current git/artifact hygiene**
+- [ ] **Step 0.4: Capture current git/artifact hygiene**
   - Save `git status --short`, current head, and the NPT8 test outcome.
   - Do not clean/delete artifacts unless the operator explicitly approves.
 
@@ -126,19 +149,19 @@ Converge the current MLX constrained-memory work into one release-grade path whi
 
 ---
 
-## Phase 3: Finish Write-Path Attribution
+## Phase 3: Run Write-Path Attribution
 
 **Goal:** close the attribution gap before building any new compression math.
 
-- [ ] **Step 3.1: Finish `scripts/profile_metal_counters.py` write-path wiring**
-  - Complete the handover from `docs/superpowers/plans/2026-04-29-metal-profiling-handover.md`.
-  - Add write components into `run_synthetic_phase()`:
+- [x] **Step 3.1: Confirm `scripts/profile_metal_counters.py` write-path wiring exists**
+  - The profiler includes write components in `run_synthetic_phase()`:
     - `compress_python`
     - `compress_fused_metal`
     - `pack_3bit`
     - `cache_concat`
     - `cache_prealloc`
-  - Account for K and V writes as `2x` per decode step.
+  - It accounts for K and V writes as `2x` per decode step.
+  - This marks code wiring complete only; it does not close the measurement gate.
 
 - [ ] **Step 3.2: Run synthetic write-path profile**
   - Command:
@@ -169,6 +192,8 @@ Converge the current MLX constrained-memory work into one release-grade path whi
 
 **Goal:** run tiny, falsifiable experiments for left-field ideas before committing engineering time.
 
+**Scope note:** these experiments are not automatically Kimi work. Kimi MLA already has a compressed latent representation, and current Kimi measurements favor default MLA cache over Kimi IsoQuant for speed. For Kimi, bandwidth math only becomes active if long-context or memory-envelope evidence shows default MLA cache is no longer acceptable.
+
 ### Experiment A: Transform Search for Lower Bits
 
 - [ ] **Step 4.1: Build an offline transform-error harness**
@@ -184,6 +209,7 @@ Converge the current MLX constrained-memory work into one release-grade path whi
     MSE, max error, cosine similarity, q^T k score error, output reconstruction error
     ```
   - Artifact: `artifacts/bandwidth_math/transform_error_matrix.json`.
+  - Kimi variant: if included, apply transforms only to `kv_latent`; never rotate or quantize `k_pe`.
 
 - [ ] **Step 4.2: Gate the only question that matters**
   - Decision question:
@@ -224,6 +250,7 @@ Converge the current MLX constrained-memory work into one release-grade path whi
 - [ ] **Step 4.7: Document but do not implement entropy/top-k sparse attention**
   - Treat as architecture/approximation research, not current kernel work.
   - Requires attention entropy traces and long-context retrieval validation.
+  - Apple `ml-ssd` can motivate attention-distribution inspection as a quality/post-training reference, but it does not implement this runtime mechanism.
 
 - [ ] **Step 4.8: Document but do not implement linear attention / NSA-style attention**
   - Model rewrite / retraining risk; out of scope for this release cycle.
@@ -251,13 +278,41 @@ Converge the current MLX constrained-memory work into one release-grade path whi
   - Run the deferred KV fidelity/PPL test for the mixed 16 GB profile.
   - Artifact: `results/qwen36_kv_fidelity.json` or `artifacts/qwen36/kv_fidelity.json`.
 
-- [ ] **Step 5.4: Kimi format gap remains parked**
-  - Do not resume Kimi until disk gate, hardware gate, and format decision are explicitly reopened.
-  - If reopened, start from `docs/superpowers/handovers/2026-05-01-phase-2-quantize-format-gap.md`.
+- [ ] **Step 5.4: Kimi K2.6 decode acceleration lane**
+  - Current evidence:
+    - source checkpoint: `/Volumes/Samsung9904tb/Kimi-K2.6` (~554 GB),
+    - offload load/decode smoke passes,
+    - Kimi MLA IsoQuant cache and `trim()` exist,
+    - NPT16 D=512 kernel is synthetic-correct and speeds Kimi IsoQuant vs unfused Kimi IsoQuant,
+    - default MLA cache is still the faster measured Kimi decode path,
+    - predictor/cliques did not produce a stable speed win,
+    - 2-bit expert conversion scripts exist, but the generated checkpoint was deleted and must be regenerated before speculative testing.
+  - Next actions:
+    1. Run a clean default-cache `max_resident_experts` sweep before further KV work:
+       ```bash
+       PYTHONPATH=mlx-lm python scripts/sweep_kimi_default_cache_residency.py \
+         --model /Volumes/Samsung9904tb/Kimi-K2.6 \
+         --sweep-values 64,128,200,400,800,1200 \
+         --output artifacts/kimi_k26_residency/default_cache_sweep.json
+       ```
+    2. If disk/time is approved, regenerate the 2-bit per-expert checkpoint and load-smoke it after the `.scales` gate fix.
+    3. Run `scripts/profile_kimi_speculative.py` only after a working draft checkpoint exists.
+    4. Run the NPT16 parity gate (synthetic now; real-weight MLA block documented in JSON) before treating NPT16 as more than synthetic-correct:
+       ```bash
+       PYTHONPATH=mlx-lm python scripts/run_kimi_npt16_parity_gate.py \
+         --output artifacts/kimi_k26_profiling/npt16_real_weight_logit_parity.json
+       ```
+  - Artifacts:
+    - `artifacts/kimi_k26_residency/default_cache_sweep.json`,
+    - regenerated 2-bit checkpoint integrity/load-smoke JSON,
+    - `artifacts/kimi_k26_speculative/speculative_smoke.json`,
+    - `artifacts/kimi_k26_profiling/npt16_real_weight_logit_parity.json`.
+  - Do not update pathway-proven docs for Kimi until quality, memory, throughput, and soak artifacts exist.
 
 - [ ] **Step 5.5: SSD/self-distillation remains optional**
   - Create `docs/PHASE7_SSD_OUTLINE.md` only after the RC path is stable.
   - Frame SSD as quality/post-training work, not memory/runtime work.
+  - Do not use Apple `ml-ssd` as evidence for faster Kimi decode; it can only support a later code-quality/fine-tuning branch.
 
 ---
 
@@ -285,7 +340,7 @@ Converge the current MLX constrained-memory work into one release-grade path whi
   - Artifact: `docs/RELEASE_NOTES_NEMOTRON120B_RC.md`.
 
 - [ ] **Step 6.4: Preserve negative results**
-  - Qwen3-30B quality block, NPT8 residual gap, Kimi format gap, and speculative/predictor regressions should be documented as measured constraints, not hidden.
+  - Qwen3-30B quality block, NPT8 residual gap, Kimi default-vs-IsoQuant result, Kimi 2-bit regeneration state, and speculative/predictor regressions should be documented as measured constraints, not hidden.
 
 ---
 
@@ -299,12 +354,13 @@ Converge the current MLX constrained-memory work into one release-grade path whi
 
 ## Recommended Next Action
 
-Start with Phase 0 and Phase 3:
+Start with Phase 0, then choose one of three non-overlapping lanes:
 
 1. clean system state / reboot,
-2. rerun focused NPT8 tests,
-3. finish write-path profiler wiring,
-4. run `profile_with_write.json`,
-5. decide whether fused encode + prealloc should graduate.
+2. run the minimal `import mlx.core` smoke,
+3. if clean, rerun focused NPT8 tests,
+4. lane A: close the Nemotron RC gate,
+5. lane B: run `profile_with_write.json` and decide whether fused encode + prealloc should graduate,
+6. lane C: run Kimi default-cache residency sweep before any more Kimi KV-compression or `ml-ssd` work.
 
 Only after that should Phase 4 bandwidth-math prototypes get engineering time.

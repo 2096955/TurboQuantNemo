@@ -37,7 +37,7 @@
 - Modify: `mlx-lm/mlx_lm/models/cache.py:30-36` (add module-level import)
 - Test: `mlx-lm/tests/test_prompt_cache.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `mlx-lm/tests/test_prompt_cache.py`:
 
@@ -70,12 +70,12 @@ class TestIsoQuantPromptCachePersistence(unittest.TestCase):
         self.assertTrue(loaded[0].supports_fused_attention)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd mlx-lm && python -m pytest tests/test_prompt_cache.py::TestIsoQuantPromptCachePersistence::test_isoquant_cache_save_load_roundtrip -v`
 Expected: FAIL with `KeyError: 'IsoQuantKVCache'`
 
-- [ ] **Step 3: Add module-level import of IsoQuantKVCache in cache.py**
+- [x] **Step 3: Add module-level import of IsoQuantKVCache in cache.py**
 
 At the bottom of `cache.py`, near the existing module-level TurboQuantKVCache import (around line 1479), add:
 
@@ -85,17 +85,17 @@ from .mlx_isoquant import IsoQuantKVCache  # noqa: E402
 
 This mirrors the existing pattern for `TurboQuantKVCache` and ensures `globals()["IsoQuantKVCache"]` resolves during `load_prompt_cache`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd mlx-lm && python -m pytest tests/test_prompt_cache.py::TestIsoQuantPromptCachePersistence -v`
 Expected: PASS
 
-- [ ] **Step 5: Run full prompt cache test suite for regressions**
+- [x] **Step 5: Run full prompt cache test suite for regressions**
 
 Run: `cd mlx-lm && python -m pytest tests/test_prompt_cache.py -v --timeout=60`
 Expected: All existing tests PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add mlx-lm/mlx_lm/models/cache.py mlx-lm/tests/test_prompt_cache.py
@@ -112,7 +112,7 @@ git commit -m "fix: add module-level IsoQuantKVCache import for prompt cache per
 - Modify: `mlx-lm/mlx_lm/models/fused_kv_decode_kernels.py:386-427`
 - Test: `mlx-lm/tests/test_fused_isoquant_attention.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `mlx-lm/tests/test_fused_isoquant_attention.py`:
 
@@ -141,12 +141,12 @@ class TestKernelSafetyGuards(unittest.TestCase):
             self.fail("fused_attention raised ValueError for head_dim=128")
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd mlx-lm && python -m pytest tests/test_fused_isoquant_attention.py::TestKernelSafetyGuards::test_fused_qk_dot_rejects_head_dim_above_512 -v`
 Expected: FAIL (no ValueError raised, or Metal crash)
 
-- [ ] **Step 3: Add guard to fused_qk_dot dispatch**
+- [x] **Step 3: Add guard to fused_qk_dot dispatch**
 
 In `fused_kv_decode_kernels.py`, at the start of `fused_qk_dot` (around line 395, after parameter extraction):
 
@@ -164,17 +164,17 @@ def fused_qk_dot(q, packed_keys, centroids, norms, seq_len, head_dim, ...):
 
 Add the same guard to `fused_value_accum` and `fully_fused_attention` dispatch functions.
 
-- [ ] **Step 4: Run tests to verify both pass**
+- [x] **Step 4: Run tests to verify both pass**
 
 Run: `cd mlx-lm && python -m pytest tests/test_fused_isoquant_attention.py::TestKernelSafetyGuards -v`
 Expected: Both PASS
 
-- [ ] **Step 5: Run full fused attention test suite for regressions**
+- [x] **Step 5: Run full fused attention test suite for regressions**
 
 Run: `cd mlx-lm && python -m pytest tests/test_fused_isoquant_attention.py -v --timeout=120`
 Expected: All existing tests PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add mlx-lm/mlx_lm/models/fused_kv_decode_kernels.py mlx-lm/tests/test_fused_isoquant_attention.py
@@ -192,7 +192,7 @@ git commit -m "fix: guard Metal kernels against head_dim > 512 buffer overflow"
 - Modify: `mlx-lm/mlx_lm/models/mlx_isoquant.py:34-89` (IsoQuantStats — add unfused counter)
 - Test: `mlx-lm/tests/test_mlx_isoquant.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `mlx-lm/tests/test_mlx_isoquant.py`:
 
@@ -245,12 +245,12 @@ class TestUnfusedPathWarning(unittest.TestCase):
                 "bit_width=3 should not emit unfused warning")
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd mlx-lm && python -m pytest tests/test_mlx_isoquant.py::TestUnfusedPathWarning::test_bit_width_4_warns_unfused -v`
 Expected: FAIL (no warning emitted)
 
-- [ ] **Step 3: Add warning to fused_attention fallback path**
+- [x] **Step 3: Add warning to fused_attention fallback path**
 
 In `mlx_isoquant.py`, inside the `fused_attention` method, at the point where it falls back because `supports_fused_attention` is False (the reconstruct_keys path around lines 727-734):
 
@@ -271,12 +271,12 @@ def fused_attention(self, queries, scale, mask=None):
 
 Also add `"unfused_fallback_calls"` to `IsoQuantStats.__slots__` (around line 34) and initialise it to 0 in `__init__`.
 
-- [ ] **Step 4: Run tests to verify both pass**
+- [x] **Step 4: Run tests to verify both pass**
 
 Run: `cd mlx-lm && python -m pytest tests/test_mlx_isoquant.py::TestUnfusedPathWarning -v`
 Expected: Both PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add mlx-lm/mlx_lm/models/mlx_isoquant.py mlx-lm/tests/test_mlx_isoquant.py
@@ -294,7 +294,7 @@ git commit -m "fix: emit warning when IsoQuant fused path is unavailable"
 - Modify: `CLAUDE.md` (fix default from `2` to `3`)
 - Test: `mlx-lm/tests/test_mlx_isoquant.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `mlx-lm/tests/test_mlx_isoquant.py`:
 
@@ -329,12 +329,12 @@ class TestIsoquantBitsEnvVar(unittest.TestCase):
             self.assertEqual(bits, 2)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd mlx-lm && python -m pytest tests/test_mlx_isoquant.py::TestIsoquantBitsEnvVar -v`
 Expected: FAIL (`_get_isoquant_bits` does not exist)
 
-- [ ] **Step 3: Extract bit-width helpers and add ISOQUANT_BITS**
+- [x] **Step 3: Extract bit-width helpers and add ISOQUANT_BITS**
 
 In `cache.py`, replace the inline env var read (around line 55-58) with:
 
@@ -357,16 +357,16 @@ def _get_isoquant_bits() -> int:
 
 Then in `make_quant_cache`, use `_get_isoquant_bits()` for the isoquant branch and `_get_turboquant_bits()` for the turboquant branch.
 
-- [ ] **Step 4: Fix CLAUDE.md default**
+- [x] **Step 4: Fix CLAUDE.md default**
 
 In `CLAUDE.md`, the TurboQuant-specific table says `TURBOQUANT_BITS | 2`. Change it to `3` to match the code at `cache.py:56`.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `cd mlx-lm && python -m pytest tests/test_mlx_isoquant.py::TestIsoquantBitsEnvVar -v`
 Expected: Both PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add mlx-lm/mlx_lm/models/cache.py mlx-lm/tests/test_mlx_isoquant.py CLAUDE.md
@@ -382,7 +382,7 @@ git commit -m "fix: add ISOQUANT_BITS env var, fix TURBOQUANT_BITS default in do
 **Files:**
 - Modify: `mlx-lm/tests/test_models.py`
 
-- [ ] **Step 1: Write the integration test**
+- [x] **Step 1: Write the integration test**
 
 Add to `mlx-lm/tests/test_models.py`:
 
@@ -428,18 +428,18 @@ class TestIsoQuantIntegration(unittest.TestCase):
         })
 ```
 
-- [ ] **Step 2: Run test to verify it passes (baseline)**
+- [x] **Step 2: Run test to verify it passes (baseline)**
 
 Run: `cd mlx-lm && python -m pytest tests/test_models.py::TestIsoQuantIntegration::test_qwen2_isoquant_wiring -v --timeout=120`
 Expected: PASS (this confirms the wiring currently works)
 
-- [ ] **Step 3: Verify the test would catch a wiring removal**
+- [x] **Step 3: Verify the test would catch a wiring removal**
 
 Temporarily comment out the `isinstance(cache, IsoQuantKVCache)` check in `qwen2.py:82` and re-run. Verify the test fails (logits should still be finite but the fused path is not taken). If the test passes even without the check, add an assertion that verifies `cache.stats.fused_metal_attempts > 0` or similar.
 
 Revert the temporary change after verification.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add mlx-lm/tests/test_models.py
@@ -456,7 +456,7 @@ git commit -m "test: add IsoQuant integration test to test_models.py"
 - Modify: `mlx-lm/mlx_lm/models/mlx_turboquant.py:761-783`
 - Test: `mlx-lm/tests/test_prompt_cache.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `mlx-lm/tests/test_prompt_cache.py`:
 
@@ -470,12 +470,12 @@ class TestTurboQuantFromStateEdgeCases(unittest.TestCase):
             TurboQuantKVCache.from_state({}, meta_state=None)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd mlx-lm && python -m pytest tests/test_prompt_cache.py::TestTurboQuantFromStateEdgeCases -v`
 Expected: FAIL with `TypeError` (not `ValueError`)
 
-- [ ] **Step 3: Guard the meta_state setter**
+- [x] **Step 3: Guard the meta_state setter**
 
 In `mlx_turboquant.py`, at the start of the `meta_state` setter (line 761):
 
@@ -491,12 +491,12 @@ def meta_state(self, v):
     # ... rest of setter
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd mlx-lm && python -m pytest tests/test_prompt_cache.py::TestTurboQuantFromStateEdgeCases -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add mlx-lm/mlx_lm/models/mlx_turboquant.py mlx-lm/tests/test_prompt_cache.py
@@ -513,7 +513,7 @@ git commit -m "fix: TurboQuant from_state raises ValueError instead of TypeError
 - Modify: `mlx-lm/mlx_lm/models/mlx_isoquant.py` (fused_attention method)
 - Test: `mlx-lm/tests/test_fused_isoquant_attention.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `mlx-lm/tests/test_fused_isoquant_attention.py`:
 
@@ -536,12 +536,12 @@ class TestFusedAttentionEdgeCases(unittest.TestCase):
         self.assertTrue(mx.allclose(result, mx.zeros_like(result)).item())
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd mlx-lm && python -m pytest tests/test_fused_isoquant_attention.py::TestFusedAttentionEdgeCases::test_fused_attention_empty_cache_returns_zeros -v`
 Expected: FAIL (crash or unexpected output)
 
-- [ ] **Step 3: Add early return for empty cache**
+- [x] **Step 3: Add early return for empty cache**
 
 In `mlx_isoquant.py`, at the start of the `fused_attention` method (after the `supports_fused_attention` check):
 
@@ -552,12 +552,12 @@ def fused_attention(self, queries, scale, mask=None):
     # ... rest of method
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd mlx-lm && python -m pytest tests/test_fused_isoquant_attention.py::TestFusedAttentionEdgeCases -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add mlx-lm/mlx_lm/models/mlx_isoquant.py mlx-lm/tests/test_fused_isoquant_attention.py
@@ -573,7 +573,7 @@ git commit -m "fix: guard fused_attention against empty cache dispatch"
 **Files:**
 - Test: `mlx-lm/tests/test_fused_isoquant_attention.py`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Add to `mlx-lm/tests/test_fused_isoquant_attention.py`:
 
@@ -602,12 +602,12 @@ class TestHeadDimVariations(unittest.TestCase):
         self.assertTrue(mx.isfinite(result).all().item())
 ```
 
-- [ ] **Step 2: Run tests**
+- [x] **Step 2: Run tests**
 
 Run: `cd mlx-lm && python -m pytest tests/test_fused_isoquant_attention.py::TestHeadDimVariations -v --timeout=120`
 Expected: PASS (3-kernel path should handle these dimensions)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add mlx-lm/tests/test_fused_isoquant_attention.py
@@ -625,7 +625,7 @@ git commit -m "test: add head_dim != 128 coverage for fused attention"
 **Files:**
 - Test: `mlx-lm/tests/test_prompt_cache.py`
 
-- [ ] **Step 1: Write the round-trip test**
+- [x] **Step 1: Write the round-trip test**
 
 Add to `mlx-lm/tests/test_prompt_cache.py`:
 
@@ -664,12 +664,12 @@ class TestIsoQuantRoundTrip(unittest.TestCase):
         )
 ```
 
-- [ ] **Step 2: Run test**
+- [x] **Step 2: Run test**
 
 Run: `cd mlx-lm && python -m pytest tests/test_prompt_cache.py::TestIsoQuantRoundTrip -v --timeout=60`
 Expected: PASS (if Task 1 is done)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add mlx-lm/tests/test_prompt_cache.py
@@ -685,23 +685,23 @@ git commit -m "test: add IsoQuant prompt cache save/load round-trip with output 
 **Files:**
 - Modify: `docs/FROM_ATTENTION_TO_CONSUMER_HARDWARE.md`
 
-- [ ] **Step 1: Find and audit all cross-references**
+- [x] **Step 1: Find and audit all cross-references**
 
 Run: `grep -n "Section 6\\.6\|Section 13\|section 6\\.6\|section 13" docs/FROM_ATTENTION_TO_CONSUMER_HARDWARE.md`
 
-- [ ] **Step 2: Fix each dangling reference**
+- [x] **Step 2: Fix each dangling reference**
 
 For each "Section 6.6" reference: replace with the correct section number (likely 6.3 or wherever the fused pipeline content actually lives).
 
 For each "Section 13" reference: replace with the correct section number (likely 10.1.6 where the go/no-go table lives, or the relevant appendix).
 
-- [ ] **Step 3: Verify no dangling references remain**
+- [x] **Step 3: Verify no dangling references remain**
 
 Run: `grep -n "Section [0-9]" docs/FROM_ATTENTION_TO_CONSUMER_HARDWARE.md | head -30`
 
 Cross-check each reference against actual headings.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/FROM_ATTENTION_TO_CONSUMER_HARDWARE.md
@@ -717,13 +717,13 @@ git commit -m "docs: fix dangling section cross-references in paper"
 **Files:**
 - Modify: `/Users/anthonylui/.claude/plans/staged-discovering-micali.md`
 
-- [ ] **Step 1: Fix filename reference**
+- [x] **Step 1: Fix filename reference**
 
 In the plan, Step 1, change:
 - `scripts/profile_decode_pipeline.py` -> `scripts/decode_profiler.py`
 - Status: `NOT STARTED` -> `TOOL BUILT — execution pending`
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add .claude/plans/staged-discovering-micali.md 2>/dev/null || true

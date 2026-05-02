@@ -1306,7 +1306,7 @@ delegate-to-gemini "Create scripts/compare_mojo_vs_mlx.py. Spec sections 4.6, 7.
 Accept --mlx, --mojo, --roofline, --output-dir args."
 ```
 
-- [ ] **Step 1: Create `scripts/compare_mojo_vs_mlx.py` skeleton**
+- [x] **Step 1: Create `scripts/compare_mojo_vs_mlx.py` skeleton**
 
 ```python
 #!/usr/bin/env python3
@@ -1355,10 +1355,10 @@ def cohens_d(group1: list[float], group2: list[float]) -> float:
     return float((m1 - m2) / pooled_std) if pooled_std > 0 else 0.0
 
 
-def geometric_mean_speedup(speedups: list[float]) -> float:
-    """Geometric mean of speedup ratios."""
-    log_speedups = [np.log(s) for s in speedups if s > 0]
-    return float(np.exp(np.mean(log_speedups))) if log_speedups else 1.0
+def geometric_mean_ratio(values: list[float]) -> float:
+    """Geometric mean of positive ratios."""
+    log_values = [np.log(v) for v in values if v > 0]
+    return float(np.exp(np.mean(log_values))) if log_values else 1.0
 
 
 def generate_roofline_plot(mlx: dict, mojo: dict, calibration: dict, output_dir: str):
@@ -1381,11 +1381,7 @@ def generate_energy_chart(mlx: dict, mojo: dict, output_dir: str):
 
 
 def decode_time_attribution(mlx: dict, mojo: dict, output_dir: str) -> dict:
-    """Estimate fraction of decode time per kernel.
-
-    For each kernel: per-call latency × invocations-per-decode-step × layers.
-    If total < 50% of end-to-end decode, flag prominently.
-    """
+    """Build an illustrative kernel-mix chart for the matched benchmark set."""
     # Invocations per decode step per layer (for a standard transformer):
     invocations = {
         "matmul": 6,    # QKV proj (3) + O proj (1) + FFN up (1) + FFN down (1)
@@ -1395,14 +1391,10 @@ def decode_time_attribution(mlx: dict, mojo: dict, output_dir: str) -> dict:
         "kv_compress": 1,  # KV cache quantize per token
         "fused_attention": 1,  # The whole attention block (if fused)
     }
-    num_layers = 80  # Nemotron-H 120B
-
-    # Note: end-to-end decode reference only available for MLX (live model run).
-    # For Mojo: report kernel-time sum as theoretical decode time lower bound.
-    # MLX attribution shows where actual decode time goes;
-    # Mojo attribution shows where it *would* go if kernels were dominant.
+    # Note: without an explicit end-to-end decode baseline and representative
+    # per-model shapes, this remains an illustrative kernel mix only.
     # ... Gemini implements full computation
-    return {"total_estimated_us": 0.0, "fraction_of_decode": 0.0, "e2e_available": False}
+    return {"kind": "illustrative_kernel_mix", "has_end_to_end_decode_reference": False}
 
 
 def generate_latex_tables(mlx: dict, mojo: dict, output_dir: str):
@@ -1441,23 +1433,26 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Implement all chart generators and LaTeX tables**
+- [x] **Step 2: Implement all chart generators and LaTeX tables**
 
 Gemini fills in all `pass` stubs with publication-quality matplotlib code, LaTeX table generators, and the summary JSON with geometric mean speedup.
 
-- [ ] **Step 3: Run comparison on test data**
+- [x] **Step 3: Run comparison on test data**
 
 ```bash
 python scripts/compare_mojo_vs_mlx.py \
   --mlx results/mlx_kernels.json \
-  --mojo mojo-bench/results/mojo_kernels.json \
+  --mojo mojo-bench/results \
   --roofline results/roofline_m4max.json \
   --output-dir results/comparison/
 ```
 
-Expected: `results/comparison/` contains `.png` charts, `.tex` tables, and `summary.json`.
+Expected: `results/comparison/` contains `.png` charts, `.tex` tables, and `summary.json`.  
+Observed: comparison run succeeded with 19 matched kernel-shape pairs and wrote all expected artifacts.
 
-- [ ] **Step 4: Gate G3+G4 — Codex adversarial review of M5**
+- [x] **Step 4: Gate G3+G4 — Codex adversarial review of M5**
+
+Observed: Codex adversarial review refresh completed on 2026-04-23. Fixes landed for ratio semantics, mixed-precision disclosure, illustrative kernel-mix output (replacing unsupported decode-fraction claims), framework-specific power requirements for the energy chart, and stale paper/spec numbers.
 
 ```
 /codex:adversarial-review --background
@@ -1483,7 +1478,7 @@ This is manual work using Xcode Instruments. No code to write, but the procedure
 
 - [ ] **Step 1: Document GPU profiling protocol**
 
-After the main benchmark completes, identify the top-3 kernels by performance gap (largest MLX/Mojo speedup ratio).
+After the main benchmark completes, identify the top-3 kernels by performance gap (largest absolute deviation in the MLX/Mojo time ratio).
 
 For each, profile using Xcode Instruments → Metal System Trace:
 1. Open the benchmark executable in Instruments

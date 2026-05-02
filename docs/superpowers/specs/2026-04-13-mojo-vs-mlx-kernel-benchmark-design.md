@@ -255,7 +255,7 @@ Instead of fixed 100 iterations:
 
 ### 4.7 Variance Attribution via GPU Profiling
 
-After the main benchmark completes, the **top-3 kernels by performance gap** (largest MLX/Mojo speedup ratio) are profiled using **Xcode Instruments Metal System Trace**. This provides causal evidence for *why* one framework is faster, not just *that* it is.
+After the main benchmark completes, the **top-3 kernels by performance gap** (largest absolute deviation in the MLX/Mojo time ratio) are profiled using **Xcode Instruments Metal System Trace**. This provides causal evidence for *why* one framework is faster, not just *that* it is.
 
 For each profiled kernel, report:
 
@@ -509,7 +509,7 @@ New section in `docs/FROM_ATTENTION_TO_CONSUMER_HARDWARE.md`:
 - Proves correctness alongside performance
 
 ### X.7 Energy Efficiency
-- Throughput-per-watt comparison per kernel (from `powermetrics` during runs)
+- Throughput-per-watt comparison per kernel only when framework-specific power baselines are captured during runs
 - Consumer hardware runs on batteries — energy efficiency is a first-class metric
 - Chart: TFLOPS/W side-by-side for compute-bound kernels
 
@@ -519,9 +519,9 @@ New section in `docs/FROM_ATTENTION_TO_CONSUMER_HARDWARE.md`:
 - Causal evidence for *why* one framework is faster, not just *that*
 
 ### X.9 Decode Time Attribution
-- Estimated fraction of decode time attributable to each benchmarked kernel
-- If benchmarked kernels account for <50% of decode time, disclose prominently
-- Stacked-bar chart of kernel contributions to total decode latency
+- Illustrative kernel-mix chart derived from representative matched-kernel latencies and invocation counts
+- Do not claim a wall-clock decode fraction without an explicit end-to-end decode baseline
+- Stacked-bar chart of relative kernel-family mix for the matched benchmark set
 
 ### X.10 Discussion
 - Roofline analysis: how close each framework gets to hardware limits
@@ -580,7 +580,7 @@ Run the full suite 3 times on different days. Report inter-run variance in the p
 
 ---
 
-## 9. Implementation Progress (as of 2026-04-14)
+## 9. Implementation Progress (as of 2026-04-14, updated 2026-04-14)
 
 ### 9.1 Milestone Status
 
@@ -588,50 +588,74 @@ Run the full suite 3 times on different days. Report inter-run variance in the p
 |-----------|--------|-------|
 | **M0** | DONE | `roofline_calibrate.py` + `noop_dispatch.mojo` complete. Noop rewritten to enqueue actual GPU kernel (not empty sync). 146 µs dispatch overhead measured. |
 | **M1** | DONE | `pixi.toml` pinned to MAX `<26.3.0.dev2026040905` (avoids `metal:4-metal4` GPU detection bug on Apr 9+ nightlies). `stats.mojo` + `bench_vec_add.mojo` pass. Full API migration: `fn`→`def`, `alias`→`comptime`, `LayoutTensor` positional params. |
-| **M2** | DONE | All three standard kernels pass smoke tests. MatMul: `MAX_ELEMENTS` bumped to 100,663,296 to cover FFN prefill B matrix. Softmax: S=8192 restored (3.2B elements, 12.9 GB FP32, 413 ms, 62 GB/s). S=32768 excluded with physics justification. RoPE: pair-wise thread assignment, race condition fixed. |
+| **M2** | DONE | All three standard kernels compiled with 6 Mojo 26.x fixes (`inout`→`mut`, `str()`→`String()`, `from collections`→`from std.collections`, `return v`→`return v^`, `-I .` for package resolution, `__init__.mojo` for harness package). Ran successfully: 21 JSON result files (12 matmul, 4 softmax, 5 RoPE). |
 | **M3a** | DONE | Forward + inverse rotation, structured + dense. Scratch buffers hoisted out of hot loops. 18-21x structured speedup preserved. RMSE = 0.0 (exact match). |
 | **M3b** | DONE | KV compress + decompress. Codebook loading. Reconstruction RMSE validation. |
 | **M3c** | DONE | Unfused + framework-fused attention variants. IsoQuant pipeline. |
 | **M3d** | DONE | Hand-fused variant (CPU-only reference for Tier 3). TurboQuant pipeline. Cost breakdown table. |
 | **M4** | DONE | `benchmark_mlx_kernels.py` — `mx.compile()`, `stream=mx.gpu`, BCa bootstrap, two implementations for novel kernels (high-level + custom Metal). |
 | **G2.5** | DONE | `validate_kernel_precision.py` — kernel-chain precision, perplexity divergence check. |
-| **M5** | DONE | `compare_mojo_vs_mlx.py` — LaTeX tables, roofline plots, log2 heatmap, Cohen's d, geometric mean speedup. Schema mismatch fixed: parser now handles both MLX aggregated format and Mojo per-file/directory format. Cohen's d uses actual `n_iterations` (not hardcoded 20). |
-| **M6** | PARTIAL | Paper section 10c in `FROM_ATTENTION_TO_CONSUMER_HARDWARE.md` — structure complete, methodology written, all subsections present but data tables are PLACEHOLDERs pending actual benchmark runs. |
+| **M5** | DONE | `compare_mojo_vs_mlx.py` — 19 matched pairs, all dtype-relaxed (`MLX fp16` vs `Mojo fp32`), 12 output files (3 LaTeX tables, 7 charts, 1 heatmap, 1 summary JSON). Current local run reports time ratio `0.366x` (`MLX_time / Mojo_time`) and MLX speedup `2.729x` over Mojo. Cohen's d uses actual `n_iterations`. Decode output is an illustrative kernel-mix chart, not a wall-clock decode fraction. |
+| **M6** | DONE | All 9 PLACEHOLDERs filled in paper section 10c. Geometric mean decomposition paragraph added. Kernel-time vs wall-clock clarification added. DW stale-data note added. Run cleanliness disclosed as limitation (5). |
 
 ### 9.2 Adversarial Review Status
 
-Three independent reviews completed (2026-04-14):
+Six independent reviews completed (2026-04-23 refresh):
 
 | Reviewer | Verdict | Findings Fixed |
 |----------|---------|----------------|
 | **Manual (human)** | 3 issues (P0/P1/P2) | All 3 fixed: noop dispatch rewrite, GPU guard, raises spec |
 | **Gemini CLI** | NO-SHIP (5 issues) | 3/5 fixed (schema mismatch, Cohen's d, Mojo format support). 2 acknowledged (Mojo CPU-only kernels = by design for Tier 3; BCa not in Mojo stats.mojo = known TODO). |
 | **Codex** (2 passes) | needs-attention | All 3 fixed: matmul layout overflow, softmax 8K coverage restored, IsoQuant scratch buffer hoisted |
+| **Codex** (non-adversarial, post-run) | 4 findings | DW-before-sort bug fixed in all 3 benchmarks. Hardcoded theoretical bandwidth fixed. Remaining 3 findings acknowledged in paper disclosures. |
+| **Codex** (2026-04-23 adversarial refresh) | 5 findings | Fixed: explicit time-ratio vs speedup naming, mixed-precision match disclosure, illustrative kernel-mix chart replacing unsupported decode-fraction claims, framework-specific power requirement for energy chart, stale spec/paper numbers refreshed. |
+| **Superpowers code-reviewer** | 3 critical, 8 important, 6 suggestions | C1 (bootstrap asymmetry) disclosed in paper. C2 (hardcoded roofline) fixed in calibration script. C3 (BCa vs percentile) acknowledged — Mojo still bootstraps mean not median. I1-I8 addressed in paper prose or acknowledged as Tier 3 limitations. |
+| **Human A- review** | 1 P1, 3 P2 | P1 (geometric mean decomposition) added. P2 (decode attribution context) added. P2 (stale DW) disclosed. P2 (run cleanliness) added as limitation (5). |
 
-### 9.3 Remaining Work
+### 9.3 Completed Work
 
-#### Code complete, pending benchmark execution:
+#### Benchmark execution and paper (all done):
 
-1. **Run full benchmark suite** — `pixi run bench-all` for Mojo side, `python scripts/benchmark_mlx_kernels.py` for MLX side, `python scripts/roofline_calibrate.py` for calibration. All three on same day, plugged in, Spotlight paused.
+1. ~~**Run full benchmark suite**~~ — DONE. Mojo: 21 JSON files (12 matmul, 4 softmax, 5 RoPE shapes). MLX: results in `results/mlx_kernels.json`. Roofline calibration in `results/roofline_m4max.json`.
 
-2. **Run comparison script** — `python scripts/compare_mojo_vs_mlx.py` to generate LaTeX tables, charts, and summary JSON from actual results.
+2. ~~**Run comparison script**~~ — DONE. 19 matched pairs (all dtype-relaxed: `MLX float16` vs `Mojo float32`). 12 output files in `results/comparison/`. Summary now reports both time ratio (`0.366x`, `MLX_time / Mojo_time`) and MLX speedup (`2.729x`, `Mojo_time / MLX_time`).
 
-3. **Fill paper PLACEHOLDERs** — Section 10c.2 through 10c.10 in `FROM_ATTENTION_TO_CONSUMER_HARDWARE.md` contain PLACEHOLDER markers awaiting data from step 2.
+3. ~~**Fill paper PLACEHOLDERs**~~ — DONE. All 9 PLACEHOLDERs in 10c.2–10c.10 filled with data or honest scope limitations.
 
-#### Known limitations to disclose:
+4. ~~**MatMul roofline disclosure**~~ — DONE. Disclosed in 10c.3 (dedicated paragraph) and 10c.10 (discussion).
 
-4. **MatMul roofline disclosure** — Mojo GPU matmul achieves ~2.3% roofline (naive tiled GEMM without shared memory, Tier 3 API). Must be disclosed in Section 10c.3 and 10c.10 with framework-maturity framing (not architectural ceiling).
+5. ~~**Mojo BCa bootstrap**~~ — DONE. Asymmetry disclosed in methodology (10c.1) and Cohen's d footnote (10c.3).
 
-5. **Mojo BCa bootstrap** — `stats.mojo` uses simple percentile bootstrap, not BCa. MLX side uses scipy BCa. Asymmetry should be noted in methodology section.
+6. ~~**Mojo CPU-only novel ops**~~ — DONE. Scope limitations in 10c.4 (IsoQuant rotation, KV compression).
 
-6. **Mojo kernels are CPU-only for novel ops** — IsoQuant rotation, KV compress, and fused attention run CPU-only on Mojo (Tier 3 Metal lacks shared memory). This is by design and already disclosed in the paper.
+#### Bug fixes discovered during execution:
 
-#### Optional improvements (not blocking):
+7. **DW-before-sort** — `durbin_watson(times)` was called after `sort_float_list(times)`, computing DW on monotonically increasing data (always near 0). Fixed: DW computed on execution-order data before sorting in all 3 benchmark files. Note: existing Mojo JSON files still contain stale DW values (code fixed, results not re-run). Disclosed in paper 10c.10.
 
-7. **GPU profiling (Section 10c.8)** — Manual Xcode Instruments Metal System Trace for top-3 performance gaps. Requires human operator.
+8. **Hardcoded theoretical bandwidth** — `roofline_calibrate.py` had `"theoretical_memory_bandwidth_gbs": 546.0` regardless of hardware. Fixed: uses derived value from `memory_gb`.
 
-8. **Energy efficiency (Section 10c.7)** — `powermetrics` integration for TFLOPS/W data. Requires sudo access during benchmark runs.
+9. **Output path double-nesting** — Mojo code wrote to `mojo-bench/results/` but pixi runs from `mojo-bench/`, creating `mojo-bench/mojo-bench/results/`. Fixed: paths changed to `results/`.
 
-9. **Multi-run protocol (Section 8.3)** — 3 runs on different days with inter-run CV analysis. Deferred to after initial publication-quality run.
+10. **Dtype matching too strict** — Comparison script matched on `(name, shape, dtype)` yielding 0 matches (MLX float16, Mojo float32). Fixed: relaxed to `(name, shape)` yielding 19 matches.
 
-10. **Precision validation thresholds** — Gemini flagged RMSE threshold of 0.1 for chain ops as too loose, and max_abs_diff ~4.3 for fused Metal path. Review and potentially tighten before filling paper PLACEHOLDERs.
+### 9.4 Remaining Work
+
+#### Blocking (paper quality):
+
+1. **Gemma 4 PPL table broken markdown** (flag 3) — Lines 515-520 of `FROM_ATTENTION_TO_CONSUMER_HARDWARE.md`: the footnote `*\* The reported +0.0000...` at line 517 breaks the markdown table, orphaning the Nemotron-30B rows outside the table. Fix: move footnote below the table close.
+
+2. **Kurtosis value reconciliation** (flag 2) — Lines 524-527: shared=13.10, routed=3.41, gap=3.8x. Need to verify these match actual measurement scripts or update if stale.
+
+#### Non-blocking (optional improvements):
+
+3. **Re-run Mojo benchmarks for clean DW** — The 21 Mojo JSON files have stale DW values (computed on sorted data). The code fix is in place; re-running would produce correct DW. Currently disclosed in paper as invalid. Low priority since DW is informational, not used in any comparison metric.
+
+4. **GPU profiling (Section 10c.8)** — Manual Xcode Instruments Metal System Trace for top-3 performance gaps (matmul 2048x6144x6144 at 77x, matmul 4096³ at 49x, softmax 2048² at 20x). Requires human operator with GUI access.
+
+5. **Energy efficiency (Section 10c.7)** — `powermetrics` integration for TFLOPS/W data. Requires sudo access during benchmark runs. Currently disclosed as "Power data not collected."
+
+6. **Multi-run protocol (Section 8.3)** — 3 runs on different days with inter-run CV analysis. Deferred to after initial results accepted.
+
+7. **Precision validation thresholds** — Gemini flagged RMSE threshold of 0.1 for chain ops as too loose, and max_abs_diff ~4.3 for fused Metal path. Paper reports precision table with all 7 kernels passing; threshold review is optional hardening.
+
+8. **Mojo BCa implementation** — `stats.mojo` uses simple percentile bootstrap (bootstraps mean), while MLX uses scipy BCa (bootstraps median). Different statistics under same field name. Acknowledged in paper but code mismatch remains.
