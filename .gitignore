@@ -64,6 +64,10 @@ acceptance_criteria.json
 feature_list.json
 tmp_quant_agents.pdf
 
+# Recorded media in docs (use external hosting, not git)
+docs/*.mp4
+docs/*.m4a
+
 # Docker runtime
 docker/
 
