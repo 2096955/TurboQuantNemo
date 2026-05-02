@@ -63,6 +63,10 @@ plan2.md
 acceptance_criteria.json
 feature_list.json
 tmp_quant_agents.pdf
+codeflow/
+scripts/setup_shim_router.sh
+mlx-lm/tests/test_dtype_debug.py
+mlx-lm/tests/test_pack_debug.py
 
 # Recorded media in docs (use external hosting, not git)
 docs/*.mp4
