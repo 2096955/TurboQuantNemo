@@ -3,6 +3,8 @@
 
 import sys
 import os
+import json
+import tempfile
 
 # Add scripts to path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -14,13 +16,16 @@ sys.modules["matplotlib"] = types.ModuleType("matplotlib")
 sys.modules["matplotlib.pyplot"] = types.ModuleType("matplotlib.pyplot")
 sys.modules["matplotlib.patches"] = types.ModuleType("matplotlib.patches")
 sys.modules["matplotlib"].rcParams = {"update": lambda x: None}
+sys.modules["matplotlib"].use = lambda backend: None
 
 # Now we can import our module
 from compare_mojo_vs_mlx import (
     KernelResult,
+    build_decode_kernel_mix,
+    load_results,
     match_kernels,
     cohens_d,
-    geometric_mean_speedup,
+    geometric_mean_ratio,
 )
 
 
@@ -49,6 +54,24 @@ def test_match_kernels():
     print("✓ test_match_kernels passed")
 
 
+def test_match_kernels_dtype_fallback():
+    """Test relaxed matching when dtypes differ across frameworks."""
+    mlx_results = [
+        KernelResult("mlx", "matmul", "1024x1024x1024", "float16", 100, 100, 5, 95, 105)
+    ]
+    mojo_results = [
+        KernelResult("mojo", "matmul", "1024x1024x1024", "float32", 80, 80, 4, 76, 84)
+    ]
+
+    matches = match_kernels(mlx_results, mojo_results)
+
+    assert len(matches) == 1
+    assert matches[0][0].dtype == "float16"
+    assert matches[0][1].dtype == "float32"
+
+    print("✓ test_match_kernels_dtype_fallback passed")
+
+
 def test_cohens_d():
     """Test Cohen's d calculation."""
     # Equal groups should give d ≈ 0
@@ -70,25 +93,25 @@ def test_cohens_d():
     print("✓ test_cohens_d passed")
 
 
-def test_geometric_mean_speedup():
-    """Test geometric mean calculation."""
+def test_geometric_mean_ratio():
+    """Test geometric mean ratio calculation."""
     # All 1.0 should give 1.0
-    gm = geometric_mean_speedup([1.0, 1.0, 1.0])
+    gm = geometric_mean_ratio([1.0, 1.0, 1.0])
     assert abs(gm - 1.0) < 0.01
 
     # 2x and 0.5x should give ~1.0
-    gm = geometric_mean_speedup([2.0, 0.5])
+    gm = geometric_mean_ratio([2.0, 0.5])
     assert abs(gm - 1.0) < 0.01
 
     # Consistent 2x speedup
-    gm = geometric_mean_speedup([2.0, 2.0, 2.0])
+    gm = geometric_mean_ratio([2.0, 2.0, 2.0])
     assert abs(gm - 2.0) < 0.01
 
     # Empty list
-    gm = geometric_mean_speedup([])
+    gm = geometric_mean_ratio([])
     assert gm == 1.0
 
-    print("✓ test_geometric_mean_speedup passed")
+    print("✓ test_geometric_mean_ratio passed")
 
 
 def test_parse_kernel_results():
@@ -127,10 +150,75 @@ def test_parse_kernel_results():
     print("✓ test_parse_kernel_results passed")
 
 
+def test_load_results_directory():
+    """Test aggregation of a Mojo results directory."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        entries = [
+            {
+                "framework": "mojo",
+                "framework_version": "0.1",
+                "kernel": "matmul",
+                "shape": "1x1x1",
+                "dtype": "float32",
+                "stats": {"median_us": 1, "mean_us": 1, "std_us": 0, "p5_us": 1, "p95_us": 1},
+                "throughput": {},
+            },
+            {
+                "framework": "mojo",
+                "framework_version": "0.1",
+                "kernel": "softmax",
+                "shape": "1x1x1",
+                "dtype": "float32",
+                "stats": {"median_us": 2, "mean_us": 2, "std_us": 0, "p5_us": 2, "p95_us": 2},
+                "throughput": {},
+            },
+        ]
+        for idx, entry in enumerate(entries):
+            with open(os.path.join(tmpdir, f"part_{idx}.json"), "w") as f:
+                json.dump(entry, f)
+
+        loaded = load_results(tmpdir)
+        assert loaded["framework"] == "mojo"
+        assert len(loaded["kernels"]) == 2
+
+    print("✓ test_load_results_directory passed")
+
+
+def test_build_decode_kernel_mix():
+    """Test illustrative kernel-mix summary generation."""
+    matches = [
+        (
+            KernelResult("mlx", "matmul", "1", "float16", 10, 10, 1, 9, 11),
+            KernelResult("mojo", "matmul", "1", "float32", 20, 20, 1, 19, 21),
+        ),
+        (
+            KernelResult("mlx", "matmul", "2", "float16", 40, 40, 1, 39, 41),
+            KernelResult("mojo", "matmul", "2", "float32", 80, 80, 1, 79, 81),
+        ),
+        (
+            KernelResult("mlx", "softmax", "1", "float16", 5, 5, 1, 4, 6),
+            KernelResult("mojo", "softmax", "1", "float32", 10, 10, 1, 9, 11),
+        ),
+    ]
+
+    mix = build_decode_kernel_mix(matches)
+    assert mix["available"] is True
+    assert mix["has_end_to_end_decode_reference"] is False
+    assert "wall-clock decode time" in mix["note"]
+    assert set(mix["mlx_relative_mix_pct"]) == {"matmul", "softmax"}
+    assert mix["mlx_relative_mix_pct"]["matmul"] > mix["mlx_relative_mix_pct"]["softmax"]
+    assert mix["representative_latency_us"]["matmul"]["mlx_us"] == 20.0
+
+    print("✓ test_build_decode_kernel_mix passed")
+
+
 if __name__ == "__main__":
     print("Running compare_mojo_vs_mlx unit tests...")
     test_match_kernels()
+    test_match_kernels_dtype_fallback()
     test_cohens_d()
-    test_geometric_mean_speedup()
+    test_geometric_mean_ratio()
     test_parse_kernel_results()
+    test_load_results_directory()
+    test_build_decode_kernel_mix()
     print("\n✅ All tests passed!")

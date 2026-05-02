@@ -17,11 +17,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -34,8 +36,10 @@ matplotlib.rcParams.update(
     }
 )
 
-# Nemotron-H 120B layer count and invocations-per-decode-step for decode time attribution
-NEMOTRON_LAYERS = 80
+# Kernel invocation counts per decode step, used only to build an illustrative
+# kernel-mix chart. Without end-to-end decode measurements and representative
+# per-model shapes, these weights should not be interpreted as wall-clock decode
+# fractions.
 INVOCATIONS_PER_DECODE = {
     "matmul": 6,  # Q, K, V, O, up, down
     "softmax": 1,
@@ -162,6 +166,14 @@ def parse_kernel_results(data: dict[str, Any]) -> list[KernelResult]:
     return results
 
 
+def classify_kernel_family(name: str) -> str:
+    """Normalize a benchmark kernel name into a family used for aggregation."""
+    for family in INVOCATIONS_PER_DECODE:
+        if name == family or name.startswith(f"{family}_") or family in name:
+            return family
+    return name
+
+
 def match_kernels(
     mlx_results: list[KernelResult], mojo_results: list[KernelResult]
 ) -> list[tuple[KernelResult, KernelResult]]:
@@ -169,14 +181,38 @@ def match_kernels(
 
     Returns list of (mlx_result, mojo_result) pairs.
     """
-    matches = []
+    matches: list[tuple[KernelResult, KernelResult]] = []
 
+    # First pass: exact match (name + shape + dtype)
+    unmatched_mlx: list[KernelResult] = []
+    used_mojo: set[int] = set()
     for mlx in mlx_results:
-        mlx_key = (mlx.name, mlx.shape, mlx.dtype)
-        for mojo in mojo_results:
-            mojo_key = (mojo.name, mojo.shape, mojo.dtype)
-            if mlx_key == mojo_key:
+        found = False
+        for i, mojo in enumerate(mojo_results):
+            if i in used_mojo:
+                continue
+            if (
+                mlx.name == mojo.name
+                and mlx.shape == mojo.shape
+                and mlx.dtype == mojo.dtype
+            ):
                 matches.append((mlx, mojo))
+                used_mojo.add(i)
+                found = True
+                break
+        if not found:
+            unmatched_mlx.append(mlx)
+
+    # Second pass: relaxed match (name + shape), tolerating dtype mismatch.
+    # This is necessary because some benchmark outputs are fp16 vs fp32 across
+    # frameworks while still representing the same kernel/shape workload.
+    for mlx in unmatched_mlx:
+        for i, mojo in enumerate(mojo_results):
+            if i in used_mojo:
+                continue
+            if mlx.name == mojo.name and mlx.shape == mojo.shape:
+                matches.append((mlx, mojo))
+                used_mojo.add(i)
                 break
 
     return matches
@@ -206,14 +242,14 @@ def cohens_d(
     return (g1_mean - g2_mean) / pooled_std
 
 
-def geometric_mean_speedup(speedups: list[float]) -> float:
-    """Geometric mean of speedup ratios."""
-    if not speedups:
+def geometric_mean_ratio(values: list[float]) -> float:
+    """Geometric mean of positive ratios."""
+    if not values:
         return 1.0
 
     # Use log-space to avoid overflow
-    log_product = sum(math.log(max(s, 1e-10)) for s in speedups)
-    return math.exp(log_product / len(speedups))
+    log_product = sum(math.log(max(v, 1e-10)) for v in values)
+    return math.exp(log_product / len(values))
 
 
 # ---------------------------------------------------------------------------
@@ -242,18 +278,18 @@ def generate_latex_tables(
         lines.append(r"\begin{tabular}{lrrrrr}")
         lines.append(r"\toprule")
         lines.append(
-            r"Shape & MLX ($\mu$s) & Mojo ($\mu$s) & MLX TFLOPS & Mojo TFLOPS & Speedup \\"
+            r"Shape & MLX ($\mu$s) & Mojo ($\mu$s) & MLX TFLOPS & Mojo TFLOPS & MLX Speedup \\"
         )
         lines.append(r"\midrule")
 
         for mlx, mojo in sorted(pairs, key=lambda p: p[0].shape):
             mlx_tflops = mlx.tflops if mlx.tflops else 0
             mojo_tflops = mojo.tflops if mojo.tflops else 0
-            speedup = mlx.median_us / mojo.median_us if mojo.median_us > 0 else 0
+            mlx_speedup = mojo.median_us / mlx.median_us if mlx.median_us > 0 else 0
 
             lines.append(
                 f"{mlx.shape} & {mlx.median_us:.1f} & {mojo.median_us:.1f} & "
-                f"{mlx_tflops:.2f} & {mojo_tflops:.2f} & {speedup:.2f}x \\\\"
+                f"{mlx_tflops:.2f} & {mojo_tflops:.2f} & {mlx_speedup:.2f}x \\\\"
             )
 
         lines.append(r"\bottomrule")
@@ -493,10 +529,7 @@ def generate_throughput_lines(
 def generate_heatmap(
     matches: list[tuple[KernelResult, KernelResult]], output_dir: Path
 ) -> None:
-    """Generate heatmap of log2(MLX_time/Mojo_time).
-
-    Zero = equal, positive = Mojo faster, negative = MLX faster.
-    """
+    """Generate heatmap of log2(MLX_time/Mojo_time)."""
 
     # Group by kernel type
     by_kernel = {}
@@ -536,7 +569,7 @@ def generate_heatmap(
     ax.set_xlabel("Shape", fontsize=12)
     ax.set_ylabel("Kernel", fontsize=12)
     ax.set_title(
-        "Performance Ratio: log2(MLX/Mojo)\nPositive=Mojo faster, Negative=MLX faster",
+        "Time Ratio: log2(MLX_time/Mojo_time)\nPositive=MLX slower, Negative=MLX faster",
         fontsize=14,
         fontweight="bold",
     )
@@ -556,16 +589,16 @@ def generate_energy_chart(
     roofline_data: dict[str, Any],
     output_dir: Path,
 ) -> None:
-    """Generate TFLOPS/W comparison (if power data available)."""
+    """Generate TFLOPS/W comparison if framework-specific power data exists."""
 
-    # Check if power data exists
-    power_baseline = roofline_data.get("power_baseline", {})
-    avg_watts = power_baseline.get("avg_package_watts") or power_baseline.get(
-        "avg_gpu_watts"
-    )
+    power_by_framework = roofline_data.get("power_baseline_by_framework", {})
+    mlx_watts = power_by_framework.get("mlx")
+    mojo_watts = power_by_framework.get("mojo")
 
-    if not avg_watts:
-        print("Skipping energy chart: no power baseline data")
+    if not mlx_watts or not mojo_watts:
+        print(
+            "Skipping energy chart: need framework-specific power baselines for MLX and Mojo"
+        )
         return
 
     # Compute energy efficiency
@@ -578,8 +611,8 @@ def generate_energy_chart(
         mlx_tflops = mlx.tflops if mlx.tflops else 0
         mojo_tflops = mojo.tflops if mojo.tflops else 0
 
-        mlx_efficiency.append(mlx_tflops / avg_watts if avg_watts > 0 else 0)
-        mojo_efficiency.append(mojo_tflops / avg_watts if avg_watts > 0 else 0)
+        mlx_efficiency.append(mlx_tflops / mlx_watts if mlx_watts > 0 else 0)
+        mojo_efficiency.append(mojo_tflops / mojo_watts if mojo_watts > 0 else 0)
 
     x = np.arange(len(labels))
     width = 0.35
@@ -590,7 +623,7 @@ def generate_energy_chart(
 
     ax.set_ylabel("TFLOPS/W", fontsize=12)
     ax.set_title(
-        f"Energy Efficiency (baseline: {avg_watts:.1f}W)",
+        f"Energy Efficiency (MLX {mlx_watts:.1f}W, Mojo {mojo_watts:.1f}W)",
         fontsize=14,
         fontweight="bold",
     )
@@ -606,117 +639,117 @@ def generate_energy_chart(
     print(f"Wrote energy chart: {out_path}")
 
 
+def build_decode_kernel_mix(
+    matches: list[tuple[KernelResult, KernelResult]]
+) -> dict[str, Any]:
+    """Build an illustrative kernel-mix summary from matched microbenchmarks."""
+    per_kernel_samples: dict[str, dict[str, list[float]]] = {}
+
+    for mlx, mojo in matches:
+        family = classify_kernel_family(mlx.name)
+        if family not in INVOCATIONS_PER_DECODE:
+            continue
+        if family not in per_kernel_samples:
+            per_kernel_samples[family] = {"mlx": [], "mojo": []}
+        per_kernel_samples[family]["mlx"].append(mlx.median_us)
+        per_kernel_samples[family]["mojo"].append(mojo.median_us)
+
+    if not per_kernel_samples:
+        return {
+            "available": False,
+            "kind": "illustrative_kernel_mix",
+            "note": "No supported kernel families were present in the matched benchmark set.",
+        }
+
+    representative_latency_us = {}
+    mlx_weighted = {}
+    mojo_weighted = {}
+
+    for family, samples in per_kernel_samples.items():
+        mlx_rep = geometric_mean_ratio(samples["mlx"])
+        mojo_rep = geometric_mean_ratio(samples["mojo"])
+        representative_latency_us[family] = {
+            "mlx_us": round(mlx_rep, 3),
+            "mojo_us": round(mojo_rep, 3),
+        }
+        weight = INVOCATIONS_PER_DECODE[family]
+        mlx_weighted[family] = mlx_rep * weight
+        mojo_weighted[family] = mojo_rep * weight
+
+    mlx_total = sum(mlx_weighted.values())
+    mojo_total = sum(mojo_weighted.values())
+
+    return {
+        "available": True,
+        "kind": "illustrative_kernel_mix",
+        "has_end_to_end_decode_reference": False,
+        "note": (
+            "Percentages are derived from representative per-kernel geometric-mean "
+            "latencies multiplied by decode-step invocation counts across the "
+            "matched microbenchmarks. They are not fractions of wall-clock decode time."
+        ),
+        "representative_latency_us": representative_latency_us,
+        "mlx_relative_mix_pct": {
+            family: round(100 * value / mlx_total, 2) if mlx_total > 0 else 0.0
+            for family, value in mlx_weighted.items()
+        },
+        "mojo_relative_mix_pct": {
+            family: round(100 * value / mojo_total, 2) if mojo_total > 0 else 0.0
+            for family, value in mojo_weighted.items()
+        },
+    }
+
+
 def generate_decode_attribution(
     matches: list[tuple[KernelResult, KernelResult]], output_dir: Path
 ) -> dict[str, Any]:
-    """Generate decode time attribution stacked bar chart.
+    """Generate an illustrative kernel-mix chart for the matched benchmark set."""
+    kernel_mix = build_decode_kernel_mix(matches)
+    if not kernel_mix.get("available"):
+        print("Skipping decode attribution chart: no supported kernel families matched")
+        return kernel_mix
 
-    Returns attribution data for summary JSON.
-    """
-
-    # Aggregate by kernel name
-    kernel_contributions = {}
-
-    for mlx, mojo in matches:
-        # Extract base kernel name
-        base_name = mlx.name
-        for k in INVOCATIONS_PER_DECODE:
-            if k in base_name:
-                base_name = k
-                break
-
-        if base_name not in INVOCATIONS_PER_DECODE:
-            continue
-
-        invocations = INVOCATIONS_PER_DECODE[base_name]
-        layers = NEMOTRON_LAYERS
-
-        mlx_contrib = mlx.median_us * invocations * layers
-        mojo_contrib = mojo.median_us * invocations * layers
-
-        if base_name not in kernel_contributions:
-            kernel_contributions[base_name] = {"mlx": 0, "mojo": 0}
-
-        kernel_contributions[base_name]["mlx"] += mlx_contrib
-        kernel_contributions[base_name]["mojo"] += mojo_contrib
-
-    # Build stacked bar chart
-    kernels = list(kernel_contributions.keys())
-    mlx_times = [kernel_contributions[k]["mlx"] for k in kernels]
-    mojo_times = [kernel_contributions[k]["mojo"] for k in kernels]
-
-    mlx_total = sum(mlx_times)
-    mojo_total = sum(mojo_times)
-
-    # Normalize to percentages
-    mlx_pcts = [100 * t / mlx_total if mlx_total > 0 else 0 for t in mlx_times]
-    mojo_pcts = [100 * t / mojo_total if mojo_total > 0 else 0 for t in mojo_times]
+    kernels = list(kernel_mix["mlx_relative_mix_pct"].keys())
+    mlx_pcts = [kernel_mix["mlx_relative_mix_pct"][k] for k in kernels]
+    mojo_pcts = [kernel_mix["mojo_relative_mix_pct"][k] for k in kernels]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
-    # MLX stacked bar
-    bottom_mlx = 0
+    bottom_mlx = 0.0
     for i, kernel in enumerate(kernels):
         ax1.bar("MLX", mlx_pcts[i], bottom=bottom_mlx, label=kernel)
         bottom_mlx += mlx_pcts[i]
 
-    # Mojo stacked bar
-    bottom_mojo = 0
+    bottom_mojo = 0.0
     for i, kernel in enumerate(kernels):
         ax2.bar("Mojo", mojo_pcts[i], bottom=bottom_mojo, label=kernel)
         bottom_mojo += mojo_pcts[i]
 
     for ax in [ax1, ax2]:
-        ax.set_ylabel("% of Total Kernel Time", fontsize=12)
+        ax.set_ylabel("% of weighted matched-kernel cost", fontsize=12)
         ax.set_ylim(0, 100)
         ax.grid(axis="y", alpha=0.3)
         ax.legend(fontsize=9)
 
-    ax1.set_title(
-        f"MLX Decode Attribution\nTotal: {mlx_total / 1000:.1f}ms",
-        fontsize=12,
-        fontweight="bold",
-    )
-    ax2.set_title(
-        f"Mojo Decode Attribution\nTotal: {mojo_total / 1000:.1f}ms",
-        fontsize=12,
-        fontweight="bold",
+    ax1.set_title("MLX Illustrative Kernel Mix", fontsize=12, fontweight="bold")
+    ax2.set_title("Mojo Illustrative Kernel Mix", fontsize=12, fontweight="bold")
+
+    fig.text(
+        0.5,
+        0.02,
+        kernel_mix["note"],
+        ha="center",
+        fontsize=9,
+        color="dimgray",
     )
 
-    # Add warning if below 50%
-    if mlx_total < 50000 or mojo_total < 50000:  # < 50ms
-        fig.text(
-            0.5,
-            0.02,
-            "WARNING: Kernel time may be <50% of actual decode time (theoretical lower bound)",
-            ha="center",
-            fontsize=10,
-            color="red",
-            fontweight="bold",
-        )
-
-    plt.tight_layout()
+    plt.tight_layout(rect=(0, 0.06, 1, 1))
     out_path = output_dir / "decode_time_attribution.png"
     plt.savefig(out_path, dpi=300)
     plt.close()
-    print(f"Wrote decode attribution: {out_path}")
+    print(f"Wrote kernel-mix chart: {out_path}")
 
-    return {
-        "mlx_total_kernel_time_us": mlx_total,
-        "mojo_total_kernel_time_us": mojo_total,
-        "fraction_of_decode_mlx": min(
-            mlx_total / 100000, 1.0
-        ),  # Assume 100ms decode = 100%
-        "fraction_of_decode_mojo": min(mojo_total / 100000, 1.0),
-        "below_50_pct": mlx_total < 50000 or mojo_total < 50000,
-        "per_kernel": {
-            k: {
-                "mlx_us": kernel_contributions[k]["mlx"],
-                "mojo_us": kernel_contributions[k]["mojo"],
-            }
-            for k in kernels
-        },
-    }
+    return kernel_mix
 
 
 # ---------------------------------------------------------------------------
@@ -726,18 +759,18 @@ def generate_decode_attribution(
 
 def write_summary_json(
     matches: list[tuple[KernelResult, KernelResult]],
-    decode_attribution: dict[str, Any],
+    decode_kernel_mix: dict[str, Any],
     output_dir: Path,
 ) -> None:
-    """Write summary JSON with geometric mean speedup and Cohen's d."""
+    """Write summary JSON with explicit time-ratio and speedup semantics."""
 
-    speedups = []
+    time_ratios = []
     cohens_d_results = {}
 
     for mlx, mojo in matches:
         if mojo.median_us > 0:
-            speedup = mlx.median_us / mojo.median_us
-            speedups.append(speedup)
+            time_ratio = mlx.median_us / mojo.median_us
+            time_ratios.append(time_ratio)
 
             # Cohen's d using actual iteration counts from adaptive benchmarking
             d = cohens_d(
@@ -750,9 +783,10 @@ def write_summary_json(
             )
             cohens_d_results[f"{mlx.name}_{mlx.shape}"] = round(d, 3)
 
-    geo_mean = geometric_mean_speedup(speedups)
+    geo_time_ratio = geometric_mean_ratio(time_ratios)
+    mlx_speedup = 1 / geo_time_ratio if geo_time_ratio > 0 else 0.0
 
-    # Per-kernel speedup (aggregate by kernel name)
+    # Per-kernel time ratio (aggregate by kernel name)
     per_kernel = {}
     for mlx, mojo in matches:
         if mlx.name not in per_kernel:
@@ -760,15 +794,33 @@ def write_summary_json(
         if mojo.median_us > 0:
             per_kernel[mlx.name].append(mlx.median_us / mojo.median_us)
 
-    per_kernel_speedup = {
-        k: round(geometric_mean_speedup(v), 3) for k, v in per_kernel.items()
+    per_kernel_time_ratio = {
+        k: round(geometric_mean_ratio(v), 3) for k, v in per_kernel.items()
     }
+    per_kernel_mlx_speedup = {
+        k: round(1 / ratio, 3) if ratio > 0 else 0.0
+        for k, ratio in per_kernel_time_ratio.items()
+    }
+    exact_dtype_matches = sum(1 for mlx, mojo in matches if mlx.dtype == mojo.dtype)
+    cross_dtype_matches = len(matches) - exact_dtype_matches
 
     summary = {
-        "geometric_mean_speedup": round(geo_mean, 3),
-        "per_kernel_speedup": per_kernel_speedup,
+        "matching": {
+            "policy": "exact_dtype_then_name_shape_fallback",
+            "exact_dtype_matches": exact_dtype_matches,
+            "cross_dtype_matches": cross_dtype_matches,
+            "all_matches_cross_dtype": cross_dtype_matches == len(matches),
+            "note": (
+                "Cross-dtype matches compare the same kernel name and shape but can "
+                "reflect different precisions across frameworks."
+            ),
+        },
+        "geometric_mean_time_ratio_mlx_over_mojo": round(geo_time_ratio, 3),
+        "geometric_mean_mlx_speedup_over_mojo": round(mlx_speedup, 3),
+        "per_kernel_time_ratio_mlx_over_mojo": per_kernel_time_ratio,
+        "per_kernel_mlx_speedup_over_mojo": per_kernel_mlx_speedup,
         "per_kernel_cohens_d": cohens_d_results,
-        "decode_attribution": decode_attribution,
+        "decode_kernel_mix": decode_kernel_mix,
         "total_comparisons": len(matches),
     }
 
@@ -777,7 +829,8 @@ def write_summary_json(
         json.dump(summary, f, indent=2)
 
     print(f"Wrote summary: {out_path}")
-    print(f"\nGeometric mean speedup (MLX/Mojo): {geo_mean:.3f}x")
+    print(f"\nGeometric mean time ratio (MLX/Mojo): {geo_time_ratio:.3f}x")
+    print(f"Geometric mean MLX speedup over Mojo: {mlx_speedup:.3f}x")
 
 
 # ---------------------------------------------------------------------------
