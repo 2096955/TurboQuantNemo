@@ -40,7 +40,7 @@ cd ..
 ```bash
 python scripts/compare_mojo_vs_mlx.py \
   --mlx results/mlx_kernels.json \
-  --mojo mojo-bench/results/mojo_kernels.json \
+  --mojo mojo-bench/results \
   --roofline results/roofline_m4max.json \
   --output-dir results/comparison/
 ```
@@ -55,7 +55,7 @@ One table per kernel category (e.g., `table_matmul.tex`, `table_softmax.tex`) wi
 - Shape configurations
 - MLX and Mojo latencies
 - Throughput (TFLOPS)
-- Speedup ratios
+- MLX speedup ratios (`Mojo_time / MLX_time`)
 
 Example:
 
@@ -65,9 +65,9 @@ Example:
 \caption{MatMul Kernel Comparison}
 \begin{tabular}{lrrrrr}
 \toprule
-Shape & MLX (μs) & Mojo (μs) & MLX TFLOPS & Mojo TFLOPS & Speedup \\
+Shape & MLX (μs) & Mojo (μs) & MLX TFLOPS & Mojo TFLOPS & MLX Speedup \\
 \midrule
-1024x1024x1024 & 123.4 & 98.2 & 17.5 & 22.0 & 1.26x \\
+1024x1024x1024 & 123.4 & 98.2 & 17.5 & 22.0 & 0.80x \\
 ...
 \bottomrule
 \end{tabular}
@@ -101,10 +101,10 @@ Shape & MLX (μs) & Mojo (μs) & MLX TFLOPS & Mojo TFLOPS & Speedup \\
 6. **Energy Efficiency** (`energy_efficiency.png`)
    - TFLOPS/W comparison (if power baseline available)
 
-7. **Decode Time Attribution** (`decode_time_attribution.png`)
-   - Stacked bar showing each kernel's fraction of decode time
-   - For Nemotron-H 120B (80 layers)
-   - Includes warning if <50% of actual decode time
+7. **Illustrative Kernel Mix** (`decode_time_attribution.png`)
+   - Stacked bar showing the weighted kernel mix across the matched microbenchmarks
+   - Uses representative per-kernel geometric-mean latencies multiplied by invocation counts
+   - Does **not** claim a fraction of wall-clock decode time unless an explicit decode baseline is added
 
 ### Summary JSON
 
@@ -112,35 +112,52 @@ Shape & MLX (μs) & Mojo (μs) & MLX TFLOPS & Mojo TFLOPS & Speedup \\
 
 ```json
 {
-  "geometric_mean_speedup": 1.23,
-  "per_kernel_speedup": {
-    "matmul": 1.15,
-    "softmax": 0.95,
-    ...
+  "matching": {
+    "policy": "exact_dtype_then_name_shape_fallback",
+    "exact_dtype_matches": 0,
+    "cross_dtype_matches": 19,
+    "all_matches_cross_dtype": true
+  },
+  "geometric_mean_time_ratio_mlx_over_mojo": 0.366,
+  "geometric_mean_mlx_speedup_over_mojo": 2.729,
+  "per_kernel_time_ratio_mlx_over_mojo": {
+    "matmul": 0.127,
+    "softmax": 2.524
+  },
+  "per_kernel_mlx_speedup_over_mojo": {
+    "matmul": 7.874,
+    "softmax": 0.396
   },
   "per_kernel_cohens_d": {
     "matmul_1024x1024x1024": 0.8,
     ...
   },
-  "decode_attribution": {
-    "mlx_total_kernel_time_us": 45000,
-    "mojo_total_kernel_time_us": 38000,
-    "fraction_of_decode_mlx": 0.45,
-    "fraction_of_decode_mojo": 0.38,
-    "below_50_pct": true
+  "decode_kernel_mix": {
+    "available": true,
+    "kind": "illustrative_kernel_mix",
+    "has_end_to_end_decode_reference": false
   },
-  "total_comparisons": 42
+  "total_comparisons": 19
 }
 ```
 
 ## Statistical Measures
 
-### Geometric Mean Speedup
+### Time Ratio And Speedup
 
-The script uses **geometric mean** (not arithmetic mean) for speedup ratios because:
+The script writes both:
+- `geometric_mean_time_ratio_mlx_over_mojo`: `MLX_time / Mojo_time`
+- `geometric_mean_mlx_speedup_over_mojo`: `Mojo_time / MLX_time`
+
+Both are geometric means because:
 - Arithmetic mean is biased by outliers
 - Geometric mean is symmetric: GM([2x, 0.5x]) = 1.0
 - Standard practice in performance comparisons
+
+Interpretation:
+- Time ratio `< 1.0` means MLX is faster
+- Time ratio `> 1.0` means Mojo is faster
+- MLX speedup `> 1.0` means MLX is faster
 
 ### Cohen's d Effect Size
 
@@ -156,11 +173,11 @@ Positive d means MLX is slower, negative d means MLX is faster.
 
 Error bars on all charts represent 95% BCa (bias-corrected and accelerated) bootstrap confidence intervals from the benchmark data.
 
-## Decode Time Attribution
+## Illustrative Kernel Mix
 
-The script estimates what fraction of a full decode step each kernel represents:
+The script now produces an illustrative kernel-mix chart rather than claiming a wall-clock decode fraction.
 
-**Invocations per decode step:**
+**How it is built:**
 - matmul: 6 (Q, K, V, O, up, down)
 - softmax: 1
 - rope: 1
@@ -168,17 +185,7 @@ The script estimates what fraction of a full decode step each kernel represents:
 - rotate_inverse: 1
 - kv_compress: 1
 - fused_attention: 1
-
-**Model:** Nemotron-H 120B (80 layers)
-
-**Important:** These are theoretical lower bounds. Actual decode time includes:
-- Framework overhead
-- Memory allocation/deallocation
-- Data movement
-- Kernel launch overhead
-- CPU-GPU synchronization
-
-If the sum of kernel times is <50% of a realistic decode time, the script will flag this prominently.
+For each kernel family, the script takes the geometric mean of the matched microbenchmark latencies, multiplies by the decode-step invocation count, and normalizes the result into a percentage mix. This is useful for showing which kernel families dominate the matched benchmark set, but it is **not** a substitute for a real decode profiler and should not be interpreted as a fraction of end-to-end decode latency.
 
 ## Troubleshooting
 
@@ -226,7 +233,7 @@ cd mojo-bench && pixi run bench-all && cd ..
 # 3. Compare
 python scripts/compare_mojo_vs_mlx.py \
   --mlx results/mlx_kernels.json \
-  --mojo mojo-bench/results/mojo_kernels.json \
+  --mojo mojo-bench/results \
   --roofline results/roofline_m4max.json \
   --output-dir results/comparison/
 
@@ -246,8 +253,10 @@ python scripts/test_compare_mojo_vs_mlx.py
 This tests:
 - Kernel matching logic
 - Cohen's d calculation
-- Geometric mean speedup
+- Geometric mean ratios
 - JSON parsing
+- Directory aggregation for Mojo outputs
+- Illustrative kernel-mix generation
 
 ## References
 

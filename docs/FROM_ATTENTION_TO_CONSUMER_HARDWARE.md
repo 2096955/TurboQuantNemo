@@ -653,7 +653,7 @@ Above C=4 the mlx-lm server (stdlib `ThreadingHTTPServer`) silently emits empty 
 A separate `kv_cache:` block has now been added to the benchmark JSON, populated by IsoQuant's own counters (`prefill_calls`, `decode_calls`, `compress_calls`, `decompress_calls`, `read_keys/values_calls`, `finalize_calls`, `fused_metal_attempts/failures`, `packed_cache_hits/misses`, `fallback_invocations`). First Gemma4 measurement (profile A, IsoQuant + offload):
 
 - `fused_metal_success_rate: 1.0` over 3,612 fused decode attempts — the IsoQuant Metal pipeline never fell back to the MLX-ops path on this run.
-- `decompress_calls: 0`, `read_keys/values_calls: 0` — confirmed: the fused path bypasses materialisation entirely (see Section 6.6).
+- `decompress_calls: 0`, `read_keys/values_calls: 0` — confirmed: the fused path bypasses materialisation entirely (see Section 6.3).
 - `packed_cache_hit_rate: 0.0` — the packed-3-bit cache is invalidated after every prefill finalize, runtime-shape reset, and incremental decode append (`mlx_isoquant.py:519, 549, 592, 650`); each fused step then rebuilds it lazily. This is **by design** under the current scheme, not a bug; it is a candidate optimisation (incremental append into the packed format) but out of scope for this paper.
 
 ### 10.1.6 Go/No-go decisions (April 2026)
@@ -670,6 +670,27 @@ A separate `kv_cache:` block has now been added to the benchmark JSON, populated
 | AttnRes predictor | **No-go** | 10.6–11.2% throughput regression with no hit-rate improvement |
 | Task-aware pinning | **No-go** | 0% hit-rate improvement over baseline LRU |
 | QES | **Planned** | Background evolution strategies for gate-weight optimisation |
+
+### 10.1.7 Mojo vs MLX kernel benchmark snapshot
+
+An initial framework-level microbenchmark comparison has now been generated from the local benchmark outputs:
+
+- Inputs: `results/mlx_kernels.json`, `mojo-bench/results/`, `results/roofline_m4max.json`
+- Outputs: `results/comparison/` (LaTeX tables, charts, an illustrative kernel-mix chart, `summary.json`)
+- Matched kernel-shape pairs: **19**
+- Match policy: **0 exact-dtype pairs, 19 dtype-relaxed pairs** (`MLX float16` vs `Mojo float32`)
+- Geometric mean time ratio (`MLX_time / Mojo_time`): **0.366x**
+- Equivalent geometric mean MLX speedup over Mojo on this matched set: **2.729x**
+
+Per-kernel geometric means from `results/comparison/summary.json`:
+
+| Kernel family | Time ratio (MLX/Mojo) | MLX speedup over Mojo |
+|---|---|---|
+| matmul | 0.127x | 7.874x |
+| softmax | 2.524x | 0.396x |
+| rope | 0.976x | 1.025x |
+
+Interpretation: this is a kernel-only snapshot, not an end-to-end model throughput verdict. The matched set currently covers standard kernels (matmul/softmax/rope), and does not yet include full parity for all planned novel kernels and fused decode variants. The current run is also mixed precision across frameworks (`MLX fp16` vs `Mojo fp32`), so it should be read as a “current local configuration” comparison rather than an apples-to-apples framework ceiling claim. The chart at `results/comparison/decode_time_attribution.png` is now an illustrative kernel mix only; it intentionally does **not** claim a fraction of wall-clock decode time because no end-to-end decode baseline was captured for this run. The energy chart is intentionally absent because no framework-specific power baselines were captured.
 
 ---
 

@@ -42,24 +42,25 @@ Parse `results/comparison/summary.json` to identify the **top-3 kernels by perfo
 
 ```python
 import json
+import math
 
 with open("results/comparison/summary.json") as f:
     summary = json.load(f)
 
-# Calculate speedup ratio: MLX throughput / Mojo throughput
-ratios = []
-for kernel_result in summary["kernels"]:
-    kernel_name = kernel_result["name"]
-    mlx_throughput = kernel_result["mlx"]["throughput_gflops"]
-    mojo_throughput = kernel_result["mojo"]["throughput_gflops"]
-    ratio = mlx_throughput / mojo_throughput if mojo_throughput > 0 else float('inf')
-    ratios.append((kernel_name, ratio))
+# Use per-kernel time ratio from the comparison summary.
+# ratio < 1.0 => MLX faster, ratio > 1.0 => Mojo faster
+ratios = summary["per_kernel_time_ratio_mlx_over_mojo"]
 
-# Top 3: largest speedup or slowdown (abs deviation from 1.0)
-top_3 = sorted(ratios, key=lambda x: abs(x[1] - 1.0), reverse=True)[:3]
+# Top 3: largest multiplicative gap in either direction
+top_3 = sorted(
+    ratios.items(),
+    key=lambda x: abs(math.log2(x[1])) if x[1] > 0 else float("inf"),
+    reverse=True,
+)[:3]
 print("Top 3 kernels by performance gap:")
 for kernel_name, ratio in top_3:
-    print(f"  {kernel_name}: {ratio:.2f}x")
+    direction = "MLX faster" if ratio < 1.0 else "Mojo faster"
+    print(f"  {kernel_name}: {ratio:.2f}x time ratio ({direction})")
 ```
 
 ### Step 2: Document Selection Rationale
