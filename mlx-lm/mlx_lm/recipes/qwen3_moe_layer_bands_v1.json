@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "model_family": "qwen3_moe",
+  "layer_count": 48,
+  "preset_name": "qwen3_moe_layer_bands_v1",
+  "bands": [
+    {"start": 0, "end": 4, "routed_bits": 4, "routed_group_size": 64},
+    {"start": 5, "end": 8, "routed_bits": 3, "routed_group_size": 64},
+    {"start": 9, "end": 38, "routed_bits": 2, "routed_group_size": 64},
+    {"start": 39, "end": 42, "routed_bits": 3, "routed_group_size": 64},
+    {"start": 43, "end": 47, "routed_bits": 4, "routed_group_size": 64}
+  ],
+  "dense": {"bits": 4, "group_size": 64}
+}
