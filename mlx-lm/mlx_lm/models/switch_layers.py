@@ -577,6 +577,15 @@ class OffloadQuantizedSwitchMLP(nn.Module):
             raise RuntimeError(
                 "OffloadQuantizedSwitchMLP: ExpertOffloadManager not attached"
             )
+
+        if mgr.predictor is not None and hasattr(mgr.predictor, "compute_proxy_alpha"):
+            alpha = mgr.predictor.compute_proxy_alpha(self.fc1.layer_idx, x)
+            predicted = mgr.predictor.predict_experts(
+                self.fc1.layer_idx, alpha, top_k=getattr(mgr, "prefetch_top_k", 2)
+            )
+            mgr.prefetch(self.fc1.layer_idx, predicted)
+            self._last_alpha = alpha
+
         x = mx.expand_dims(x, (-2, -3))
 
         do_sort = indices.size >= 64
@@ -630,6 +639,10 @@ class OffloadQuantizedSwitchMLP(nn.Module):
 
         out = x.squeeze(-2)
         mx.eval(out)
+
+        if mgr.predictor is not None and hasattr(self, "_last_alpha"):
+            mgr.predictor.record_activation(self.fc1.layer_idx, self._last_alpha, idx)
+
         return out
 
 
@@ -696,6 +709,14 @@ class OffloadQuantizedSwitchGLU(nn.Module):
             raise RuntimeError(
                 "OffloadQuantizedSwitchGLU: ExpertOffloadManager not attached"
             )
+
+        if mgr.predictor is not None and hasattr(mgr.predictor, "compute_proxy_alpha"):
+            alpha = mgr.predictor.compute_proxy_alpha(self.gate_proj.layer_idx, x)
+            predicted = mgr.predictor.predict_experts(
+                self.gate_proj.layer_idx, alpha, top_k=getattr(mgr, "prefetch_top_k", 2)
+            )
+            mgr.prefetch(self.gate_proj.layer_idx, predicted)
+            self._last_alpha = alpha
 
         x = mx.expand_dims(x, (-2, -3))
 
@@ -767,4 +788,10 @@ class OffloadQuantizedSwitchGLU(nn.Module):
 
         out = x.squeeze(-2)
         mx.eval(out)
+
+        if mgr.predictor is not None and hasattr(self, "_last_alpha"):
+            mgr.predictor.record_activation(
+                self.gate_proj.layer_idx, self._last_alpha, idx
+            )
+
         return out

@@ -14,6 +14,8 @@ from .base import (
     scaled_dot_product_attention,
 )
 from .cache import ArraysCache, KVCache
+from .mlx_isoquant import IsoQuantKVCache
+from .mlx_turboquant import TurboQuantKVCache
 from .ssm import ssm_update
 from .switch_layers import OffloadQuantizedSwitchMLP, OffloadSwitchMLP, SwitchMLP
 
@@ -277,9 +279,18 @@ class NemotronHAttention(nn.Module):
         if cache is not None:
             keys, values = cache.update_and_fetch(keys, values)
 
-        output = scaled_dot_product_attention(
-            queries, keys, values, cache=cache, scale=self.scale, mask=mask
-        )
+        if isinstance(cache, IsoQuantKVCache) and cache.supports_fused_attention:
+            output = cache.fused_attention(queries, scale=self.scale, mask=mask)
+        elif isinstance(cache, TurboQuantKVCache):
+            keys = cache.reconstruct_keys()
+            values = cache.get_values()
+            output = scaled_dot_product_attention(
+                queries, keys, values, cache=None, scale=self.scale, mask=mask
+            )
+        else:
+            output = scaled_dot_product_attention(
+                queries, keys, values, cache=cache, scale=self.scale, mask=mask
+            )
         output = output.transpose(0, 2, 1, 3).reshape(B, L, -1)
         return self.o_proj(output)
 
@@ -446,6 +457,11 @@ class NemotronHMoE(nn.Module):
 
     def __call__(self, x):
         inds, scores = self.gate(x)
+
+        # DedeKimi observer: record expert activations for entropy tracking
+        _mgr = getattr(getattr(self.switch_mlp, "fc1", None), "manager", None)
+        if _mgr is not None and getattr(_mgr, "dedekimi_observer", None) is not None:
+            _mgr.dedekimi_observer.record_activation(self.layer_idx, inds.reshape(-1))
 
         h = x
         if self.use_latent:

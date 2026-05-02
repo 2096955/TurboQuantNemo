@@ -14,7 +14,6 @@ from .base import (
     scaled_dot_product_attention,
 )
 from .cache import ArraysCache, KVCache
-from ..expert_offload import AttnResExpertPredictor
 from .gated_delta import gated_delta_update
 from .mla import MultiLinear
 from .switch_layers import SwitchGLU
@@ -62,7 +61,9 @@ class BlockAttnRes(nn.Module):
         self.weight = mx.zeros((dim,))
         self.norm = nn.RMSNorm(dim, eps=eps)
 
-    def __call__(self, blocks: List[mx.array], partial_block: mx.array) -> Tuple[mx.array, mx.array]:
+    def __call__(
+        self, blocks: List[mx.array], partial_block: mx.array
+    ) -> Tuple[mx.array, mx.array]:
         V = mx.stack(blocks + [partial_block], axis=0)
         K = self.norm(V)
         logits = (self.weight * K).sum(axis=-1)
@@ -440,7 +441,7 @@ class KimiDecoderLayer(nn.Module):
         cache: Optional[Any] = None,
     ) -> Tuple[List[mx.array], mx.array]:
         partial_block = x
-        
+
         h, alpha_attn = self.attn_res(blocks, partial_block)
 
         if self.layer_idx % max(1, self.block_size // 2) == 0 and self.layer_idx > 0:
@@ -449,20 +450,26 @@ class KimiDecoderLayer(nn.Module):
 
         attn_cache = None if cache is None else cache
         y = self.self_attn(self.input_layernorm(h), mask, attn_cache)
-        
+
         partial_block = y if partial_block is None else partial_block + y
 
         h, alpha_mlp = self.mlp_res(blocks, partial_block)
-        
-        if hasattr(self, 'expert_manager') and hasattr(self, 'predictor'):
-            predicted_experts = self.predictor.predict_experts(self.layer_idx, alpha_mlp, top_k=16)
+
+        if hasattr(self, "expert_manager") and hasattr(self, "predictor"):
+            predicted_experts = self.predictor.predict_experts(
+                self.layer_idx,
+                alpha_mlp,
+                top_k=getattr(self.expert_manager, "prefetch_top_k", 2),
+            )
             self.expert_manager.prefetch(self.layer_idx, predicted_experts)
 
         z = self.mlp(self.post_attention_layernorm(h))
-        
-        if hasattr(self, 'predictor') and hasattr(self.mlp, 'last_expert_ids'):
+
+        if hasattr(self, "predictor") and hasattr(self.mlp, "last_expert_ids"):
             # The MLP needs to expose last_expert_ids for recording.
-            self.predictor.record_activation(self.layer_idx, alpha_mlp, self.mlp.last_expert_ids)
+            self.predictor.record_activation(
+                self.layer_idx, alpha_mlp, self.mlp.last_expert_ids
+            )
 
         partial_block = partial_block + z
         return blocks, partial_block

@@ -244,13 +244,24 @@ class Model(nn.Module):
     def layers(self):
         return self.model.layers
 
-    def make_cache(self):
+    def make_cache(self, kv_cache_type: str = "default", **kwargs):
         caches = []
         for i in range(self.args.num_hidden_layers):
-            if (
+            is_global = (
                 i % self.args.sliding_window_pattern
                 == self.args.sliding_window_pattern - 1
-            ):
+            )
+            
+            if is_global and kv_cache_type == "rotorquant":
+                from .mlx_turboquant import RotorQuantKVCache
+                caches.append(
+                    RotorQuantKVCache(
+                        head_dim=self.args.head_dim,
+                        bit_width=3,
+                        seed=42,
+                    )
+                )
+            elif is_global:
                 caches.append(KVCache())
             else:
                 caches.append(RotatingKVCache(max_size=self.args.sliding_window))

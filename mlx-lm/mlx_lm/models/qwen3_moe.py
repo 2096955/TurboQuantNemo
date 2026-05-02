@@ -8,6 +8,8 @@ import mlx.nn as nn
 
 from .activations import swiglu
 from .base import BaseModelArgs, create_attention_mask, scaled_dot_product_attention
+from .mlx_isoquant import IsoQuantKVCache
+from .mlx_turboquant import TurboQuantKVCache
 from .switch_layers import SwitchGLU
 
 
@@ -32,6 +34,7 @@ class ModelArgs(BaseModelArgs):
     max_position_embeddings: int
     norm_topk_prob: bool
     rope_scaling: Optional[Dict[str, Union[float, str]]] = None
+    expert_offload: bool = False
 
 
 class Attention(nn.Module):
@@ -89,9 +92,21 @@ class Attention(nn.Module):
             queries = self.rope(queries)
             keys = self.rope(keys)
 
-        output = scaled_dot_product_attention(
-            queries, keys, values, cache=cache, scale=self.scale, mask=mask
-        )
+        # TurboQuant / IsoQuant (subclass): attend over full history, not latest chunk
+        if isinstance(cache, IsoQuantKVCache) and cache.supports_fused_attention:
+            # Fused path: compute attention in rotated space, inverse rotate once.
+            # Reduces rotation cost from O(T × d²) to O(d²).
+            output = cache.fused_attention(queries, scale=self.scale, mask=mask)
+        elif isinstance(cache, TurboQuantKVCache):
+            keys = cache.reconstruct_keys()
+            values = cache.get_values()
+            output = scaled_dot_product_attention(
+                queries, keys, values, cache=None, scale=self.scale, mask=mask
+            )
+        else:
+            output = scaled_dot_product_attention(
+                queries, keys, values, cache=cache, scale=self.scale, mask=mask
+            )
         output = output.transpose(0, 2, 1, 3).reshape(B, L, -1)
         return self.o_proj(output)
 
@@ -108,8 +123,9 @@ class MLP(nn.Module):
 
 
 class Qwen3MoeSparseMoeBlock(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: ModelArgs, layer_idx: int):
         super().__init__()
+        self.layer_idx = layer_idx
         dim = args.hidden_size
         intermediate_size = args.moe_intermediate_size
 
@@ -129,6 +145,22 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
 
         k = self.top_k
         inds = mx.argpartition(gates, kth=-k, axis=-1)[..., -k:]
+
+        # OffloadSwitchGLU stores manager on child gate_proj; SwitchGLU has no manager
+        mgr = getattr(getattr(self.switch_mlp, "gate_proj", None), "manager", None)
+        if mgr is not None:
+            if getattr(mgr, "predictor", None) is not None:
+                alpha = mgr.predictor.compute_proxy_alpha(self.layer_idx, x)
+                predicted = mgr.predictor.predict_experts(
+                    self.layer_idx, alpha, top_k=getattr(mgr, "prefetch_top_k", 2)
+                )
+                mgr.prefetch(self.layer_idx, predicted)
+                mgr.predictor.record_activation(self.layer_idx, alpha, inds)
+            if getattr(mgr, "dedekimi_observer", None) is not None:
+                mgr.dedekimi_observer.record_activation(
+                    self.layer_idx, inds.reshape(-1)
+                )
+
         scores = mx.take_along_axis(gates, inds, axis=-1)
         if self.norm_topk_prob:
             scores /= mx.sum(scores, axis=-1, keepdims=True)
@@ -154,7 +186,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         if (layer_idx not in args.mlp_only_layers) and (
             args.num_experts > 0 and (layer_idx + 1) % args.decoder_sparse_step == 0
         ):
-            self.mlp = Qwen3MoeSparseMoeBlock(args)
+            self.mlp = Qwen3MoeSparseMoeBlock(args, layer_idx)
         else:
             self.mlp = MLP(args.hidden_size, args.intermediate_size)
 

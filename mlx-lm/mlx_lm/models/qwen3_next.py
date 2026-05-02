@@ -16,6 +16,7 @@ from .base import (
     scaled_dot_product_attention,
 )
 from .cache import ArraysCache, KVCache
+from .mlx_isoquant import IsoQuantKVCache
 from .mlx_turboquant import TurboQuantKVCache
 from .gated_delta import gated_delta_update
 from .rope_utils import initialize_rope
@@ -141,8 +142,9 @@ class Qwen3NextAttention(nn.Module):
             queries = self.rope(queries)
             keys = self.rope(keys)
 
-        if isinstance(cache, TurboQuantKVCache):
-            # Reconstruct keys from compressed storage and use standard attention
+        if isinstance(cache, IsoQuantKVCache) and cache.supports_fused_attention:
+            output = cache.fused_attention(queries, scale=self.scale, mask=mask)
+        elif isinstance(cache, TurboQuantKVCache):
             keys_reconstructed = cache.reconstruct_keys()
             values_reconstructed = cache.get_values()
             output = scaled_dot_product_attention(
