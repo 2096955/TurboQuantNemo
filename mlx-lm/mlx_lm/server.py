@@ -320,7 +320,7 @@ class LRUPromptCache:
                         stack.append((current[tok], extra + [tok]))
             if best is not None:
                 longer = tokens[:index] + best
-        
+
         # Return longer if its common prefix is longer than shorter cache
         if longer is not None and (shorter is None or common_prefix > len(shorter)):
             return self.SearchResult(model, None, None, longer, common_prefix)
@@ -813,6 +813,18 @@ def _model_config_from_cli(cli_args: argparse.Namespace) -> Optional[Dict[str, A
     mrs = getattr(cli_args, "max_resident_experts", None)
     if mrs is not None:
         result["max_resident_experts"] = mrs
+    if getattr(cli_args, "use_predictor", False):
+        result["use_predictor"] = True
+    if getattr(cli_args, "use_dedekimi_observer", False):
+        result["use_dedekimi_observer"] = True
+    clique_path = getattr(cli_args, "task_expert_cliques_file", None)
+    if clique_path:
+        import json as _json
+        from pathlib import Path as _Path
+
+        p = _Path(clique_path)
+        if p.is_file():
+            result["task_expert_cliques"] = _json.loads(p.read_text(encoding="utf-8"))
     return result
 
 
@@ -2186,7 +2198,7 @@ class APIHandler(BaseHTTPRequestHandler):
         )
 
         start_time = time.time()
-        
+
         # Create keepalive callback to send SSE comments during long prompt processing
         def keepalive_callback(processed_tokens, total_tokens):
             logging.info(
@@ -2194,8 +2206,12 @@ class APIHandler(BaseHTTPRequestHandler):
             )
             if self.timeout is not None and time.time() - start_time > self.timeout:
                 # If timeout is reached during prefill, raise an error to break out
-                if "ctx" in locals() or "ctx" in globals() or hasattr(self, "_temp_ctx"):
-                    pass # Just a safety check
+                if (
+                    "ctx" in locals()
+                    or "ctx" in globals()
+                    or hasattr(self, "_temp_ctx")
+                ):
+                    pass  # Just a safety check
                 raise TimeoutError("Generation timeout exceeded")
             if self.stream:
                 try:
@@ -2306,7 +2322,7 @@ class APIHandler(BaseHTTPRequestHandler):
             # Process the generated tokens
             for gen in response:
                 logging.debug(gen.text)
-                
+
                 # Check for per-request generation timeout
                 if self.timeout is not None and time.time() - start_time > self.timeout:
                     logging.info(f"Request exceeded timeout of {self.timeout}s")
@@ -2452,7 +2468,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     rg.metric_prompt_tokens_total = 0
                     rg.metric_completion_tokens_total = 0
                     rg.metric_duration_seconds_total = 0.0
-                
+
                 rg.metric_requests_total += 1
                 rg.metric_prompt_tokens_total += len(ctx.prompt)
                 rg.metric_completion_tokens_total += len(tokens)
@@ -2599,9 +2615,7 @@ class APIHandler(BaseHTTPRequestHandler):
         counters = {
             "requests_total": getattr(rg, "metric_requests_total", 0),
             "prompt_tokens_total": getattr(rg, "metric_prompt_tokens_total", 0),
-            "completion_tokens_total": getattr(
-                rg, "metric_completion_tokens_total", 0
-            ),
+            "completion_tokens_total": getattr(rg, "metric_completion_tokens_total", 0),
             "generation_duration_seconds_total": getattr(
                 rg, "metric_duration_seconds_total", 0.0
             ),
@@ -2888,13 +2902,13 @@ def main():
         "--kv-cache-type",
         type=str,
         default="default",
-        choices=["default", "turboquant"],
-        help="KV cache backend: default full-precision or turboquant (hybrid models).",
+        choices=["default", "turboquant", "isoquant", "rotorquant"],
+        help="KV cache backend: default, turboquant, isoquant, or rotorquant (pathway stack).",
     )
     parser.add_argument(
         "--expert-offload",
         action="store_true",
-        help="Nemotron-H only: load routed experts on demand (process-wide; no per-request override).",
+        help="MoE: load routed experts on demand (process-wide; no per-request override).",
     )
     parser.add_argument(
         "--max-resident-experts",
@@ -2907,6 +2921,22 @@ def main():
         type=str,
         default=None,
         help="Checkpoint directory for safetensors shards (default: model path).",
+    )
+    parser.add_argument(
+        "--use-predictor",
+        action="store_true",
+        help="When --expert-offload: enable AttnRes-style prefetch predictor (SimulatedAttnResPredictor).",
+    )
+    parser.add_argument(
+        "--use-dedekimi-observer",
+        action="store_true",
+        help="When --expert-offload: enable DedeKimi observer (EMA activations + entropy; no control).",
+    )
+    parser.add_argument(
+        "--task-expert-cliques-file",
+        type=str,
+        default=None,
+        help="JSON path: task name -> {layer_idx: [expert_id, ...]} for task-aware LRU prepopulation.",
     )
     parser.add_argument(
         "--trust-remote-code",

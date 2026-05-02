@@ -121,10 +121,12 @@ deer-flow requires additional API keys in `.env` -- see `deer-flow/.env.example`
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `ISOQUANT_USE_METAL` | `0` | `1` uses Metal kernels for SO(4) inverse rotation (not fused attention — rotation only) |
+| `ISOQUANT_USE_METAL` | `0` | `1` uses Metal kernels for the SO(4) rotation runtime (forward/inverse only; not fused attention dispatch) |
 | `ISOQUANT_CACHE_MODE` | `concat_append` | `prealloc` for O(1) buffer-slice decode; `concat_append` for default concat path |
 | `ISOQUANT_USE_NPT8_FUSED` | `0` | `1` enables NPT=8 fused QK+softmax+V for D=256 (v1 single-pass or T-tiled+FA2 merge) |
+| `ISOQUANT_USE_NPT16_FUSED` | `0` | `1` enables NPT=16 fused QK+softmax+V for D=512 (Kimi MLA latent; single-pass) |
 | `ISOQUANT_NPT8_TILE_SIZE` | `256` | T tokens per tile for the tiled NPT=8 path (long contexts); must be a positive int |
+| `ISOQUANT_FUSED_ENCODE` | `0` | `1` uses fused Metal kernel for write-path compression (normalize+FWHT+SO(4)+quantize+pack in one dispatch; D=256 only) |
 
 ## MCP Tool Surface
 

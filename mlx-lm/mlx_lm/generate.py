@@ -31,6 +31,7 @@ from .models.cache import (
     KVCache,
     QuantizedKVCache,
     RotatingKVCache,
+    finalize_deferred_kv_caches,  # noqa: F401 — used at prefill→decode transition
     load_prompt_cache,
 )
 from .sample_utils import make_sampler
@@ -218,7 +219,7 @@ def setup_arg_parser():
         "--kv-cache-type",
         type=str,
         default="default",
-        choices=["default", "turboquant"],
+        choices=["default", "turboquant", "isoquant", "rotorquant"],
         help="Type of KV cache to use.",
     )
     parser.add_argument(
@@ -504,6 +505,8 @@ def generate_step(
 
         if expert_mgr is not None:
             expert_mgr.set_phase("decode")
+        # Transition point: let cache backends finalize deferred prefill state.
+        finalize_deferred_kv_caches(prompt_cache)
         y, logprobs = _step(input_tokens=prompt, input_embeddings=input_embeddings)
 
     mx.async_eval(y, logprobs)
@@ -657,6 +660,8 @@ def speculative_generate_step(
         y = _prefill(model, model_cache, y)
         if expert_mgr is not None:
             expert_mgr.set_phase("decode")
+        finalize_deferred_kv_caches(model_cache)
+        finalize_deferred_kv_caches(draft_cache)
 
     ntoks = 0
     # Set these so the finally block doesn't raise
