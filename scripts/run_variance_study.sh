@@ -16,6 +16,7 @@ OUT_DIR="${OUT_DIR:-$REPO_ROOT/artifacts/variance}"
 RUNS="${RUNS:-5}"
 SEED="${SEED:-42}"
 PROFILE="${PROFILE:-A}"
+PYTHON_BIN="${PYTHON:-python}"
 
 mkdir -p "$OUT_DIR"
 
@@ -40,7 +41,7 @@ for label in "${!MODELS[@]}"; do
         tag="${label}_${kv}_${RUNS}runs"
         out_file="$OUT_DIR/variance_${tag}.json"
         echo "=== $tag: $RUNS runs, profile $PROFILE, seed $SEED ==="
-        python "$SCRIPT_DIR/benchmark_moe_offload.py" \
+        "$PYTHON_BIN" "$SCRIPT_DIR/benchmark_moe_offload.py" \
             --model "$model_path" \
             --profile "$PROFILE" \
             --seed "$SEED" \
