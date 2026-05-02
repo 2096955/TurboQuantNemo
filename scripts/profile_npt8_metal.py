@@ -355,6 +355,51 @@ def main():
         print(f"    iso unpatched: {iso_unpatched_ms:.2f} ms/step")
         del cache_iso_b
 
+        # Phase B2: IsoQuant with fused encode (write-path Metal kernel)
+        print("\n  Phase B2: IsoQuant with fused encode...")
+        os.environ["ISOQUANT_FUSED_ENCODE"] = "1"
+        try:
+            # Clear kernel cache so fresh cache picks up the env var
+            from mlx_lm.models import fused_kv_compress
+
+            fused_kv_compress._kernel_cache.clear()
+            cache_iso_b2 = make_fresh_cache(model, "isoquant", T)
+            # Verify fused encode is active
+            iso_caches_b2 = [
+                c
+                for layer_cache in cache_iso_b2
+                for c in (
+                    [layer_cache] if hasattr(layer_cache, "_use_fused_encode") else []
+                )
+            ]
+            fused_active = any(c._use_fused_encode for c in iso_caches_b2)
+            n_fused = sum(1 for c in iso_caches_b2 if c._use_fused_encode)
+            if iso_caches_b2:
+                dims = set(c.head_dim for c in iso_caches_b2)
+                print(
+                    f"    IsoQuant layers: {len(iso_caches_b2)}, fused: {n_fused}, head_dims: {dims}"
+                )
+            if not fused_active:
+                print("    WARNING: fused encode not active on any cache layer")
+            iso_fused_ms = run_decode(model, cache_iso_b2, args.decode_steps)
+            fused_after = any(c._use_fused_encode for c in iso_caches_b2)
+            config_results["iso_fused_ms_per_step"] = iso_fused_ms
+            config_results["fused_encode_active"] = fused_active
+            config_results["fused_encode_active_after_decode"] = fused_after
+            if fused_active and not fused_after:
+                print(
+                    "    WARNING: fused encode latched off during decode (fallback triggered)"
+                )
+            speedup = iso_unpatched_ms / iso_fused_ms if iso_fused_ms > 0 else 0
+            write_path_saved = iso_unpatched_ms - iso_fused_ms
+            print(f"    iso fused encode: {iso_fused_ms:.2f} ms/step")
+            print(f"    vs unfused: {iso_unpatched_ms:.2f} ms/step")
+            print(f"    write-path saved: {write_path_saved:.2f} ms")
+            print(f"    speedup: {speedup:.2f}x")
+            del cache_iso_b2
+        finally:
+            os.environ.pop("ISOQUANT_FUSED_ENCODE", None)
+
         # Phase C: IsoQuant instrumented (fresh cache, patched)
         print("\n  Phase C: IsoQuant instrumented (6-component decomposition)...")
         cache_iso_c = make_fresh_cache(model, "isoquant", T)
