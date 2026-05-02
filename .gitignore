@@ -28,6 +28,8 @@ node_modules/
 .rtk/
 .ruff_cache/
 .benchmarks/
+.stock-mlx-lm-venv/
+.playwright-mcp/
 
 # Logs and runtime data
 logs/
@@ -38,6 +40,10 @@ claude-progress.txt
 
 # Model checkpoints (too large for git)
 nemotron-30b-mixed/
+gemma4-uniform-4bit/
+gemma4-layer-aware/
+gemma4-2bit-experts/
+gemma-4-26b-a4b-it-4bit/
 *.safetensors
 *.gguf
 *.npz
@@ -52,9 +58,11 @@ turboquant-mlx/codebooks/
 /test_quant*.py
 /test_rmsnorm.py
 update_plan_v2.py
+update_10_4.py
 plan2.md
 acceptance_criteria.json
 feature_list.json
+tmp_quant_agents.pdf
 
 # Docker runtime
 docker/
