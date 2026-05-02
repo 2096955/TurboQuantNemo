@@ -49,7 +49,7 @@ setup(
     include_package_data=True,
     python_requires=">=3.8",
     extras_require={
-        "test": ["datasets", "lm-eval"],
+        "test": ["datasets", "lm-eval", "pytest-timeout>=2.1.0"],
         "train": ["datasets", "tqdm"],
         "evaluate": ["lm-eval", "tqdm"],
         "cuda13": [f"mlx[cuda13]>={MIN_MLX_VERSION}"],

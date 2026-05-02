@@ -1,6 +1,6 @@
 # Copyright © 2026 Apple Inc.
 
-"""Selective safetensors loading for MoE expert offload (per-key reads, no full-shard eager load)."""
+"""Selective safetensors loading for MoE expert offload (mmap per shard, non-expert key filtering)."""
 
 from __future__ import annotations
 
@@ -52,8 +52,7 @@ def build_weight_map_multi_glob(model_path: Path) -> dict[str, str]:
 def load_non_expert_weights(
     model_path: Path, weight_map: dict[str, str]
 ) -> dict[str, mx.array]:
-    """Load only tensors whose keys are not routed expert weights (Nemotron-H or Gemma 4)."""
-    # Group keys by shard for batched open
+    """Load only tensors whose keys are not routed expert weights."""
     shard_to_keys: dict[str, list] = defaultdict(list)
     for key, shard in weight_map.items():
         is_expert = (
@@ -61,6 +60,8 @@ def load_non_expert_weights(
             or is_expert_weight_key(key, model_type="gemma4_text")
             or is_expert_weight_key(key, model_type="qwen3_moe")
             or is_expert_weight_key(key, model_type="qwen3_5_moe")
+            or is_expert_weight_key(key, model_type="kimi_k25")
+            or is_expert_weight_key(key, model_type="kimi_k2")
         )
         if not is_expert and not key.startswith("mtp."):
             shard_to_keys[shard].append(key)
