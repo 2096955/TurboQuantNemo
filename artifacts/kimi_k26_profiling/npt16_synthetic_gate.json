@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-05-02T21:45:53Z",
+  "mode": "synthetic_only",
+  "gate_status": "SYNTHETIC_PASS",
+  "pytest_command": [
+    "/opt/homebrew/opt/python@3.11/bin/python3.11",
+    "-m",
+    "pytest",
+    "/Users/anthonylui/QwenCoderLocal/mlx-lm/tests/test_fused_npt16.py",
+    "-q",
+    "--tb=no"
+  ],
+  "pytest_timeout_s": 600,
+  "pytest_timed_out": false,
+  "synthetic_pytest_pass": true,
+  "pytest_exit_code": 0,
+  "pytest_stdout_tail": ".............                                                            [100%]\n=============================== warnings summary ===============================\n<frozen importlib._bootstrap>:241\n  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute\n\n<frozen importlib._bootstrap>:241\n  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n13 passed, 2 warnings in 2.64s\n",
+  "pytest_stderr_tail": "sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute\n",
+  "real_weight_mla": {
+    "executed": false,
+    "reason": "Pending: compare fused_latent_attention (ISOQUANT_USE_NPT16_FUSED=1) vs FP16 latent reference using checkpoint-derived packed cache."
+  }
+}

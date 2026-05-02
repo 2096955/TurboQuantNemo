@@ -44,6 +44,10 @@ The immediate priority is not to add more speculative mechanisms. It is to close
 | `mlx-lm/mlx_lm/models/fused_kv_decode_npt16.py` | Kimi MLA D=512 NPT16 fused latent-attention kernel |
 | `mlx-lm/mlx_lm/models/kimi_mla_isoquant_dkv.py` | Kimi MLA cache: compress 512-D `kv_latent`, keep 64-D `k_pe` raw, support `trim()` |
 | `scripts/profile_metal_counters.py` | Synthetic read/write component profiler |
+| `scripts/run_write_path_attribution_gate.sh` | One-shot MLX smoke → NPT8 tests → synthetic profile (+ optional `RUN_E2E=1`) |
+| `artifacts/metal-counters/profile_with_write_e2e.json` | Synthetic + default vs IsoQuant E2E + `comparison{}` |
+| `artifacts/metal-counters/write_path_attribution_memo.md` | Narrative attribution + E2E vs prediction |
+| `artifacts/kimi_k26_profiling/npt16_synthetic_gate.json` | Kimi NPT16 pytest smoke (`run_kimi_npt16_parity_gate.py --synthetic-only`) |
 | `scripts/ab_kimi_layered_stack.py` | Kimi layered A/B harness for default/IsoQuant/expert levers |
 | `scripts/sweep_kimi_default_cache_residency.py` | L0-only sweep of `max_resident_experts` → `default_cache_sweep.json` |
 | `scripts/run_kimi_npt16_parity_gate.py` | Records synthetic `test_fused_npt16.py` result + real-weight MLA parity placeholder |
@@ -163,7 +167,7 @@ The immediate priority is not to add more speculative mechanisms. It is to close
   - It accounts for K and V writes as `2x` per decode step.
   - This marks code wiring complete only; it does not close the measurement gate.
 
-- [ ] **Step 3.2: Run synthetic write-path profile**
+- [x] **Step 3.2: Run synthetic write-path profile**
   - Command:
     ```bash
     python scripts/profile_metal_counters.py \
@@ -171,12 +175,13 @@ The immediate priority is not to add more speculative mechanisms. It is to close
       --output artifacts/metal-counters/profile_with_write.json \
       --prefill 4096 8192 --skip-e2e --skip-traces
     ```
-  - Artifact: `artifacts/metal-counters/profile_with_write.json`.
+    Or: `./scripts/run_write_path_attribution_gate.sh`.
+  - Artifact: `artifacts/metal-counters/profile_with_write.json` (pinned for Qwen3.6 nvfp4 run).
 
-- [ ] **Step 3.3: Compare read + 2x write prediction against E2E gap**
+- [x] **Step 3.3: Compare read + 2x write prediction against E2E gap**
   - If prediction explains the gap, optimize the dominant component.
   - If residual remains large, treat Python/MLX dispatch and allocation as the bottleneck.
-  - Artifact: `artifacts/metal-counters/write_path_attribution_memo.md`.
+  - Artifacts: **`artifacts/metal-counters/profile_with_write_e2e.json`** (`comparison`≈95–102% of E2E gap @ T=4096/8192, Qwen3.6 nvfp4) and **`artifacts/metal-counters/write_path_attribution_memo.md`**.
 
 - [ ] **Step 3.4: Decide whether fused encode and prealloc graduate**
   - Gate with paired repeats at 4K and 8K:
@@ -360,7 +365,7 @@ Start with Phase 0, then choose one of three non-overlapping lanes:
 2. run the minimal `import mlx.core` smoke,
 3. if clean, rerun focused NPT8 tests,
 4. lane A: close the Nemotron RC gate,
-5. lane B: run `profile_with_write.json` and decide whether fused encode + prealloc should graduate,
+5. lane B: synthetic + E2E write-path attribution is **pinned** for Qwen3.6 nvfp4 (`profile_with_write_e2e.json`, memo); next run **§3.4** (`--fused-encode`, `--prealloc`, paired repeats) or re-run `./scripts/run_write_path_attribution_gate.sh` with `RUN_E2E=1` after any MLX wedge,
 6. lane C: run Kimi default-cache residency sweep before any more Kimi KV-compression or `ml-ssd` work.
 
 Only after that should Phase 4 bandwidth-math prototypes get engineering time.

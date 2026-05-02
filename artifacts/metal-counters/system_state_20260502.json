@@ -1,0 +1,21 @@
+{
+  "timestamp_utc": "2026-05-02T21:43:00Z",
+  "workspace": "QwenCoderLocal",
+  "git_head": "713584225061c2df7aaf84c2b3a5c38192ae2353",
+  "mlx_import_smoke": {
+    "command": "PYTHONPATH=mlx-lm python3 -c \"import mlx.core as mx; print(mx.default_device())\"",
+    "ok": true,
+    "reported_device": "Device(gpu, 0)"
+  },
+  "npt8_pytest": {
+    "command": "PYTHONPATH=mlx-lm python3 -m pytest mlx-lm/tests/test_fused_npt8.py mlx-lm/tests/test_fused_npt8_tiled.py -q",
+    "ok": true,
+    "passed": 19,
+    "note": "Clean run; deprecation warnings from SWIG only."
+  },
+  "synthetic_write_profile": {
+    "artifact": "artifacts/metal-counters/profile_with_write.json",
+    "command": "python3 scripts/profile_metal_counters.py --model ... --output artifacts/metal-counters/profile_with_write.json --prefill 4096 8192 --skip-e2e --skip-traces",
+    "note": "E2E and comparison block skipped; rerun without --skip-e2e when ready to compare synthetic prediction vs measured decode gap."
+  }
+}
