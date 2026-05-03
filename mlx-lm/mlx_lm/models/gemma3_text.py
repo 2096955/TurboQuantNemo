@@ -1,5 +1,6 @@
 # Copyright © 2025 Apple Inc.
 
+import os
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Dict, Optional
@@ -254,10 +255,11 @@ class Model(nn.Module):
             
             if is_global and kv_cache_type == "rotorquant":
                 from .mlx_turboquant import RotorQuantKVCache
+                rotorquant_bits = int(os.environ.get("ROTORQUANT_BITS", os.environ.get("TURBOQUANT_BITS", "3")))
                 caches.append(
                     RotorQuantKVCache(
                         head_dim=self.args.head_dim,
-                        bit_width=3,
+                        bit_width=rotorquant_bits,
                         seed=42,
                     )
                 )

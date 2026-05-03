@@ -116,6 +116,7 @@ deer-flow requires additional API keys in `.env` -- see `deer-flow/.env.example`
 | `TURBOQUANT_BITS` | `3` | Quantization bit-width for KV cache (TurboQuant) |
 | `ISOQUANT_BITS` | (falls back to `TURBOQUANT_BITS`) | Quantization bit-width for IsoQuant KV cache |
 | `TURBOQUANT_SKIP_LAYERS` | (none) | Comma-separated layer indices to skip compression |
+| `ROTORQUANT_BITS` | (falls back to `TURBOQUANT_BITS`) | Quantization bit-width for RotorQuant KV cache (Gemma3 global attention) |
 
 **IsoQuant fused decode (head_dim=256, 3-bit path):** set `ISOQUANT_USE_NPT8_FUSED=1` to enable NPT=8 fused attention kernels (D=256 only). For `seq_len >= 512` the implementation uses T-tiled + FA2 merge (Phase 3b); shorter sequences use the v1 single-pass kernel. Override tile width with `ISOQUANT_NPT8_TILE_SIZE` (default `256`; invalid values fall back to 256). `ISOQUANT_USE_METAL` is a separate flag that only controls the SO(4) rotation runtime (Metal vs Python); it does not gate fused attention dispatch.
 
