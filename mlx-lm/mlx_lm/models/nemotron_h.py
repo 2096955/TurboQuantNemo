@@ -1,6 +1,7 @@
 # Copyright © 2025 Apple Inc.
 
 from dataclasses import dataclass
+import logging
 from typing import Any, List, Optional, Tuple
 
 import mlx.core as mx
@@ -19,6 +20,8 @@ from .mlx_turboquant import TurboQuantKVCache
 from .ssm import ssm_update
 from .switch_layers import OffloadQuantizedSwitchMLP, OffloadSwitchMLP, SwitchMLP
 
+
+logger = logging.getLogger(__name__)
 
 @dataclass()
 class ModelArgs(BaseModelArgs):
@@ -256,6 +259,8 @@ class NemotronHAttention(nn.Module):
             self.num_heads * self.head_dim, self.hidden_size, bias=args.attention_bias
         )
 
+        self._isoquant_warned = False
+
     def __call__(
         self,
         x: mx.array,
@@ -281,7 +286,18 @@ class NemotronHAttention(nn.Module):
 
         if isinstance(cache, IsoQuantKVCache) and cache.supports_fused_attention:
             output = cache.fused_attention(queries, scale=self.scale, mask=mask)
-        elif isinstance(cache, TurboQuantKVCache):
+        elif isinstance(cache, IsoQuantKVCache):
+            if not self._isoquant_warned:
+                logger.warning(
+                    "IsoQuant KV cache present but fused attention unavailable for this head_dim/state — falling back to reconstruct path. This will be slower."
+                )
+                self._isoquant_warned = True
+            keys = cache.reconstruct_keys()
+            values = cache.get_values()
+            output = scaled_dot_product_attention(
+                queries, keys, values, cache=None, scale=self.scale, mask=mask
+            )
+        elif isinstance(cache, TurboQuantKVCache) and not isinstance(cache, IsoQuantKVCache):
             keys = cache.reconstruct_keys()
             values = cache.get_values()
             output = scaled_dot_product_attention(

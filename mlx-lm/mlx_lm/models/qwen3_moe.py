@@ -1,6 +1,7 @@
 # Copyright © 2026 Apple Inc.
 
 from dataclasses import dataclass
+import logging
 from typing import Any, Dict, List, Optional, Union
 
 import mlx.core as mx
@@ -12,6 +13,8 @@ from .mlx_isoquant import IsoQuantKVCache
 from .mlx_turboquant import TurboQuantKVCache
 from .switch_layers import SwitchGLU
 
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ModelArgs(BaseModelArgs):
@@ -64,6 +67,7 @@ class Attention(nn.Module):
             traditional=False,
             base=args.rope_theta,
         )
+        self._isoquant_warned = False
 
     def __call__(
         self,
@@ -97,7 +101,18 @@ class Attention(nn.Module):
             # Fused path: compute attention in rotated space, inverse rotate once.
             # Reduces rotation cost from O(T × d²) to O(d²).
             output = cache.fused_attention(queries, scale=self.scale, mask=mask)
-        elif isinstance(cache, TurboQuantKVCache):
+        elif isinstance(cache, IsoQuantKVCache):
+            if not self._isoquant_warned:
+                logger.warning(
+                    "IsoQuant KV cache present but fused attention unavailable for this head_dim/state — falling back to reconstruct path. This will be slower."
+                )
+                self._isoquant_warned = True
+            keys = cache.reconstruct_keys()
+            values = cache.get_values()
+            output = scaled_dot_product_attention(
+                queries, keys, values, cache=None, scale=self.scale, mask=mask
+            )
+        elif isinstance(cache, TurboQuantKVCache) and not isinstance(cache, IsoQuantKVCache):
             keys = cache.reconstruct_keys()
             values = cache.get_values()
             output = scaled_dot_product_attention(

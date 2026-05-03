@@ -1,6 +1,7 @@
 # Copyright © 2025 Apple Inc.
 
 from dataclasses import dataclass
+import logging
 from functools import partial
 from typing import Any, Dict, List, Optional
 
@@ -28,6 +29,8 @@ class _OffsetCache(_BaseCache):
     def empty(self):
         return True
 
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ModelArgs(BaseModelArgs):
@@ -243,6 +246,7 @@ class Attention(nn.Module):
             scaling_config=rope_params,
             max_position_embeddings=config.max_position_embeddings,
         )
+        self._isoquant_warned = False
 
     def __call__(
         self,
@@ -284,11 +288,12 @@ class Attention(nn.Module):
             # Fused path: compute attention in rotated space, inverse rotate once.
             # Reduces rotation cost from O(T × d²) to O(d²).
             output = cache.fused_attention(queries, scale=self.scale, mask=mask)
-        elif (
-            isinstance(cache, TurboQuantKVCache)
-            and isinstance(getattr(cache, "compressed_keys", None), dict)
-            and "indices" in cache.compressed_keys
-        ):
+        elif isinstance(cache, IsoQuantKVCache):
+            if not self._isoquant_warned:
+                logger.warning(
+                    "IsoQuant KV cache present but fused attention unavailable for this head_dim/state — falling back to reconstruct path. This will be slower."
+                )
+                self._isoquant_warned = True
             # Quantized KV caches keep full history internally; reconstruct to avoid
             # attending only over the latest chunk returned by update_and_fetch().
             keys = cache.reconstruct_keys()

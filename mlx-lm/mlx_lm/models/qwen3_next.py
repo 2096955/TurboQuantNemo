@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any, Dict, List, Optional, Union
 
 import mlx.core as mx
@@ -22,6 +23,8 @@ from .gated_delta import gated_delta_update
 from .rope_utils import initialize_rope
 from .switch_layers import SwitchGLU
 
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ModelArgs(BaseModelArgs):
@@ -144,7 +147,23 @@ class Qwen3NextAttention(nn.Module):
 
         if isinstance(cache, IsoQuantKVCache) and cache.supports_fused_attention:
             output = cache.fused_attention(queries, scale=self.scale, mask=mask)
-        elif isinstance(cache, TurboQuantKVCache):
+        elif isinstance(cache, IsoQuantKVCache):
+            if not self._isoquant_warned:
+                logger.warning(
+                    "IsoQuant KV cache present but fused attention unavailable for this head_dim/state — falling back to reconstruct path. This will be slower."
+                )
+                self._isoquant_warned = True
+            keys_reconstructed = cache.reconstruct_keys()
+            values_reconstructed = cache.get_values()
+            output = scaled_dot_product_attention(
+                queries,
+                keys_reconstructed,
+                values_reconstructed,
+                cache=None,
+                scale=self.scale,
+                mask=mask,
+            )
+        elif isinstance(cache, TurboQuantKVCache) and not isinstance(cache, IsoQuantKVCache):
             keys_reconstructed = cache.reconstruct_keys()
             values_reconstructed = cache.get_values()
             output = scaled_dot_product_attention(

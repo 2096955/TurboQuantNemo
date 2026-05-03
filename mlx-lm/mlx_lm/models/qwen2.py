@@ -1,6 +1,7 @@
 # Copyright © 2023-2024 Apple Inc.
 
 from dataclasses import dataclass
+import logging
 from typing import Any, Dict, Optional, Union
 
 import mlx.core as mx
@@ -13,6 +14,8 @@ from .mlx_isoquant import IsoQuantKVCache
 from .mlx_turboquant import TurboQuantKVCache
 from .rope_utils import initialize_rope
 
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ModelArgs(BaseModelArgs):
@@ -55,6 +58,7 @@ class Attention(nn.Module):
             scaling_config=args.rope_scaling,
             max_position_embeddings=args.max_position_embeddings,
         )
+        self._isoquant_warned = False
 
     def __call__(
         self,
@@ -81,7 +85,23 @@ class Attention(nn.Module):
 
         if isinstance(cache, IsoQuantKVCache) and cache.supports_fused_attention:
             output = cache.fused_attention(queries, scale=self.scale, mask=mask)
-        elif isinstance(cache, TurboQuantKVCache):
+        elif isinstance(cache, IsoQuantKVCache):
+            if not self._isoquant_warned:
+                logger.warning(
+                    "IsoQuant KV cache present but fused attention unavailable for this head_dim/state — falling back to reconstruct path. This will be slower."
+                )
+                self._isoquant_warned = True
+            keys_reconstructed = cache.reconstruct_keys()
+            values_reconstructed = cache.get_values()
+            output = scaled_dot_product_attention(
+                queries,
+                keys_reconstructed,
+                values_reconstructed,
+                cache=None,
+                scale=self.scale,
+                mask=mask,
+            )
+        elif isinstance(cache, TurboQuantKVCache) and not isinstance(cache, IsoQuantKVCache):
             keys_reconstructed = cache.reconstruct_keys()
             values_reconstructed = cache.get_values()
             output = scaled_dot_product_attention(
