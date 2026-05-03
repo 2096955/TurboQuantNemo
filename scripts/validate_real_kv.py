@@ -37,14 +37,31 @@ Example:
       --output artifacts/kimi_k26_profiling/real_weight_logit_parity.json
 
 Notes:
-    - Reference path: ``--kv-cache-type default`` (full FP16 KV).
-    - Test path: ``--kv-cache-type isoquant`` with
+    - Reference path: ``kv_cache_type=default`` (full FP16 KV).
+    - Test path: ``kv_cache_type=isoquant`` with
       ``ISOQUANT_USE_NPT16_FUSED=1``. The harness sets the env var
       itself for the test phase; reference phase has it cleared.
+    - **What this harness measures.** A short seed (``--prefill-len``,
+      default 32 tokens) is single-shot-prefilled. The cache is then
+      finalized — this is the point where ``KimiMLAIsoQuantCache``
+      compresses its accumulated FP16 latent and starts reporting
+      ``supports_fused_latent_attention=True``, which is what makes
+      ``deepseek_v3.DeepseekV3Attention`` dispatch to
+      ``cache.fused_latent_attention``. From there the rest of the
+      sequence is teacher-forced one token at a time, capturing
+      per-step logits. So the iso-path logits at decode step i reflect
+      i compressed-attention dispatches — the same compression-error
+      accumulation that real generation would experience, without the
+      trajectory drift teacher-forcing eliminates by construction.
     - The harness does *not* enable expert offload; the parity question
       is about KV math, not residency.
-    - Long contexts (≥ 8 K) can OOM on a clean 128 GB host with
-      single-shot prefill. Use ``--prefill-chunk`` to feed in chunks.
+    - This is teacher-forced parity, not autoregressive generation.
+      Spec §9 test 3 says "Generate"; teacher-forcing is a strict
+      proxy for cache-side compression error and intentionally avoids
+      sampling-noise variance. If you need true generation drift
+      (e.g. detecting trajectory-divergence where iso eventually
+      generates different tokens than ref), that needs a separate
+      harness.
 """
 
 from __future__ import annotations
@@ -147,45 +164,83 @@ def _set_npt16(enabled: bool) -> None:
         os.environ.pop("ISOQUANT_USE_NPT16_FUSED", None)
 
 
-def forward_with_cache(model, tokens, cache, prefill_chunk: int):
-    """Feed tokens through model in chunks of prefill_chunk, returning
-    per-position logits as a numpy array of shape (T, V). Each chunk
-    advances the cache offset.
+def prefill_then_teacher_forced_decode(
+    model,
+    tokens,
+    cache,
+    prefill_len: int,
+):
+    """Prefill the first ``prefill_len`` tokens single-shot, finalize any
+    deferred KV state on the cache list, then teacher-force the remaining
+    tokens one at a time, capturing per-step logits.
+
+    This is what actually exercises the per-step fused attention dispatch
+    in the model code (e.g. ``DeepseekV3Attention`` line ~157 dispatches
+    to ``cache.fused_latent_attention`` once the cache reports
+    ``supports_fused_latent_attention=True`` — which only becomes true
+    after ``finalize_deferred_kv_caches`` is called on a
+    ``KimiMLAIsoQuantCache``).
+
+    Returns:
+      decode_logits: numpy array of shape (T - prefill_len, V) — the
+                     logits emitted at each decode step. Position i in
+                     this array predicts ``tokens[:, prefill_len + i + 1]``
+                     (i.e. the token that follows the i-th decoded input).
     """
     import mlx.core as mx
     import numpy as np
+    from mlx_lm.models.cache import finalize_deferred_kv_caches
 
     T = tokens.shape[1]
-    chunks: list[np.ndarray] = []
-    offset = 0
-    while offset < T:
-        end = min(offset + prefill_chunk, T)
-        chunk = tokens[:, offset:end]
-        logits = model(chunk, cache=cache)
-        # logits shape: (1, chunk_len, V)
+    if T <= prefill_len:
+        raise ValueError(
+            f"Need at least prefill_len + 1 = {prefill_len + 1} tokens, got {T}"
+        )
+
+    # ---- Phase 1: single-shot prefill of the seed ----
+    seed = tokens[:, :prefill_len]
+    _ = model(seed, cache=cache)
+    # Force evaluation so the cache is committed before finalize.
+    mx.eval(_)
+    del _
+
+    # ---- Phase 2: finalize deferred state ----
+    # Triggers compression on KimiMLAIsoQuantCache (and any other backend
+    # that defines finalize_deferred_prefill); no-op on default caches.
+    finalize_deferred_kv_caches(cache)
+
+    # ---- Phase 3: teacher-forced decode loop ----
+    # At step i, feed tokens[:, prefill_len + i : prefill_len + i + 1] and
+    # capture the logit for predicting tokens[:, prefill_len + i + 1].
+    n_decode = T - prefill_len
+    decode_logits: list[np.ndarray] = []
+    for i in range(n_decode):
+        in_tok = tokens[:, prefill_len + i : prefill_len + i + 1]
+        logits = model(in_tok, cache=cache)
+        # logits shape: (1, 1, V) — squeeze to (V,)
         mx.eval(logits)
-        chunks.append(np.asarray(logits[0], dtype=np.float32))
-        offset = end
-    return np.concatenate(chunks, axis=0)  # (T, V)
+        decode_logits.append(np.asarray(logits[0, 0], dtype=np.float32))
+    return np.stack(decode_logits, axis=0)  # (n_decode, V)
 
 
 def compute_metrics(
-    logits_ref,  # numpy (T, V)
-    logits_iso,  # numpy (T, V)
-    target_tokens,  # numpy (T,)
+    logits_ref,  # numpy (n_decode, V) — decode-step logits
+    logits_iso,  # numpy (n_decode, V) — decode-step logits
+    decode_targets,  # numpy (n_decode,) — token to predict at each step
     window_size: int,
 ):
-    """Per-position top-1 match, per-token PPL for both paths, drift,
-    cosine similarity averaged over positions, and per-window PPL drift
-    across the sequence (for the long-context sentinel).
+    """Per-step top-1 match, per-step PPL for both paths, drift,
+    cosine similarity averaged over steps, and per-window PPL drift
+    across the decode trajectory (the long-context drift signal).
+
+    Inputs are aligned: ``logits_*[i]`` is the logit emitted when the
+    model was fed the i-th decoded input token; the target is
+    ``decode_targets[i]`` — the *next* real token in the corpus.
     """
     import numpy as np
 
-    T = logits_ref.shape[0]
-    # We compare positions 0..T-2 against target tokens 1..T-1
-    # (next-token prediction). The last logit has no target.
-    n = T - 1
-    if n <= 0:
+    n = logits_ref.shape[0]
+    if n <= 0 or n != logits_iso.shape[0] or n != decode_targets.shape[0]:
         return {
             "n_compared_positions": 0,
             "top1_match_rate": float("nan"),
@@ -196,9 +251,9 @@ def compute_metrics(
             "window_ppl_drifts": [],
         }
 
-    ref = logits_ref[:n]
-    iso = logits_iso[:n]
-    targets = target_tokens[1 : n + 1]
+    ref = logits_ref
+    iso = logits_iso
+    targets = decode_targets
 
     # Top-1 match: argmax agreement on the next-token prediction.
     top1_ref = ref.argmax(axis=-1)
@@ -313,7 +368,7 @@ def evaluate_context(
     context_tokens: int,
     bits: int,
     use_npt16: bool,
-    prefill_chunk: int,
+    prefill_len: int,
     window_size: int,
     log,
 ) -> ContextResult:
@@ -321,17 +376,26 @@ def evaluate_context(
 
     log(f"  [{context_tokens}] building prompt of {context_tokens} tokens")
     tokens = build_prompt_tokens(tokenizer, context_tokens)
-    targets = np.asarray(tokens[0])
+    # Decode-step i in the loop predicts tokens[prefill_len + i + 1].
+    decode_targets = np.asarray(tokens[0])[prefill_len + 1 : context_tokens]
 
     # ---- Reference path: default cache, NPT16 disabled ----
-    log(f"  [{context_tokens}] ref path (default cache, FP16 KV)")
+    log(
+        f"  [{context_tokens}] ref path (default cache, FP16 KV) "
+        f"prefill={prefill_len} decode_steps={decode_targets.shape[0]}"
+    )
     _set_npt16(False)
     t0 = time.time()
     cache_ref = make_caches(model, "default", bits=bits)
-    logits_ref = forward_with_cache(model, tokens, cache_ref, prefill_chunk)
+    logits_ref = prefill_then_teacher_forced_decode(
+        model, tokens, cache_ref, prefill_len
+    )
+    # logits_ref shape: (T - prefill_len, V); we only have targets for
+    # T - prefill_len - 1 of them (the last decode step has no next-token
+    # target in our prompt). Trim accordingly.
+    logits_ref = logits_ref[: decode_targets.shape[0]]
     setup_ref = time.time() - t0
 
-    # Drop ref cache reference so MLX can release memory before iso pass.
     del cache_ref
 
     # ---- Test path: IsoQuant cache, NPT16 fused if requested ----
@@ -339,12 +403,15 @@ def evaluate_context(
     _set_npt16(use_npt16)
     t0 = time.time()
     cache_iso = make_caches(model, "isoquant", bits=bits)
-    logits_iso = forward_with_cache(model, tokens, cache_iso, prefill_chunk)
+    logits_iso = prefill_then_teacher_forced_decode(
+        model, tokens, cache_iso, prefill_len
+    )
+    logits_iso = logits_iso[: decode_targets.shape[0]]
     setup_iso = time.time() - t0
 
     del cache_iso
 
-    metrics = compute_metrics(logits_ref, logits_iso, targets, window_size)
+    metrics = compute_metrics(logits_ref, logits_iso, decode_targets, window_size)
     slope = long_context_slope(metrics["window_ppl_drifts"])
 
     return ContextResult(
@@ -428,7 +495,8 @@ def main() -> int:
         "--contexts",
         default="2048,4096,8192",
         help="Comma-separated context lengths to evaluate. 16384 is also "
-        "permitted but may OOM on single-shot prefill — use --prefill-chunk.",
+        "permitted but the seed prefill grows linearly with context — "
+        "lower --prefill-len to keep the single-shot prefill safe.",
     )
     p.add_argument(
         "--output",
@@ -469,10 +537,14 @@ def main() -> int:
         help="Window size in tokens for §9 test 3 per-window PPL drift.",
     )
     p.add_argument(
-        "--prefill-chunk",
+        "--prefill-len",
         type=int,
-        default=1024,
-        help="Tokens per forward call during prefill. Lower if OOM.",
+        default=32,
+        help="Number of seed tokens single-shot-prefilled before the "
+        "teacher-forced decode loop begins. Must be < the smallest "
+        "context being evaluated. Smaller seeds give more decode steps "
+        "to integrate compression error, which is what the §10 / §9 "
+        "gates are testing.",
     )
     p.add_argument(
         "--no-npt16-fused",
@@ -545,7 +617,7 @@ def main() -> int:
                 context_tokens=ctx,
                 bits=args.bits,
                 use_npt16=use_npt16,
-                prefill_chunk=args.prefill_chunk,
+                prefill_len=args.prefill_len,
                 window_size=args.window_size,
                 log=log,
             )
