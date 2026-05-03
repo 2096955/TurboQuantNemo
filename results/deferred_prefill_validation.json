@@ -1,0 +1,26 @@
+{
+  "model": "mlx-community/Qwen3-30B-A3B-4bit",
+  "kv_cache_type": "isoquant",
+  "isoquant_caches": 46,
+  "total_caches": 48,
+  "before_generate": {
+    "deferred": true,
+    "compressed": false
+  },
+  "after_first_decode_token": {
+    "deferred": false,
+    "compressed": true,
+    "offset": 12,
+    "compressed_keys_shape": [
+      4,
+      12,
+      128
+    ]
+  },
+  "after_generation": {
+    "deferred": false,
+    "compressed": true,
+    "offset": 61
+  },
+  "deferred_prefill_validated": true
+}

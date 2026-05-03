@@ -1,0 +1,263 @@
+{
+  "version": 1,
+  "model_path": "gemma-4-26b-a4b-it-4bit",
+  "expert_offload": true,
+  "max_resident_experts": 512,
+  "kv_cache_type": "default",
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 100,
+  "tests": {
+    "cold_prompt": {
+      "test": "cold_prompt_routing",
+      "prompts": [
+        {
+          "name": "Code (cold)",
+          "domain": "code",
+          "cold": {
+            "miss_rate": 0.4421,
+            "decode_hit_rate": 0.594,
+            "evictions": 10897,
+            "avg_load_ms": 0.02,
+            "latency_s": 6.92,
+            "response_len_words": 66,
+            "repetition": false
+          },
+          "warm": {
+            "miss_rate": 0.4396,
+            "decode_hit_rate": 0.594,
+            "evictions": 11345,
+            "avg_load_ms": 0.01,
+            "latency_s": 6.08,
+            "response_len_words": 66,
+            "repetition": false
+          },
+          "delta_miss_rate": 0.0025,
+          "speedup_warm_over_cold": 1.14
+        },
+        {
+          "name": "Reasoning (cold)",
+          "domain": "reasoning",
+          "cold": {
+            "miss_rate": 0.4967,
+            "decode_hit_rate": 0.5433,
+            "evictions": 12486,
+            "avg_load_ms": 0.01,
+            "latency_s": 6.12,
+            "response_len_words": 64,
+            "repetition": false
+          },
+          "warm": {
+            "miss_rate": 0.4949,
+            "decode_hit_rate": 0.5433,
+            "evictions": 12950,
+            "avg_load_ms": 0.01,
+            "latency_s": 6.15,
+            "response_len_words": 64,
+            "repetition": false
+          },
+          "delta_miss_rate": 0.0018,
+          "speedup_warm_over_cold": 0.99
+        },
+        {
+          "name": "Creative (cold)",
+          "domain": "creative",
+          "cold": {
+            "miss_rate": 0.5369,
+            "decode_hit_rate": 0.5915,
+            "evictions": 3109,
+            "avg_load_ms": 0.01,
+            "latency_s": 1.84,
+            "response_len_words": 14,
+            "repetition": false
+          },
+          "warm": {
+            "miss_rate": 0.5271,
+            "decode_hit_rate": 0.5915,
+            "evictions": 3555,
+            "avg_load_ms": 0.01,
+            "latency_s": 1.55,
+            "response_len_words": 14,
+            "repetition": false
+          },
+          "delta_miss_rate": 0.0098,
+          "speedup_warm_over_cold": 1.19
+        }
+      ]
+    },
+    "slot_competition": {
+      "test": "slot_competition",
+      "single_domain": [
+        {
+          "name": "Pure code",
+          "domains": [
+            "code"
+          ],
+          "evictions": 9270,
+          "churn_rate": 0.3573,
+          "miss_rate": 0.377,
+          "decode_hit_rate": 0.6668,
+          "avg_load_ms": 0.01,
+          "latency_s": 6.03,
+          "response_len_words": 58,
+          "repetition": false
+        },
+        {
+          "name": "Pure reasoning",
+          "domains": [
+            "reasoning"
+          ],
+          "evictions": 13064,
+          "churn_rate": 0.4966,
+          "miss_rate": 0.516,
+          "decode_hit_rate": 0.5252,
+          "avg_load_ms": 0.01,
+          "latency_s": 6.13,
+          "response_len_words": 59,
+          "repetition": false
+        }
+      ],
+      "multi_domain": [
+        {
+          "name": "Code + SQL + HTML",
+          "domains": [
+            "code",
+            "sql",
+            "html"
+          ],
+          "evictions": 10019,
+          "churn_rate": 0.3809,
+          "miss_rate": 0.4003,
+          "decode_hit_rate": 0.6507,
+          "avg_load_ms": 0.01,
+          "latency_s": 5.75,
+          "response_len_words": 58,
+          "repetition": false
+        },
+        {
+          "name": "Math + Code + Explanation",
+          "domains": [
+            "math",
+            "code",
+            "reasoning"
+          ],
+          "evictions": 11601,
+          "churn_rate": 0.4436,
+          "miss_rate": 0.4632,
+          "decode_hit_rate": 0.5791,
+          "avg_load_ms": 0.01,
+          "latency_s": 6.05,
+          "response_len_words": 60,
+          "repetition": false
+        },
+        {
+          "name": "Multilingual code review",
+          "domains": [
+            "javascript",
+            "python",
+            "rust",
+            "reasoning"
+          ],
+          "evictions": 12424,
+          "churn_rate": 0.4675,
+          "miss_rate": 0.4867,
+          "decode_hit_rate": 0.5628,
+          "avg_load_ms": 0.01,
+          "latency_s": 6.67,
+          "response_len_words": 55,
+          "repetition": false
+        }
+      ],
+      "summary": {
+        "single_domain_avg_churn": 0.4269,
+        "multi_domain_avg_churn": 0.4307,
+        "churn_increase_multi_vs_single": 0.0037,
+        "single_domain_avg_decode_hit": 0.596,
+        "multi_domain_avg_decode_hit": 0.5975,
+        "hit_rate_decrease_multi_vs_single": -0.0015
+      }
+    },
+    "kv_poison": {
+      "test": "kv_poisoning_recovery",
+      "prompts": [
+        {
+          "name": "Arithmetic misdirection",
+          "description": "Must compute 408 despite poisoned context claiming 42",
+          "clean": {
+            "passed": false,
+            "failures": [
+              "Missing expected: '408'"
+            ],
+            "latency_s": 6.08,
+            "response_len_words": 60,
+            "decode_hit_rate": 0.6086
+          },
+          "poisoned": {
+            "passed": false,
+            "failures": [
+              "Missing expected: '408'"
+            ],
+            "latency_s": 6.29,
+            "response_len_words": 65,
+            "decode_hit_rate": 0.5356
+          },
+          "recovered": false,
+          "clean_correct": false
+        },
+        {
+          "name": "Language misdirection",
+          "description": "Must use Python syntax (no braces/semicolons) despite poison",
+          "clean": {
+            "passed": true,
+            "failures": [],
+            "latency_s": 6.41,
+            "response_len_words": 56,
+            "decode_hit_rate": 0.6224
+          },
+          "poisoned": {
+            "passed": true,
+            "failures": [],
+            "latency_s": 6.04,
+            "response_len_words": 56,
+            "decode_hit_rate": 0.6328
+          },
+          "recovered": true,
+          "clean_correct": true
+        },
+        {
+          "name": "Logic misdirection",
+          "description": "Must answer 7 \u2014 poison tries to flip 'all but' semantics",
+          "clean": {
+            "passed": true,
+            "failures": [],
+            "latency_s": 1.03,
+            "response_len_words": 6,
+            "decode_hit_rate": 0.4784
+          },
+          "poisoned": {
+            "passed": true,
+            "failures": [],
+            "latency_s": 1.29,
+            "response_len_words": 6,
+            "decode_hit_rate": 0.472
+          },
+          "recovered": true,
+          "clean_correct": true
+        }
+      ],
+      "summary": {
+        "clean_pass_rate": 0.6667,
+        "recovery_rate": 0.6667,
+        "n_clean_pass": 2,
+        "n_recovered": 2,
+        "n_total": 3
+      }
+    }
+  },
+  "system_at_end": {
+    "swap_used_mb": 37564.94,
+    "peak_memory_gb": 13.83
+  }
+}

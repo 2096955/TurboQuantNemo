@@ -1,0 +1,48 @@
+{
+  "model": "gemma-4-26b-a4b-it-4bit",
+  "prompt": "Explain the theory of relativity.",
+  "results": [
+    {
+      "max_resident_experts": 16,
+      "use_predictor": false,
+      "total_time_s": 3.37,
+      "tok_per_s": 14.8,
+      "hit_rate": 0.0,
+      "decode_hit_rate": 0.0
+    },
+    {
+      "max_resident_experts": 16,
+      "use_predictor": true,
+      "error": "expert offload: cannot evict enough experts to satisfy --max-resident-experts=16 (pinned=62 unique experts this layer)"
+    },
+    {
+      "max_resident_experts": 32,
+      "use_predictor": false,
+      "total_time_s": 2.37,
+      "tok_per_s": 21.1,
+      "hit_rate": 0.0,
+      "decode_hit_rate": 0.0
+    },
+    {
+      "max_resident_experts": 32,
+      "use_predictor": true,
+      "error": "expert offload: cannot evict enough experts to satisfy --max-resident-experts=32 (pinned=62 unique experts this layer)"
+    },
+    {
+      "max_resident_experts": 64,
+      "use_predictor": false,
+      "total_time_s": 2.5,
+      "tok_per_s": 20.0,
+      "hit_rate": 0.0,
+      "decode_hit_rate": 0.0
+    },
+    {
+      "max_resident_experts": 64,
+      "use_predictor": true,
+      "total_time_s": 3.73,
+      "tok_per_s": 13.4,
+      "hit_rate": 0.5323218997361477,
+      "decode_hit_rate": 0.5790032679738563
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "gemma4_16gb": {
+    "model": "gemma-4-26b-a4b-it-4bit",
+    "target_mb": 12800,
+    "peak_mb": 5381.4,
+    "fits": true,
+    "max_resident_experts": 16
+  },
+  "qwen3_16gb": {
+    "model": "mlx-community/Qwen3-30B-A3B-4bit",
+    "target_mb": 12800,
+    "peak_mb": 12038.6,
+    "fits": true,
+    "max_resident_experts": 16
+  },
+  "nemotron_32gb": {
+    "model": "nemotron-30b-mixed",
+    "target_mb": 25600,
+    "peak_mb": 10748.8,
+    "fits": true,
+    "max_resident_experts": 16,
+    "note": "30B proxy, not 120B \u2014 real 32GB validation needs 120B checkpoint on 32GB hardware"
+  }
+}

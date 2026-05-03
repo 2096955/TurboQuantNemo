@@ -1,0 +1,51 @@
+{
+  "device": "Apple M4 Max",
+  "value_kernel_requested": "auto",
+  "warmup_iters": 8,
+  "bench_iters": 100,
+  "results": [
+    {
+      "config": "H=4 T=128 D=128",
+      "num_heads": 4,
+      "head_dim": 128,
+      "seq_len": 128,
+      "value_strategy": "dim",
+      "fused_host_ms": 0.782631,
+      "fused_gpu_ms": 0.751818,
+      "kernel_a_ms": 0.164972,
+      "kernel_b_ms": 0.162234,
+      "kernel_c_ms": 0.24696,
+      "kernel_c_gpu_ms": 0.0333592,
+      "kernel_d_ms": 0.166061,
+      "stage_sum_ms": 0.740227
+    },    {
+      "config": "H=4 T=512 D=128",
+      "num_heads": 4,
+      "head_dim": 128,
+      "seq_len": 512,
+      "value_strategy": "word",
+      "fused_host_ms": 1.52217,
+      "fused_gpu_ms": 1.42271,
+      "kernel_a_ms": 0.11835,
+      "kernel_b_ms": 0.112002,
+      "kernel_c_ms": 0.341175,
+      "kernel_c_gpu_ms": 0.0240029,
+      "kernel_d_ms": 0.116479,
+      "stage_sum_ms": 0.688006
+    },    {
+      "config": "H=8 T=2048 D=128",
+      "num_heads": 8,
+      "head_dim": 128,
+      "seq_len": 2048,
+      "value_strategy": "dim",
+      "fused_host_ms": 5.46207,
+      "fused_gpu_ms": 5.40938,
+      "kernel_a_ms": 0.172091,
+      "kernel_b_ms": 0.159146,
+      "kernel_c_ms": 0.818424,
+      "kernel_c_gpu_ms": 0.0268113,
+      "kernel_d_ms": 0.142026,
+      "stage_sum_ms": 1.29169
+    }
+  ]
+}

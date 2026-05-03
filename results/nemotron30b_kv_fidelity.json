@@ -1,0 +1,37 @@
+{
+  "schema_version": 2,
+  "metric_note": "cosine/top5 metrics below are computed on final logits versus the default KV path, not directly on attention scores or latent KV vectors",
+  "model": "nemotron-30b-mixed",
+  "max_tokens": 512,
+  "backends": {
+    "default": {
+      "mean_ppl": 5.49,
+      "ppls": [
+        5.94,
+        5.04
+      ]
+    },
+    "turboquant": {
+      "mean_ppl": 5.74,
+      "ppls": [
+        6.26,
+        5.22
+      ],
+      "logit_cosine_sim_vs_default": 0.99285,
+      "logit_top5_agreement_vs_default": 1.0,
+      "cosine_sim_vs_default": 0.99285,
+      "top5_agreement_vs_default": 1.0
+    },
+    "isoquant": {
+      "mean_ppl": 5.48,
+      "ppls": [
+        5.91,
+        5.06
+      ],
+      "logit_cosine_sim_vs_default": 0.999616,
+      "logit_top5_agreement_vs_default": 1.0,
+      "cosine_sim_vs_default": 0.999616,
+      "top5_agreement_vs_default": 1.0
+    }
+  }
+}

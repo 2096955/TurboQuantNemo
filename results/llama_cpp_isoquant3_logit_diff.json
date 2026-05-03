@@ -1,0 +1,15 @@
+{
+  "lhs_file": "/tmp/logits_fused/llamacpp-qwen2.5-1.5b-instruct-q6_k.bin",
+  "rhs_file": "/tmp/logits_composed/llamacpp-qwen2.5-1.5b-instruct-q6_k.bin",
+  "lhs_label": "fused",
+  "rhs_label": "composed",
+  "num_values": 151936,
+  "max_abs_diff": 4.314613342285156,
+  "mean_abs_diff": 0.7589965462684631,
+  "rmse": 0.9456318020820618,
+  "argmax_lhs": 13,
+  "argmax_rhs": 13,
+  "argmax_match": true,
+  "top_k_overlap": 7,
+  "top_k": 10
+}

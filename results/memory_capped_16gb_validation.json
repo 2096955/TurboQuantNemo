@@ -1,0 +1,31 @@
+{
+  "description": "Memory-capped envelope validation (Profile A: 512 prefill, 128 decode). Produced by benchmark_moe_offload.py with --target-envelope-mb and --strict-gates. Host: 128GB Apple Silicon (synthetic cap, not hard-limited hardware).",
+  "date": "2026-04-11",
+  "gemma4": {
+    "model": "gemma-4-26b-a4b-it-4bit",
+    "target_envelope_mb": 12800,
+    "peak_memory_mb": 6364.87,
+    "fits_target_envelope": true,
+    "headroom_mb": 6435.13,
+    "max_resident_experts": 16,
+    "kv_cache_type": "isoquant",
+    "decode_tok_per_s": 18.26,
+    "prefill_plus_first_token_s": 5.38,
+    "process_rss_mb_at_end": 6945.2,
+    "status": "PASS"
+  },
+  "qwen3": {
+    "model": "mlx-community/Qwen3-30B-A3B-4bit",
+    "target_envelope_mb": 12800,
+    "peak_memory_mb": 11043.01,
+    "fits_target_envelope": true,
+    "headroom_mb": 1756.99,
+    "max_resident_experts": 16,
+    "kv_cache_type": "isoquant",
+    "decode_tok_per_s": 15.21,
+    "prefill_plus_first_token_s": 2.59,
+    "process_rss_mb_at_end": 11535.34,
+    "status": "PASS"
+  },
+  "note": "Qwen3 has only 1.76 GB headroom at 512 prefill tokens. Longer contexts will push peak higher. 16GB-class real hardware validation still required (memory allocator behaviour differs from 128GB host)."
+}

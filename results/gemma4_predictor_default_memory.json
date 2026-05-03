@@ -1,0 +1,54 @@
+{
+  "runs": [
+    {
+      "use_predictor": false,
+      "elapsed_s": 3.0707883749855682,
+      "decode_tok_per_s": 26.05194179178042,
+      "peak_memory_mb": 5050.46834564209,
+      "expert_cache": {
+        "hits": 0,
+        "misses": 20113,
+        "evictions": 19985,
+        "hit_rate": 0.0,
+        "prefill_hits": 0,
+        "prefill_misses": 673,
+        "prefill_hit_rate": 0.0,
+        "decode_hits": 0,
+        "decode_misses": 19440,
+        "decode_hit_rate": 0.0,
+        "avg_load_ms": 0.011812709473332418,
+        "resident_slots": 128,
+        "prefill_gather_calls": 30,
+        "decode_gather_calls": 2430,
+        "prefetch_requests": 0,
+        "prefetch_already_cached": 0
+      },
+      "sample_text": " i i i i i i i i i i i i i i i i i i i i i i i i i i i i i i"
+    },
+    {
+      "use_predictor": true,
+      "elapsed_s": 5.10368204198312,
+      "decode_tok_per_s": 15.674957676030044,
+      "peak_memory_mb": 5050.376853942871,
+      "expert_cache": {
+        "hits": 18730,
+        "misses": 1383,
+        "evictions": 40615,
+        "hit_rate": 0.9312385024610949,
+        "prefill_hits": 85,
+        "prefill_misses": 588,
+        "prefill_hit_rate": 0.1263001485884101,
+        "decode_hits": 18645,
+        "decode_misses": 795,
+        "decode_hit_rate": 0.9591049382716049,
+        "avg_load_ms": 0.01475046968735683,
+        "resident_slots": 128,
+        "prefill_gather_calls": 30,
+        "decode_gather_calls": 2430,
+        "prefetch_requests": 39360,
+        "prefetch_already_cached": 0
+      },
+      "sample_text": " i i i i i i i i i i i i i i i i i i i i i i i i i i i i i i"
+    }
+  ]
+}

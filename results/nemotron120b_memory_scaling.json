@@ -1,0 +1,26 @@
+{
+  "model": "/Users/anthonylui/Models/nemotron-120b-mixed",
+  "results": [
+    {
+      "slots": 48,
+      "peak_mb": 4679.9
+    },
+    {
+      "slots": 256,
+      "peak_mb": 4925.0
+    },
+    {
+      "slots": 1024,
+      "peak_mb": 6221.0
+    },
+    {
+      "slots": 2690,
+      "peak_mb": 9032.4
+    },
+    {
+      "slots": 11400,
+      "peak_mb": 17630.7,
+      "note": "from full Profile B benchmark, actual occupancy 7544"
+    }
+  ]
+}

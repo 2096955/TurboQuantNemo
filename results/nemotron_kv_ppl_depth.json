@@ -1,0 +1,62 @@
+{
+  "schema_version": 3,
+  "mode": "multi_depth",
+  "model": "nemotron-30b-mixed",
+  "seed": 42,
+  "depths": [
+    512,
+    2048
+  ],
+  "backends": {
+    "default": {
+      "by_depth": {
+        "512": {
+          "ppl": 1.3911,
+          "nll": 0.330078,
+          "n_tokens": 512
+        },
+        "2048": {
+          "ppl": 1.0866,
+          "nll": 0.083008,
+          "n_tokens": 2048
+        }
+      }
+    },
+    "turboquant": {
+      "by_depth": {
+        "512": {
+          "ppl": 1.4086,
+          "nll": 0.342632,
+          "n_tokens": 512
+        },
+        "2048": {
+          "ppl": 1.0905,
+          "nll": 0.086628,
+          "n_tokens": 2048
+        }
+      },
+      "delta_ppl_vs_default": {
+        "512": 0.0175,
+        "2048": 0.0039
+      }
+    },
+    "isoquant": {
+      "by_depth": {
+        "512": {
+          "ppl": 1.3961,
+          "nll": 0.333673,
+          "n_tokens": 512
+        },
+        "2048": {
+          "ppl": 1.0878,
+          "nll": 0.0842,
+          "n_tokens": 2048
+        }
+      },
+      "delta_ppl_vs_default": {
+        "512": 0.005,
+        "2048": 0.0012
+      }
+    }
+  }
+}

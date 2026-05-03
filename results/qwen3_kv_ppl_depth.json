@@ -1,0 +1,62 @@
+{
+  "schema_version": 3,
+  "mode": "multi_depth",
+  "model": "mlx-community/Qwen3-30B-A3B-4bit",
+  "seed": 42,
+  "depths": [
+    512,
+    2048
+  ],
+  "backends": {
+    "default": {
+      "by_depth": {
+        "512": {
+          "ppl": 1.3829,
+          "nll": 0.324219,
+          "n_tokens": 512
+        },
+        "2048": {
+          "ppl": 1.0844,
+          "nll": 0.081055,
+          "n_tokens": 2048
+        }
+      }
+    },
+    "turboquant": {
+      "by_depth": {
+        "512": {
+          "ppl": 1.4497,
+          "nll": 0.371357,
+          "n_tokens": 512
+        },
+        "2048": {
+          "ppl": 1.1249,
+          "nll": 0.117691,
+          "n_tokens": 2048
+        }
+      },
+      "delta_ppl_vs_default": {
+        "512": 0.0668,
+        "2048": 0.0405
+      }
+    },
+    "isoquant": {
+      "by_depth": {
+        "512": {
+          "ppl": 1.3872,
+          "nll": 0.327321,
+          "n_tokens": 512
+        },
+        "2048": {
+          "ppl": 1.0853,
+          "nll": 0.081871,
+          "n_tokens": 2048
+        }
+      },
+      "delta_ppl_vs_default": {
+        "512": 0.0043,
+        "2048": 0.0009
+      }
+    }
+  }
+}

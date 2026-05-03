@@ -1,0 +1,89 @@
+{
+  "version": 3,
+  "harness_version": "v1",
+  "model_path": "mlx-community/Qwen3-30B-A3B-4bit",
+  "expert_offload": true,
+  "kv_cache_type": "isoquant",
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "task_expert_cliques": false,
+  "max_resident_experts": 128,
+  "max_cached_shards": 1,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 500,
+  "max_prompt_wall_s": null,
+  "suite": "default",
+  "prompt_names": [
+    "Code Generation",
+    "Instruction Following",
+    "Basic Reasoning",
+    "List Generation",
+    "Math"
+  ],
+  "strict": true,
+  "max_word_repeat_ratio_default": 0.22,
+  "n_pass": 4,
+  "n_total": 5,
+  "memory": {
+    "peak_mb": 3597.8,
+    "cap_mb": 12800.0,
+    "capped": true,
+    "fits_cap": true
+  },
+  "system_before_load": {
+    "process_rss_mb": 445.42,
+    "swap_used_mb": 35840.12,
+    "vm_pages_paged_out": null
+  },
+  "system_after_load": {
+    "process_rss_mb": 1474.47,
+    "swap_used_mb": 35840.12,
+    "vm_pages_paged_out": null
+  },
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": false,
+      "failures": [
+        "Missing expected substring: 'def '"
+      ],
+      "latency_s": 744.7392
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "failures": [],
+      "latency_s": 685.3707
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "failures": [],
+      "latency_s": 430.1981
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 662.3122
+    },
+    {
+      "name": "Math",
+      "passed": true,
+      "failures": [],
+      "latency_s": 649.206
+    }
+  ],
+  "system_at_end": {
+    "process_rss_mb": 1854.81,
+    "swap_used_mb": 35800.12,
+    "vm_pages_paged_out": null
+  },
+  "system_deltas": {
+    "rss_mb_load_delta": 1029.05,
+    "rss_mb_total_delta": 1409.39,
+    "swap_used_mb_delta": -40.0,
+    "vm_pages_paged_out_delta": null
+  }
+}

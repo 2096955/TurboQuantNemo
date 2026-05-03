@@ -1,0 +1,27 @@
+{
+  "task": "code",
+  "model": "gemma-4-26b-a4b-it-4bit",
+  "clique_pre_populated": true,
+  "test_prompts": 2,
+  "overall_hit_rate": 9.726301865504698e-05,
+  "decode_hit_rate": 0.0,
+  "prefill_hit_rate": 0.0017082336863682953,
+  "expert_cache": {
+    "hits": 5,
+    "misses": 51402,
+    "evictions": 51642,
+    "hit_rate": 9.726301865504698e-05,
+    "prefill_hits": 5,
+    "prefill_misses": 2922,
+    "prefill_hit_rate": 0.0017082336863682953,
+    "decode_hits": 0,
+    "decode_misses": 48480,
+    "decode_hit_rate": 0.0,
+    "avg_load_ms": 0.00922798521307156,
+    "resident_slots": 128,
+    "prefill_gather_calls": 60,
+    "decode_gather_calls": 6060,
+    "prefetch_requests": 240,
+    "prefetch_already_cached": 0
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "version": 2,
+  "model_path": "gemma-4-26b-a4b-it-4bit",
+  "expert_offload": true,
+  "kv_cache_type": "turboquant",
+  "use_predictor": true,
+  "max_resident_experts": 128,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 80,
+  "suite": "default",
+  "strict": false,
+  "max_word_repeat_ratio_default": 0.35,
+  "n_pass": 3,
+  "n_total": 5,
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": false,
+      "failures": [
+        "Missing expected substring: 'def '",
+        "Missing expected substring: 'return'"
+      ],
+      "latency_s": 8.9697
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "failures": [],
+      "latency_s": 8.3068
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "failures": [],
+      "latency_s": 8.1521
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 7.603
+    },
+    {
+      "name": "Math",
+      "passed": false,
+      "failures": [
+        "Missing expected substring: '408'"
+      ],
+      "latency_s": 7.5343
+    }
+  ]
+}

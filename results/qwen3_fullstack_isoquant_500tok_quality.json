@@ -1,0 +1,52 @@
+{
+  "version": 2,
+  "model_path": "mlx-community/Qwen3-30B-A3B-4bit",
+  "expert_offload": true,
+  "kv_cache_type": "isoquant",
+  "use_predictor": true,
+  "use_dedekimi_observer": true,
+  "task_expert_cliques": false,
+  "max_resident_experts": 128,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 500,
+  "suite": "default",
+  "strict": false,
+  "max_word_repeat_ratio_default": 0.35,
+  "n_pass": 4,
+  "n_total": 5,
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": false,
+      "failures": [
+        "Missing expected substring: 'def '"
+      ],
+      "latency_s": 53.2793
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "failures": [],
+      "latency_s": 49.5732
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "failures": [],
+      "latency_s": 32.3793
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 52.7409
+    },
+    {
+      "name": "Math",
+      "passed": true,
+      "failures": [],
+      "latency_s": 55.3874
+    }
+  ]
+}

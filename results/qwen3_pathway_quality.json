@@ -1,0 +1,145 @@
+{
+  "version": 3,
+  "harness_version": "v2",
+  "model_path": "/Users/anthonylui/.cache/huggingface/hub/models--mlx-community--Qwen3-30B-A3B-4bit/snapshots/d388dead1515f5e085ef7a0431dd8fadf0886c57",
+  "expert_offload": true,
+  "kv_cache_type": "isoquant",
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "task_expert_cliques": false,
+  "max_resident_experts": 4096,
+  "max_cached_shards": null,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 500,
+  "max_prompt_wall_s": null,
+  "suite": "all",
+  "prompt_names": [
+    "Code Generation",
+    "Instruction Following",
+    "Basic Reasoning",
+    "List Generation",
+    "Math",
+    "Bugfix (off-by-one)",
+    "Traceback interpretation",
+    "Multi-file style refactor",
+    "Write a minimal test",
+    "Implement LRU cache get",
+    "Race condition explanation",
+    "Long decode soak (1K+ tokens)"
+  ],
+  "strict": false,
+  "max_word_repeat_ratio_default": 0.35,
+  "n_pass": 8,
+  "n_total": 12,
+  "memory": {
+    "peak_mb": 16331.5,
+    "cap_mb": null,
+    "capped": false,
+    "fits_cap": null
+  },
+  "system_before_load": {
+    "process_rss_mb": 88.05,
+    "swap_used_mb": 10788.62,
+    "vm_pages_paged_out": null
+  },
+  "system_after_load": {
+    "process_rss_mb": 1115.31,
+    "swap_used_mb": 10788.62,
+    "vm_pages_paged_out": null
+  },
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 5.4722
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "failures": [],
+      "latency_s": 20.8755
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "failures": [],
+      "latency_s": 7.2297
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 14.2411
+    },
+    {
+      "name": "Math",
+      "passed": false,
+      "failures": [
+        "Degenerate repetition detected"
+      ],
+      "latency_s": 14.2198
+    },
+    {
+      "name": "Bugfix (off-by-one)",
+      "passed": true,
+      "failures": [],
+      "latency_s": 2.6044
+    },
+    {
+      "name": "Traceback interpretation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 36.2498
+    },
+    {
+      "name": "Multi-file style refactor",
+      "passed": false,
+      "failures": [
+        "Malformed fenced code blocks (unbalanced ```)"
+      ],
+      "latency_s": 36.6434
+    },
+    {
+      "name": "Write a minimal test",
+      "passed": true,
+      "failures": [],
+      "latency_s": 10.596
+    },
+    {
+      "name": "Implement LRU cache get",
+      "passed": false,
+      "failures": [
+        "Malformed fenced code blocks (unbalanced ```)"
+      ],
+      "latency_s": 37.0763
+    },
+    {
+      "name": "Race condition explanation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 38.0101
+    },
+    {
+      "name": "Long decode soak (1K+ tokens)",
+      "passed": false,
+      "failures": [
+        "Missing expected substring: 'def get'",
+        "Missing expected substring: 'def test_'"
+      ],
+      "latency_s": 37.4772
+    }
+  ],
+  "system_at_end": {
+    "process_rss_mb": 16348.31,
+    "swap_used_mb": 10788.62,
+    "vm_pages_paged_out": null
+  },
+  "system_deltas": {
+    "rss_mb_load_delta": 1027.26,
+    "rss_mb_total_delta": 16260.26,
+    "swap_used_mb_delta": 0.0,
+    "vm_pages_paged_out_delta": null
+  }
+}

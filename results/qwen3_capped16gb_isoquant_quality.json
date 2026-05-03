@@ -1,0 +1,61 @@
+{
+  "version": 3,
+  "harness_version": "v2",
+  "model_path": "mlx-community/Qwen3-30B-A3B-4bit",
+  "expert_offload": true,
+  "kv_cache_type": "isoquant",
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "task_expert_cliques": false,
+  "max_resident_experts": null,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 500,
+  "suite": "default",
+  "strict": false,
+  "max_word_repeat_ratio_default": 0.35,
+  "n_pass": 5,
+  "n_total": 5,
+  "memory": {
+    "peak_mb": 15656.4,
+    "cap_mb": 12800.0,
+    "capped": true,
+    "fits_cap": false
+  },
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 9.0103
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "failures": [],
+      "latency_s": 77.3598
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "failures": [],
+      "latency_s": 25.282
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 65.6519
+    },
+    {
+      "name": "Math",
+      "passed": true,
+      "failures": [],
+      "latency_s": 51.3495
+    }
+  ],
+  "system_at_end": {
+    "swap_used_mb": 37300.94,
+    "vm_pages_paged_out": null
+  }
+}

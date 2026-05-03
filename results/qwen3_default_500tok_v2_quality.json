@@ -1,0 +1,56 @@
+{
+  "version": 2,
+  "model_path": "mlx-community/Qwen3-30B-A3B-4bit",
+  "expert_offload": true,
+  "kv_cache_type": "default",
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "task_expert_cliques": false,
+  "max_resident_experts": null,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 500,
+  "suite": "default",
+  "strict": false,
+  "max_word_repeat_ratio_default": 0.35,
+  "n_pass": 4,
+  "n_total": 5,
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 4.2484
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "failures": [],
+      "latency_s": 4.8249
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "failures": [],
+      "latency_s": 3.5286
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 5.9019
+    },
+    {
+      "name": "Math",
+      "passed": false,
+      "failures": [
+        "Degenerate repetition detected"
+      ],
+      "latency_s": 6.5934
+    }
+  ],
+  "system_at_end": {
+    "swap_used_mb": 37708.94,
+    "vm_pages_paged_out": null
+  }
+}

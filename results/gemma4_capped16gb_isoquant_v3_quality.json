@@ -1,0 +1,85 @@
+{
+  "version": 3,
+  "harness_version": "v2",
+  "model_path": "gemma-4-26b-a4b-it-4bit",
+  "expert_offload": true,
+  "kv_cache_type": "isoquant",
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "task_expert_cliques": false,
+  "max_resident_experts": null,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 500,
+  "suite": "default",
+  "prompt_names": [
+    "Code Generation",
+    "Instruction Following",
+    "Basic Reasoning",
+    "List Generation",
+    "Math"
+  ],
+  "strict": false,
+  "max_word_repeat_ratio_default": 0.35,
+  "n_pass": 5,
+  "n_total": 5,
+  "memory": {
+    "peak_mb": 3883.4,
+    "cap_mb": 12800.0,
+    "capped": true,
+    "fits_cap": true
+  },
+  "system_before_load": {
+    "process_rss_mb": 442.72,
+    "swap_used_mb": 36716.38,
+    "vm_pages_paged_out": null
+  },
+  "system_after_load": {
+    "process_rss_mb": 2880.91,
+    "swap_used_mb": 36716.38,
+    "vm_pages_paged_out": null
+  },
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 96.5058
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "failures": [],
+      "latency_s": 550.9304
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "failures": [],
+      "latency_s": 136.8726
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 300.237
+    },
+    {
+      "name": "Math",
+      "passed": true,
+      "failures": [],
+      "latency_s": 354.0785
+    }
+  ],
+  "system_at_end": {
+    "process_rss_mb": 2751.55,
+    "swap_used_mb": 36684.38,
+    "vm_pages_paged_out": null
+  },
+  "system_deltas": {
+    "rss_mb_load_delta": 2438.19,
+    "rss_mb_total_delta": 2308.83,
+    "swap_used_mb_delta": -32.0,
+    "vm_pages_paged_out_delta": null
+  }
+}

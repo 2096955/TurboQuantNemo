@@ -1,0 +1,37 @@
+{
+  "schema_version": 2,
+  "metric_note": "cosine/top5 metrics below are computed on final logits versus the default KV path, not directly on attention scores or latent KV vectors",
+  "model": "gemma-4-26b-a4b-it-4bit",
+  "max_tokens": 512,
+  "backends": {
+    "default": {
+      "mean_ppl": 641.33,
+      "ppls": [
+        252.46,
+        1030.19
+      ]
+    },
+    "turboquant": {
+      "mean_ppl": 521.04,
+      "ppls": [
+        358.85,
+        683.22
+      ],
+      "logit_cosine_sim_vs_default": 0.99009,
+      "logit_top5_agreement_vs_default": 0.8,
+      "cosine_sim_vs_default": 0.99009,
+      "top5_agreement_vs_default": 0.8
+    },
+    "isoquant": {
+      "mean_ppl": 641.33,
+      "ppls": [
+        252.46,
+        1030.19
+      ],
+      "logit_cosine_sim_vs_default": 1.0,
+      "logit_top5_agreement_vs_default": 1.0,
+      "cosine_sim_vs_default": 1.0,
+      "top5_agreement_vs_default": 1.0
+    }
+  }
+}

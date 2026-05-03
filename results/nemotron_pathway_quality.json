@@ -1,0 +1,365 @@
+{
+  "version": 5,
+  "harness_version": "v2",
+  "model_path": "nemotron-30b-mixed",
+  "expert_offload": true,
+  "kv_cache_type": "isoquant",
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "task_expert_cliques": false,
+  "max_resident_experts": 2048,
+  "max_cached_shards": null,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 500,
+  "max_prompt_wall_s": null,
+  "suite": "all",
+  "prompt_names": [
+    "Code Generation",
+    "Instruction Following",
+    "Basic Reasoning",
+    "List Generation",
+    "Math",
+    "Bugfix (off-by-one)",
+    "Traceback interpretation",
+    "Multi-file style refactor",
+    "Write a minimal test",
+    "Implement LRU cache get",
+    "Race condition explanation",
+    "Long decode soak (1K+ tokens)"
+  ],
+  "strict": false,
+  "max_word_repeat_ratio_default": 0.35,
+  "n_pass": 10,
+  "n_total": 12,
+  "memory": {
+    "peak_mb": 12729.4,
+    "cap_mb": null,
+    "capped": false,
+    "fits_cap": null
+  },
+  "system_before_load": {
+    "process_rss_mb": 90.97,
+    "swap_used_mb": 12673.94,
+    "vm_pages_paged_out": null
+  },
+  "system_after_load": {
+    "process_rss_mb": 1497.08,
+    "swap_used_mb": 12673.94,
+    "vm_pages_paged_out": null
+  },
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 6.3844,
+      "response": "def fibonacci(n):\n    if n <= 0:\n        raise ValueError(\"n must be a positive integer\")\n    elif n == 1:\n        return 0\n    elif n == 2:\n        return 1\n    else:\n        a, b = 0, 1\n        for _ in range(2, n):\n            a, b = b, a + b\n        return b",
+      "response_words": 45,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Write a Python function to compute the nth Fibonacci number. Output only the function, no explanation.",
+        "description": "Must produce a Python function definition",
+        "expected_substr": [
+          "def ",
+          "return"
+        ],
+        "min_tokens": 15,
+        "skip_min_tokens": true,
+        "check_fences": false,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "8263a69c67a5"
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "failures": [],
+      "latency_s": 14.5121,
+      "response": "Sure! Imagine you have a big playground where everything moves around.\n\n- **Things that move fast are like a little kid on a swing.**  \n  When you swing higher and faster, you feel lighter, right? So if a toy car zooms super\u2011fast, it can feel lighter than when it\u2019s just sitting still.\n\n- **Things that are heavy are like a big, heavy ball.**  \n  If you try to push a big ball, it takes a lot of effort. That\u2019s why a heavy thing feels \u201cheavy.\u201d\n\nNow, here\u2019s the magic trick:\n\nImagine you have a **magic playground** where everything can be either **fast\u2011moving** or **heavy**.  \n- If something moves super fast, it can become lighter, just like a swing that goes higher.  \n- If something is super heavy, it can make everything around it feel heavier, just like a big ball pulling everything toward it.\n\nSo, relativity is like saying: *\u201cHey, everything in the playground is connected. If something moves fast or gets heavy, it changes how everything else behaves!\u201d*  \n\nThat\u2019s the whole idea, wrapped up in a simple playground picture! \ud83c\udf1f",
+      "response_words": 179,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Explain the theory of relativity to a 5 year old.",
+        "description": "Must produce a coherent multi-sentence explanation",
+        "expected_substr": [],
+        "min_tokens": 30,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "7a20ff4f2bc2"
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "failures": [],
+      "latency_s": 9.5975,
+      "response": "Sure! Let\u2019s walk through this step\u2011by\u2011step.\n\n1. **Start with the amount you have.**  \n   You begin with **3 apples**.\n\n2. **Subtract the apple you eat.**  \n   You eat **1 apple**, so we subtract that from the original count:  \n\n   \\[\n   3 \\;-\\; 1 \\;=\\; ?\n   \\]\n\n3. **Perform the subtraction.**  \n   Taking away one apple from three leaves two apples remaining:\n\n   \\[\n   3 \\;-\\; 1 \\;=\\; 2\n   \\]\n\n4. **Result.**  \n   After eating one apple, you have **2 apples left**.\n\nSo the answer is **2 apples**.",
+      "response_words": 81,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "If I have 3 apples and eat 1, how many apples do I have left? Think step by step.",
+        "description": "Must arrive at the answer 2",
+        "expected_substr": [
+          "2"
+        ],
+        "min_tokens": 15,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "92adb85e8027"
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 11.3947,
+      "response": "Here are five programming languages and one strength each:\n\n1. **Python** \u2013 *Strength:* Simplicity and readability, making it ideal for beginners and rapid development.  \n2. **JavaScript** \u2013 *Strength:* Ubiquity in web development and browser environments, enabling dynamic interactive websites.  \n3. **Java** \u2013 *Strength:* Platform independence via the JVM (\"write once, run anywhere\"), widely used in enterprise applications.  \n4. **Go** \u2013 *Strength:* Built-in concurrency support and efficient compilation, optimized for scalable backend systems.  \n5. **Rust** \u2013 *Strength:* Memory safety without garbage collection, preventing common bugs like null pointer dereferences.  \n\nEach language\u2019s strength aligns with its ecosystem use cases, from web development to systems programming.",
+      "response_words": 103,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "List 5 programming languages and one strength of each.",
+        "description": "Must produce a structured list",
+        "expected_substr": [],
+        "min_tokens": 30,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "30c57b0468d7"
+    },
+    {
+      "name": "Math",
+      "passed": true,
+      "failures": [],
+      "latency_s": 23.6452,
+      "response": "To calculate\u202f\\(17 \\times 24\\), we can break the multiplication into smaller steps.\n\n### Step\u2011by\u2011step multiplication\n\n1. **Write the numbers vertically**\n\n```\n   17\n \u00d7 24\n```\n\n2. Multiply the units digit of the bottom number (4) by the top number (17):\n\n```\n   4 \u00d7 17 = 4 \u00d7 10 + 4 \u00d7 7 = 40 + 28 = 68\n```\n\n3. Multiply the tens digit of the bottom number (2) by the top number (17).  \n   Because this digit is in the tens place, shift the result one position to the left (i.e., multiply by 10):\n\n```\n   2 \u00d7 17 = 2 \u00d7 10 + 2 \u00d7 7 = 20 + 14 = 34\n   \u2192 Shift left \u2192 340\n```\n\n4. Add the two partial results:\n\n```\n   68   (from step\u202f2)\n +340   (from step\u202f3)\n -----\n   680\n```\n\nThus,\n\n\\[\n17 \\times 24 = 408.\n\\]\n\n### Quick verification using distributive property\n\n\\[\n\\begin{aligned}\n17 \\times 24 &= 17 \\times (20 + 4) \\\\\n            &= 17 \\times 20 + 17 \\times 4 \\\\\n            &= 340 + 68 \\\\\n            &= 408.\n\\end{aligned}\n\\]\n\nBoth methods give the same result.\n\n\\[\n\\boxed{408}\n\\]",
+      "response_words": 190,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "What is 17 * 24? Show your work.",
+        "description": "Must compute 408",
+        "expected_substr": [
+          "408"
+        ],
+        "min_tokens": 10,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "95870b648c2f"
+    },
+    {
+      "name": "Bugfix (off-by-one)",
+      "passed": true,
+      "failures": [],
+      "latency_s": 2.2591,
+      "response": "def slice_last_n(items, n):\n    return items[len(items) - n:]",
+      "response_words": 7,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Here is buggy Python:\n\ndef slice_last_n(items, n):\n    return items[len(items) - n : len(items) - 1]\n\nFix the bug so it returns the last n items. Output only the corrected function.",
+        "description": "Must return a corrected function using the list tail",
+        "expected_substr": [
+          "return",
+          "items"
+        ],
+        "min_tokens": 25,
+        "skip_min_tokens": true,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "141218045b6c"
+    },
+    {
+      "name": "Traceback interpretation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 31.8002,
+      "response": "## TL;DR  \nThe interpreter tried to add together **two objects that don\u2019t belong together**:\n\n* One operand is an **`int`** (a numeric value like `5` or `-3`).  \n* The other operand is a **`str`** (a string like `'hello'`).\n\nPython\u2019s interpreter raised a `TypeError` because it cannot perform addition between those two types automatically.\n\n---\n\n## Why Python complains\n\nPython defines operators (`+`, `-`, `*`, `/`, `**`, etc.) for specific types. When you write something like:\n\n```python\nresult = a + b\n```\n\nPython looks at the **types** of `a` and `b`. If the interpreter discovers that the combination isn\u2019t supported, it raises a `TypeError`. In your case the interpreter saw something like:\n\n```python\n<class 'int'> + <class 'str'>\n```\n\nand decided *\u201cthat\u2019s not allowed\u201d* \u2192 hence the error message:\n\n```\nTypeError: unsupported operand type(s) for +: 'int' and 'str'\n```\n\n---\n\n## Common Scenarios That Trigger This Error\n\n| Situation | Typical Code Pattern | Why It Happens |\n|-----------|----------------------|----------------|\n| **Concatenating numbers with strings** | `total = 5 + \"five\"` | Python tries to add a numeric literal to a string literal. |\n| **Reading user input that mixes types** | `age = input(\"Enter your age: \")` \u2192 later using `age + name` | The variable you think is numeric is actually a string returned by `input()`. |\n| **Parsing JSON/YAML/etc.** | `data = json.loads('{\"age\":5}')` \u2192 later using `data[\"age\"] + other_string` | JSON values are often strings; numeric values may be stored as strings. |\n| **Using built\u2011in functions incorrectly** | `print(\"Hello\" + world)` where `world` is undefined | The interpreter interprets `\"world\"` as a string literal, not a variable name. |\n\n---\n\n## How to Fix It\n\n### 1. Identify Which Variable Is the Wrong Type\nLook at the offending line of code and see which variable is a string when you expected an integer.\n\n```python\n# Example offending line:\ntotal = age + name          # <-- TypeError here\n```\n\nCheck the definitions:\n\n```python\nage = 12          #",
+      "response_words": 330,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Explain what this Python error means and how to fix it:\nTypeError: unsupported operand type(s) for +: 'int' and 'str'",
+        "description": "Must mention type mismatch and conversion/casting",
+        "expected_substr": [
+          "str",
+          "int"
+        ],
+        "min_tokens": 40,
+        "skip_min_tokens": false,
+        "check_fences": false,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "2d6a320cbe67"
+    },
+    {
+      "name": "Multi-file style refactor",
+      "passed": false,
+      "failures": [
+        "Missing expected substring: 'import'"
+      ],
+      "latency_s": 31.901,
+      "response": "### Step-by-Step Renaming Guide  \n*(Concrete actions only \u2014 no theory)*  \n\n#### **Phase 1: Isolate Dependencies**  \n1. **Identify all callers of `fetch()`**  \n   ```bash\n   grep -r \"fetch()\" . --include=\"*.py\"  # Run from project root\n   ```  \n   \u2192 *Critical:* Check for false positives (e.g., strings like `\"fetch\"` inside docstrings). Filter results manually.  \n\n#### **Phase 2: Rename in Source Files**  \n2. **Replace `fetch()` \u2192 `load_data()`**  \n   ```bash\n   grep -rl \"\\bfetch\\(\" . --include=\"*.py\" | xargs sed -i 's/\\bfetch\\(\\)/\\load_data\\(/'  \n   ```  \n   \u2192 **Why this works:**  \n     - `\\b` ensures word-boundary matching (avoids `fetching` \u2192 broken).  \n     - `\\)` anchors closing parenthesis (avoids `fetch123`).  \n     - *Verify:* Run `grep -r load_data .` afterward to confirm replacements succeeded.  \n\n#### **Phase 3: Verify via Static Analysis**  \n3. **Run linter to catch missed spots**  \n   ```bash\n   flake8 . --select=I100,I110,I111,F401,F601,F608,F609,F611,F620,F621,F633,F634,F635,F636,F637,F638,F639,F701,F702,F703,F703,F704,F705,F706,F707,F708,F709,F709,F710,F711,F712,F713,F714,F715,F716,F717,F718,F719,F720,F721,F722,F723,F724,F725,F725,F726,F727,F728,F729,F730,F731,F732,F73",
+      "response_words": 122,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "You have module a.py with `def fetch(): ...` and b.py importing it. Describe concrete steps to rename `fetch` to `load_data` across both files and what to run to verify (tests or grep). Be specific.",
+        "description": "Must give actionable rename/refactor steps",
+        "expected_substr": [
+          "rename",
+          "import"
+        ],
+        "min_tokens": 50,
+        "skip_min_tokens": false,
+        "check_fences": false,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "cec7c4a435cf"
+    },
+    {
+      "name": "Write a minimal test",
+      "passed": true,
+      "failures": [],
+      "latency_s": 23.6747,
+      "response": "Below is a complete pytest test file that checks the behaviour of the `add(a,b)` function.  \nSave the file as `test_add.py` (or any name you prefer) alongside the module that defines `add`.  \nThe test imports the function directly from the module named `my_module` \u2013 replace this name with the actual module name you are using.\n\n```python\n# test_add.py\nimport pytest\n\n# Import the function you want to test.\n# Replace `my_module` with the actual module name that defines `add`.\nfrom my_module import add   # <-- change this line to match your module name\n\n\ndef test_add_two_numbers():\n    \"\"\"\n    Test that add(2, 3) returns 5.\n    \"\"\"\n    result = add(2, 3)\n    assert result == 5, \"add(2, 3) should equal 5\"\n\n\ndef test_add_negative_numbers():\n    \"\"\"\n    Test adding negative numbers.\n    \"\"\"\n    assert add(-2, -3) == -5\n\n\ndef test_add_mixed_sign():\n    \"\"\"\n    Test adding a positive and a negative number.\n    \"\"\"\n    assert add(5, -2) == 3\n    assert add(-5, 2) == -3\n\n\ndef test_add_zero():\n    \"\"\"\n    Test adding zero.\n    \"\"\"\n    assert add(0, 0) == 0\n    assert add(5, 0) == 5\n    assert add(0, 7) == 7\n```\n\n### How to run the tests\n\n```bash\n# From the directory containing test_add.py and your_module.py\npytest -q\n```\n\nIf you prefer to keep everything in a single file without importing another module, you can also write the test directly in the same file:\n\n```python\ndef test_add():\n    assert add(2, 3) == 5\n```\n\nBut the version above demonstrates typical pytest usage with imports and several illustrative test cases.",
+      "response_words": 240,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Write a pytest test for a function `add(a,b)` that asserts add(2,3)==5. Show the complete test file including import.",
+        "description": "Must output pytest-style test with assert",
+        "expected_substr": [
+          "def ",
+          "assert",
+          "add"
+        ],
+        "min_tokens": 5,
+        "skip_min_tokens": true,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "292d677ed601"
+    },
+    {
+      "name": "Implement LRU cache get",
+      "passed": true,
+      "failures": [],
+      "latency_s": 9.8746,
+      "response": "class LRUCache:\n    def __init__(self, capacity):\n        self.capacity = capacity\n        self._data = {}\n        self._order = []\n\n    def get(self, key):\n        if key not in self._data:\n            return None\n        self._order.remove(key)\n        self._order.append(key)\n        return self._data[key]\n\n    def put(self, key, value):\n        if key in self._data:\n            self._data[key] = value\n            self._order.remove(key)\n            self._order.append(key)\n        else:\n            if len(self._data) >= self.capacity:\n                oldest = self._order.pop(0)\n                del self._data[oldest]\n            self._data[key] = value\n            self._order.append(key)",
+      "response_words": 55,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Implement a class method `get(self, key)` for an LRU cache with a fixed capacity. On miss return None; on hit move key to most-recent. Assume `self._order` and `self._data` exist. Output only the plain code, no markdown fences.",
+        "description": "Must implement method-body cache miss/hit logic",
+        "expected_substr": [
+          "key",
+          "return",
+          "None"
+        ],
+        "min_tokens": 5,
+        "skip_min_tokens": true,
+        "check_fences": false,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "c71c26181f77"
+    },
+    {
+      "name": "Race condition explanation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 28.6234,
+      "response": "Below is a concise explanation followed by a single Python snippet that shows the problem and its fix using `threading.Lock`.\n\n---\n\n## The Problem \u2013 \u201cRace Condition\u201d\n\nWhen several threads share mutable data **without synchronization**, they can interleave their operations in ways that break correctness.\n\n```text\nThread A reads counter \u2192 5\nThread B reads counter \u2192 5\nThread A increments \u2192 writes 6\nThread B increments \u2192 writes 6   \u2190 overwrites the newer value!\n```\n\nBoth threads see the same value (`5`) because they read before any write finishes. The final value may be smaller than expected, or the program may crash with an inconsistent state.\n\n### Why it happens with plain integers\n\nPython\u2019s byte\u2011code interpreter is not atomic for multi\u2011step operations like:\n\n```python\ncounter += 1          # actually compiled to several byte\u2011code instructions\n```\n\nIf two threads execute those instructions concurrently, they can step on each other\u2019s intermediate state.\n\n---\n\n## Fixing It with `threading.Lock`\n\nA lock guarantees that only one thread can execute a protected section at a time. By wrapping the shared counter with a `Lock`, every increment becomes atomic.\n\n```python\nimport threading\n\ncounter_lock = threading.Lock()\ncounter = 0          # shared mutable variable\n\n\ndef worker():\n    global counter\n    for _ in range(100_000):\n        with counter_lock:          # <-- acquire the lock for the whole increment\n            counter += 1            # safe because only one thread enters here\n\n\nif __name__ == \"__main__\":\n    threads = [threading.Thread(target=worker) for _ in range(4)]\n    for t in threads:\n        t.start()\n    for t in threads:\n        t.join()\n\n    print(\"final counter value:\", counter)\n```\n\n### What changed?\n\n| Before (`Lock` missing) | After (`Lock` added) |\n|--------------------------|----------------------|\n| Multiple threads read/write the same variable concurrently \u2192 nondeterministic final value | All increments happen inside a critical section (`with counter_lock`) \u2192 exactly one thread increments at a time \u2192 deterministic final value |\n\n---\n\n## Quick Checklist for Safe Shared Data\n\n| \u2705 | Checklist Item |\n|----|----------------|\n| \u2705 Use a `threading.Lock` (or `RLock`) around every read\u2011modify\u2011write sequence. |\n| \u2705 Keep the lock acquisition as short as possible \u2013",
+      "response_words": 339,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Explain a classic race between two threads incrementing a shared counter without a lock, and fix it with one Python snippet using threading.Lock.",
+        "description": "Must mention lock and threading",
+        "expected_substr": [
+          "lock",
+          "thread"
+        ],
+        "min_tokens": 45,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "e4158304bbcb"
+    },
+    {
+      "name": "Long decode soak (1K+ tokens)",
+      "passed": false,
+      "failures": [
+        "Missing expected substring: 'def test_'"
+      ],
+      "latency_s": 125.4839,
+      "response": "Below is a complete Python module implementing an LRU cache with all requested features. The implementation includes:\n- Generic type support with TypeVar\n- Thread-safe operations using threading.Lock\n- TTL expiration per entry\n- Statistics tracking (hits, misses, evictions)\n- Comprehensive pytest test suite at the bottom\n\n```python\n\"\"\"\nLRU Cache Implementation with Thread Safety and Statistics Tracking\n\nThis module provides a thread-safe LRU cache implementation with the following features:\n1. Generic type support using TypeVar\n2. Core operations: get(), put(), delete()\n3. Time-to-Live (TTL) expiration per entry\n4. Thread safety via threading.Lock\n5. Statistics tracking (hits, misses, evictions)\n\"\"\"\n\nfrom __future__ import annotations\nimport threading\nimport time\nfrom typing import Generic, TypeVar, Optional, Dict, Any\nfrom collections import OrderedDict\n\nTypeVar_K = TypeVar('K')\nTypeVar_V = TypeVar('V')\n\nclass LRUCache(Generic[TypeVar_K, TypeVar_V]):\n    \"\"\"\n    Thread-safe LRU Cache with Statistics Tracking and TTL Expiration\n\n    Attributes:\n    - capacity: Maximum number of entries allowed\n    - stats: Dictionary tracking hits, misses, and evictions\n    - lock: Thread lock for synchronization\n    \"\"\"\n\n    def __init__(self, capacity: int, ttl: int = 3600) -> None:\n        \"\"\"\n        Initialize LRU Cache with specified capacity and TTL.\n\n        Args:\n        capacity: Maximum number of entries allowed\n        ttl: Time-to-live in seconds for cache entries (default: 3600)\n        \"\"\"\n        self.capacity = capacity\n        self.ttl = ttl\n        self.lock = threading.Lock()\n        self.stats = {\n            'hits': 0,\n            'misses': 0,\n            'evictions': 0\n        }\n        self.cache: OrderedDict[TypeVar_K, CacheEntry] = OrderedDict()\n\n    def get(self, key: TypeVar_K) -> Optional[TypeVar_V]:\n        \"\"\"\n        Retrieve value by key with statistics tracking.\n\n        Returns None if key not found or expired.\n        \"\"\"\n        with self.lock:\n            if key not in self.cache:\n                self.stats['misses'] += 1\n                return None\n            \n            entry = self.cache[key]\n            if entry.expiration <= time.time():\n                self.cache.pop(key)\n                return None\n            \n            self.cache.move_to_end(key)\n            self.stats['hits'] += 1\n            return entry.value\n\n    def put(self, key: TypeVar_K, value: TypeVar_V, ttl: Optional[int] = None) -> None:\n        \"\"\"\n        Add or update cache entry with optional TTL override.\n\n        Args:\n        key: Cache key\n        value: Value to store\n        ttl: Optional TTL override (seconds)\n        \"\"\"\n        with self.lock:\n            if key in self.cache:\n                self.cache[key] = CacheEntry(value, self.ttl if ttl is None else ttl)\n                return\n            \n            if len(self.cache) >= self.capacity:\n                self.stats['evictions'] += 1\n                self.cache.popitem(last=False)\n            \n            expiration = self.ttl if ttl is None else ttl\n            self.cache[key] = CacheEntry(value, expiration)\n            self.cache.move_to_end(key)\n\n    def delete(self, key: TypeVar_K) -> bool:\n        \"\"\"\n        Remove and return cached value for specified key.\n\n        Returns True if key existed, False otherwise.\n        \"\"\"\n        with self.lock:\n            if key in self.cache:\n                del self.cache[key]\n                return True\n            return False\n\n    def stats(self) -> Dict[str, int]:\n        \"\"\"\n        Return current statistics snapshot.\n        \"\"\"\n        return self.stats.copy()\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def stats(self) -> Dict[str, int]:\n        \"\"\"\n        Return current statistics snapshot.\n        \"\"\"\n        return self.stats.copy()\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def stats(self) -> Dict[str, int]:\n        \"\"\"\n        Return current statistics snapshot.\n        \"\"\"\n        return self.stats.copy()\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def stats(self) -> Dict[str, int]:\n        \"\"\"\n        Return current statistics snapshot.\n        \"\"\"\n        return self.stats.copy()\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def stats(self) -> Dict[str, int]:\n        \"\"\"\n        Return current statistics snapshot.\n        \"\"\"\n        return self.stats.copy()\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def stats(self) -> Dict[str, int]:\n        \"\"\"\n        Return current statistics snapshot.\n        \"\"\"\n        return self.stats.copy()\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def stats(self) -> Dict[str, int]:\n        \"\"\"\n        Return current statistics snapshot.\n        \"\"\"\n        return self.stats.copy()\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def stats(self) -> Dict[str, int]:\n        \"\"\"\n        Return current statistics snapshot.\n        \"\"\"\n        return self.stats.copy()\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def stats(self) -> Dict[str, int]:\n        \"\"\"\n        Return current statistics snapshot.\n        \"\"\"\n        return self.stats.copy()\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def stats(self) -> Dict[str, int]:\n        \"\"\"\n        Return current statistics snapshot.\n        \"\"\"\n        return self.stats.copy()\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()\n            ]\n            for k in expired_keys:\n                self.cache.pop(k)\n            return len(expired_keys)\n\n    def stats(self) -> Dict[str, int]:\n        \"\"\"\n        Return current statistics snapshot.\n        \"\"\"\n        return self.stats.copy()\n\n    def cleanup_expired(self) -> None:\n        \"\"\"\n        Remove all expired entries from cache.\n        \"\"\"\n        with self.lock:\n            expired_keys = [\n                k for k, v in self.cache.items() \n                if v.expiration <= time.time()",
+      "response_words": 973,
+      "effective_max_tokens": 2048,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Write a comprehensive Python module that implements a thread-safe LRU cache with the following features:\n1. Generic type support with TypeVar\n2. get(), put(), and delete() methods\n3. TTL (time-to-live) expiration per entry\n4. Thread safety with threading.Lock\n5. Statistics tracking (hits, misses, evictions)\n6. A complete pytest test suite at the bottom of the file\n\nInclude docstrings, type hints, and at least 5 test functions.",
+        "description": "Must produce substantial, coherent code without repetition at 1K+ tokens",
+        "expected_substr": [
+          "class",
+          "def get",
+          "def put",
+          "Lock",
+          "def test_"
+        ],
+        "min_tokens": 200,
+        "skip_min_tokens": false,
+        "check_fences": false,
+        "max_tokens": 2048,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "1a4432c55aa5"
+    }
+  ],
+  "system_at_end": {
+    "process_rss_mb": 12294.11,
+    "swap_used_mb": 12665.94,
+    "vm_pages_paged_out": null
+  },
+  "system_deltas": {
+    "rss_mb_load_delta": 1406.11,
+    "rss_mb_total_delta": 12203.14,
+    "swap_used_mb_delta": -8.0,
+    "vm_pages_paged_out_delta": null
+  }
+}

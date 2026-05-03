@@ -1,0 +1,37 @@
+{
+  "model": "nemotron-30b-mixed",
+  "prompt": "Write a Python function to compute the nth Fibonac...",
+  "max_tokens": 100,
+  "benchmarks": {
+    "default": {
+      "kv_cache_type": "default",
+      "prompt_tokens": 40,
+      "generated_tokens": 100,
+      "prefill_time_s": 2.488,
+      "prefill_tok_per_s": 16.1,
+      "decode_time_s": 3.3581,
+      "decode_tok_per_s": 29.5,
+      "total_time_s": 5.8461
+    },
+    "turboquant": {
+      "kv_cache_type": "turboquant",
+      "prompt_tokens": 40,
+      "generated_tokens": 100,
+      "prefill_time_s": 0.4511,
+      "prefill_tok_per_s": 88.7,
+      "decode_time_s": 3.0617,
+      "decode_tok_per_s": 32.3,
+      "total_time_s": 3.5128
+    },
+    "isoquant": {
+      "kv_cache_type": "isoquant",
+      "prompt_tokens": 40,
+      "generated_tokens": 100,
+      "prefill_time_s": 0.4473,
+      "prefill_tok_per_s": 89.4,
+      "decode_time_s": 2.8063,
+      "decode_tok_per_s": 35.3,
+      "total_time_s": 3.2536
+    }
+  }
+}

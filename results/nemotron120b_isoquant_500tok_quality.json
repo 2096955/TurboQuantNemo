@@ -1,0 +1,56 @@
+{
+  "version": 2,
+  "model_path": "sjug/Nemotron-3-Super-120B-A12B-MLX-4bit",
+  "expert_offload": true,
+  "kv_cache_type": "isoquant",
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "task_expert_cliques": false,
+  "max_resident_experts": null,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 500,
+  "suite": "default",
+  "strict": false,
+  "max_word_repeat_ratio_default": 0.35,
+  "n_pass": 4,
+  "n_total": 5,
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": false,
+      "failures": [
+        "Malformed fenced code blocks (unbalanced ```)"
+      ],
+      "latency_s": 485.6721
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "failures": [],
+      "latency_s": 462.1536
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "failures": [],
+      "latency_s": 77.0711
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 165.1241
+    },
+    {
+      "name": "Math",
+      "passed": true,
+      "failures": [],
+      "latency_s": 175.3103
+    }
+  ],
+  "system_at_end": {
+    "swap_used_mb": 40725.31,
+    "vm_pages_paged_out": null
+  }
+}

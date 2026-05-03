@@ -1,0 +1,361 @@
+{
+  "version": 5,
+  "harness_version": "v2",
+  "model_path": "/Users/anthonylui/Models/nemotron-120b-mixed",
+  "expert_offload": true,
+  "kv_cache_type": "isoquant",
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "task_expert_cliques": false,
+  "max_resident_experts": 11400,
+  "max_cached_shards": null,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 500,
+  "max_prompt_wall_s": null,
+  "suite": "all",
+  "prompt_names": [
+    "Code Generation",
+    "Instruction Following",
+    "Basic Reasoning",
+    "List Generation",
+    "Math",
+    "Bugfix (off-by-one)",
+    "Traceback interpretation",
+    "Multi-file style refactor",
+    "Write a minimal test",
+    "Implement LRU cache get",
+    "Race condition explanation",
+    "Long decode soak (1K+ tokens)"
+  ],
+  "strict": false,
+  "max_word_repeat_ratio_default": 0.35,
+  "n_pass": 12,
+  "n_total": 12,
+  "memory": {
+    "peak_mb": 25243.8,
+    "cap_mb": null,
+    "capped": false,
+    "fits_cap": null
+  },
+  "system_before_load": {
+    "process_rss_mb": 90.17,
+    "swap_used_mb": 37980.69,
+    "vm_pages_paged_out": null
+  },
+  "system_after_load": {
+    "process_rss_mb": 4802.27,
+    "swap_used_mb": 37980.69,
+    "vm_pages_paged_out": null
+  },
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 33.9547,
+      "response": "def fibonacci(n):\n    if n <= 0:\n        return 0\n    elif n == 1:\n        return 1\n    a, b = 0, 1\n    for _ in range(2, n + 1):\n        a, b = b, a + b\n    return b",
+      "response_words": 35,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Write a Python function to compute the nth Fibonacci number. Output only the function, no explanation.",
+        "description": "Must produce a Python function definition",
+        "expected_substr": [
+          "def ",
+          "return"
+        ],
+        "min_tokens": 15,
+        "skip_min_tokens": true,
+        "check_fences": false,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "8263a69c67a5"
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "failures": [],
+      "latency_s": 446.9724,
+      "response": "Okay! Let\u2019s imagine you\u2019re playing with your favorite toy car on a big, stretchy blanket \u2014 like a trampoline made of space! \ud83c\udf1f\n\nEinstein\u2019s theory of relativity is like a super-duper magic trick that tells us how space and time work together \u2014 especially when things go really fast or are super heavy.\n\nHere\u2019s how we can explain it to a 5-year-old:\n\n---\n\n\ud83c\udf1f **Imagine you\u2019re on a swing.**  \nWhen you swing back and forth, you feel the wind in your hair and the ground below you. But what if the *whole playground* was made of stretchy fabric \u2014 like a giant blanket?  \nIf you sit on that blanket, it makes a little dip \u2014 like when you sit on a trampoline and it sinks under you.  \nThat\u2019s what happens with **heavy things** (like the Sun or Earth) \u2014 they make a dent in space-time!  \nAnd that dent is what makes things like the moon or apples fall toward them \u2014 not because they\u2019re \u201cpulling\u201d with invisible hands, but because they\u2019re rolling down the dent! \ud83c\udf4e\u27a1\ufe0f\ud83c\udf0d\n\n---\n\n\ud83d\ude80 **Now, what if you zoom really fast?**  \nLike if you had a super-duper rocket sled!  \nEinstein said:  \n- If you go *really, really fast* (like almost the speed of light), time starts to act funny!  \n- Your clock might tick slower than your friend\u2019s who\u2019s standing still.  \n- And if you look at a ruler, it might look shorter \u2014 like it\u2019s squished!  \nBut don\u2019t worry \u2014 this only happens when you\u2019re going *incredibly* fast\u2026 way faster than any car or bike!  \nIt\u2019s like playing a game where the rules change when you run super-duper fast \u2014 but only in space, not on your playground!\n\n---\n\n\ud83d\udca1 **So, in simple words for a 5-year-old:**  \n> \u201cSpace is like a stretchy blanket. Heavy things make dents in it, and things roll toward the dents \u2014 that\u2019s gravity!  \n> And if you go super duper fast, time and space get a little squishy \u2014 like stretching a rubber band!\u201d  \n\n---\n\n\u2728 **Bonus fun fact:**  \nEven though we can",
+      "response_words": 344,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Explain the theory of relativity to a 5 year old.",
+        "description": "Must produce a coherent multi-sentence explanation",
+        "expected_substr": [],
+        "min_tokens": 30,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "7a20ff4f2bc2"
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "failures": [],
+      "latency_s": 264.2035,
+      "response": "Let's think step by step:\n\n1. **Start with the initial number of apples**: You have 3 apples.\n2. **Action taken**: You eat 1 apple.\n3. **Subtract the eaten apple from the total**:  \n   $ 3 - 1 = 2 $\n4. **Result**: You have 2 apples left.\n\nSo, after eating 1 apple from the original 3, you have **2 apples** remaining.\n\n**Answer: 2 apples**",
+      "response_words": 63,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "If I have 3 apples and eat 1, how many apples do I have left? Think step by step.",
+        "description": "Must arrive at the answer 2",
+        "expected_substr": [
+          "2"
+        ],
+        "min_tokens": 15,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "92adb85e8027"
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 130.4004,
+      "response": "Here are five programming languages, each with one notable strength:\n\n1. **Python** \u2013 Strength: **Readability and simplicity**. Python\u2019s clean, readable syntax makes it ideal for beginners and widely used in data science, AI, and scripting due to its ease of learning and extensive libraries.\n\n2. **JavaScript** \u2013 Strength: **Ubiquity in web development**. JavaScript is the only language natively supported by all web browsers, making it essential for building interactive websites and full-stack applications (with Node.js).\n\n3. **Java** \u2013 Strength: **Platform independence via JVM**. Java\u2019s \u201cwrite once, run anywhere\u201d capability, enabled by the Java Virtual Machine (JVM), allows applications to run consistently across different operating systems.\n\n4. **C++** \u2013 Strength: **High performance and low-level control**. C++ offers fine-grained control over memory and system resources, making it ideal for performance-critical applications like game engines, real-time systems, and operating systems.\n\n5. **Rust** \u2013 Strength: **Memory safety without garbage collection**. Rust prevents common bugs like null pointer dereferences and buffer overflows through its ownership system, providing safety and performance comparable to C/C++ without a runtime garbage collector.",
+      "response_words": 173,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "List 5 programming languages and one strength of each.",
+        "description": "Must produce a structured list",
+        "expected_substr": [],
+        "min_tokens": 30,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "30c57b0468d7"
+    },
+    {
+      "name": "Math",
+      "passed": true,
+      "failures": [],
+      "latency_s": 134.0882,
+      "response": "To find the product of 17 and 24, we can use the standard multiplication method.\n\n### Step-by-step calculation:\n\nWe want to compute:  \n**17 \u00d7 24**\n\nWe can break this down using the distributive property:\n\n$$\n17 \\times 24 = 17 \\times (20 + 4) = (17 \\times 20) + (17 \\times 4)\n$$\n\nNow calculate each part:\n\n- $ 17 \\times 20 = 340 $\n- $ 17 \\times 4 = 68 $\n\nNow add them together:\n\n$$\n340 + 68 = 408\n$$\n\n### Final Answer:\n$$\n\\boxed{408}\n$$\n\n### Verification (Optional):\nYou can also verify by doing it the other way:\n$$\n24 \\times 17 = (20 + 4) \\times 17 = 20 \\times 17 + 4 \\times 17 = 340 + 68 = 408\n$$\nSame result.\n\nThus, **17 \u00d7 24 = 408**.",
+      "response_words": 136,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "What is 17 * 24? Show your work.",
+        "description": "Must compute 408",
+        "expected_substr": [
+          "408"
+        ],
+        "min_tokens": 10,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "95870b648c2f"
+    },
+    {
+      "name": "Bugfix (off-by-one)",
+      "passed": true,
+      "failures": [],
+      "latency_s": 17.14,
+      "response": "def slice_last_n(items, n):\n    return items[len(items) - n:]",
+      "response_words": 7,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Here is buggy Python:\n\ndef slice_last_n(items, n):\n    return items[len(items) - n : len(items) - 1]\n\nFix the bug so it returns the last n items. Output only the corrected function.",
+        "description": "Must return a corrected function using the list tail",
+        "expected_substr": [
+          "return",
+          "items"
+        ],
+        "min_tokens": 25,
+        "skip_min_tokens": true,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "141218045b6c"
+    },
+    {
+      "name": "Traceback interpretation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 345.8267,
+      "response": "This error occurs when you try to use the `+` operator to add an integer (`int`) and a string (`str`) together, which Python doesn't allow because these types are incompatible for arithmetic or concatenation in this context.\n\n---\n\n### \ud83d\udd0d **What the Error Means**\n\nThe error message:\n```\nTypeError: unsupported operand type(s) for +: 'int' and 'str'\n```\nmeans that somewhere in your code, you attempted to do something like:\n```python\n5 + \"hello\"\n```\nor\n```python\n\"count: \" + 42\n```\nPython cannot automatically convert an integer to a string (or vice versa) for the `+` operator unless you explicitly do so. The `+` operator behaves differently depending on the types:\n- For two numbers: addition (`5 + 3 = 8`)\n- For two strings: concatenation (`\"hello\" + \"world\" = \"helloworld\"`)\n- For mixed types: **not allowed** \u2014 hence the error.\n\n---\n\n### \ud83d\udee0\ufe0f **How to Fix It**\n\nYou need to **explicitly convert** the types so they are compatible before using `+`.\n\n#### \u2705 Solution 1: Convert the integer to a string (if you want string concatenation)\n```python\n# Instead of: 5 + \"apples\"  \u2192 Error\n# Do this:\nresult = str(5) + \" apples\"  # \u2192 \"5 apples\"\nprint(result)\n```\n\n#### \u2705 Solution 2: Convert the string to an integer (if you want numeric addition)\n```python\n# Instead of: \"10\" + 5  \u2192 Error\n# Do this:\nresult = int(\"10\") + 5  # \u2192 15\nprint(result)\n```\n\n> \u26a0\ufe0f **Warning**: If the string is not a valid number (e.g., `\"abc\"`), `int(\"abc\")` will raise a `ValueError`. Always validate or use `try/except` if input is uncertain.\n\n#### \u2705 Solution 3: Use formatted strings (f-strings) for clean output\nThis is often the **best practice** for combining numbers and text:\n```python\ncount = 5\nitem = \"apples\"\nprint(f\"{count} {item}\")  # \u2192 \"5 apples\"\n```\nOr:\n```python\nprint(f\"Total: {count}\")",
+      "response_words": 306,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Explain what this Python error means and how to fix it:\nTypeError: unsupported operand type(s) for +: 'int' and 'str'",
+        "description": "Must mention type mismatch and conversion/casting",
+        "expected_substr": [
+          "str",
+          "int"
+        ],
+        "min_tokens": 40,
+        "skip_min_tokens": false,
+        "check_fences": false,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "2d6a320cbe67"
+    },
+    {
+      "name": "Multi-file style refactor",
+      "passed": true,
+      "failures": [],
+      "latency_s": 376.5029,
+      "response": "Here\u2019s a concrete, step-by-step guide to rename `fetch` to `load_data` across `a.py` and `b.py`, including verification steps using tests and `grep`. I\u2019ll assume the files are in the same directory and that `b.py` imports and uses `fetch` from `a.py`.\n\n---\n\n### **Files Before Renaming**\n\n**a.py**\n```python\ndef fetch():\n    return \"data from fetch\"\n```\n\n**b.py**\n```python\nfrom a import fetch\n\ndef use_fetch():\n    result = fetch()\n    return result\n```\n\n---\n\n### \u2705 **Step-by-Step: Rename `fetch` to `load_data`**\n\n#### **Step 1: Rename the function in `a.py`**\nEdit `a.py` to change the function name and update its definition:\n\n```python\ndef load_data():\n    return \"data from load_data\"\n```\n\n> \u2705 **Change**: `def fetch():` \u2192 `def load_data():`\n\n#### **Step 2: Update the import and usage in `b.py`**\nEdit `b.py` to:\n- Change the import from `fetch` to `load_data`\n- Update all calls to `fetch()` to `load_data()`\n\n```python\nfrom a import load_data\n\ndef use_load_data():\n    result = load_data()\n    return result\n```\n\n> \u2705 **Changes**:\n> - `from a import fetch` \u2192 `from a import load_data`\n> - `fetch()` \u2192 `load_data()`\n\n#### **Step 3: Verify no remnants of `fetch` remain**\nRun a `grep` search to ensure no leftover references to `fetch` exist in either file:\n\n```bash\ngrep -n \"fetch\" a.py b.py\n```\n\n**Expected output**: *Nothing* (no matches).  \nIf you see any output, it means there\u2019s still a reference to `fetch` \u2014 fix it.\n\n#### **Step 4: Run a test to verify functionality**\nCreate a simple test script to confirm the behavior is preserved:\n\n**test_rename.py**\n```python\nfrom b import use_load_data\n\ndef test_rename():\n    result = use_load_data()\n    assert result == \"data from load_data\", f\"Expected 'data from load_data', got {result}\"\n    print(\"\u2705 Test passed: load_data works correctly\")\n\nif __name__ == \"__main__\":\n    test_rename()\n```",
+      "response_words": 278,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "You have module a.py with `def fetch(): ...` and b.py importing it. Describe concrete steps to rename `fetch` to `load_data` across both files and what to run to verify (tests or grep). Be specific.",
+        "description": "Must give actionable rename/refactor steps",
+        "expected_substr": [
+          "rename",
+          "import"
+        ],
+        "min_tokens": 50,
+        "skip_min_tokens": false,
+        "check_fences": false,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "cec7c4a435cf"
+    },
+    {
+      "name": "Write a minimal test",
+      "passed": true,
+      "failures": [],
+      "latency_s": 129.5755,
+      "response": "Here is the complete pytest test file for the `add(a, b)` function, including the necessary import and test case:\n\n```python\n# test_add.py\n\ndef add(a, b):\n    return a + b\n\ndef test_add():\n    assert add(2, 3) == 5\n```\n\n### Explanation:\n- The `add` function is defined in the same file for simplicity (as no external module is specified).\n- The test function `test_add()` follows pytest naming conventions (starts with `test_`).\n- Inside the test, we call `add(2, 3)` and assert that it equals `5`.\n- Pytest will automatically discover and run this test when you execute `pytest test_add.py`.\n\n### To run the test:\nSave this as `test_add.py`, then run in your terminal:\n```bash\npytest test_add.py\n```\n\nYou should see a passing test result.\n\n> \u2705 **Note**: If your `add` function is in a separate module (e.g., `my_module.py`), you would import it like:\n> ```python\n> from my_module import add\n> ```\n> and then use it in the test. But since no such module was specified, the function is defined inline for completeness.",
+      "response_words": 172,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Write a pytest test for a function `add(a,b)` that asserts add(2,3)==5. Show the complete test file including import.",
+        "description": "Must output pytest-style test with assert",
+        "expected_substr": [
+          "def ",
+          "assert",
+          "add"
+        ],
+        "min_tokens": 5,
+        "skip_min_tokens": true,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "292d677ed601"
+    },
+    {
+      "name": "Implement LRU cache get",
+      "passed": true,
+      "failures": [],
+      "latency_s": 27.3969,
+      "response": "def get(self, key):\n    if key in self._data:\n        self._order.remove(key)\n        self._order.append(key)\n        return self._data[key]\n    return None",
+      "response_words": 13,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Implement a class method `get(self, key)` for an LRU cache with a fixed capacity. On miss return None; on hit move key to most-recent. Assume `self._order` and `self._data` exist. Output only the plain code, no markdown fences.",
+        "description": "Must implement method-body cache miss/hit logic",
+        "expected_substr": [
+          "key",
+          "return",
+          "None"
+        ],
+        "min_tokens": 5,
+        "skip_min_tokens": true,
+        "check_fences": false,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "c71c26181f77"
+    },
+    {
+      "name": "Race condition explanation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 244.0305,
+      "response": "### Explanation: Classic Race Condition in Threaded Counter\n\nWhen two or more threads increment a shared counter without synchronization, a **race condition** occurs. This happens because the operation `counter += 1` is not atomic\u2014it involves three steps:\n\n1. Read the current value of `counter`\n2. Increment it\n3. Write the new value back\n\nIf two threads read the same value simultaneously, both will increment it based on the same stale value, and one of the increments will be lost. For example:\n\n- Thread A reads `counter = 5`\n- Thread B reads `counter = 5` (before A writes back)\n- A writes `6`\n- B writes `6` (overwriting A\u2019s result)\n- Final value: `6` instead of `7`\n\nThis leads to **lost updates**, making the final count incorrect and non-deterministic.\n\n---\n\n### Fix: Using `threading.Lock` in Python\n\nTo prevent this, we use a **lock** to ensure only one thread can access the critical section (the counter increment) at a time.\n\nHere\u2019s a clean, correct Python snippet using `threading.Lock`:\n\n```python\nimport threading\nimport time\n\n# Shared counter and lock\ncounter = 0\nlock = threading.Lock()\n\ndef increment_counter():\n    global counter\n    for _ in range(100000):  # Each thread increments 100,000 times\n        with lock:           # Acquire lock before accessing counter\n            counter += 1     # This operation is now protected\n        # Lock is automatically released when exiting the 'with' block\n\n# Create two threads\nthread1 = threading.Thread(target=increment_counter)\nthread2 = threading.Thread(target=increment_counter)\n\n# Start both threads\nthread1.start()\nthread2.start()\n\n# Wait for both to finish\nthread1.join()\nthread2.join()\n\n# Print final result\nprint(f\"Final counter value: {counter}\")\n```\n\n### Why This Works\n\n- The `with lock:` statement ensures that only one thread can execute `counter += 1` at a time.\n- When a thread enters the `with` block, it acquires the lock; others must wait.\n- After the increment, the lock is released automatically (even if an exception occurs).\n- This guarantees that each increment is based on the most recent value, preventing lost updates.\n\n### Expected Output\n\nWith",
+      "response_words": 328,
+      "effective_max_tokens": 500,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Explain a classic race between two threads incrementing a shared counter without a lock, and fix it with one Python snippet using threading.Lock.",
+        "description": "Must mention lock and threading",
+        "expected_substr": [
+          "lock",
+          "thread"
+        ],
+        "min_tokens": 45,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "e4158304bbcb"
+    },
+    {
+      "name": "Long decode soak (1K+ tokens)",
+      "passed": true,
+      "failures": [],
+      "latency_s": 1025.6969,
+      "response": "Here's a comprehensive Python module implementing a thread-safe LRU cache with TTL support, generic typing, statistics tracking, and a full pytest test suite:\n\n```python\n\"\"\"\nLRU Cache with TTL and Thread Safety\n\nThis module implements a thread-safe LRU (Least Recently Used) cache with optional\ntime-to-live (TTL) expiration per entry. It supports generic types, tracks usage\nstatistics, and ensures thread safety using threading.Lock.\n\nFeatures:\n- Generic type support using TypeVar\n- get(), put(), and delete() methods\n- TTL expiration per entry (optional)\n- Thread-safe operations using threading.Lock\n- Statistics tracking: hits, misses, evictions\n- Comprehensive pytest test suite\n\"\"\"\n\nimport time\nfrom typing import TypeVar, Generic, Optional, Dict, Any\nfrom threading import Lock\nimport pytest\n\n# Define generic type variables for key and value\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCacheEntry(Generic[V]):\n    \"\"\"\n    Represents a single cache entry with value, timestamp, and TTL.\n    \"\"\"\n    def __init__(self, value: V, ttl: Optional[float] = None):\n        self.value: V = value\n        self.timestamp: float = time.time()  # Time of insertion or last access\n        self.ttl: Optional[float] = ttl  # Time-to-live in seconds; None means no expiration\n\n    def is_expired(self) -> bool:\n        \"\"\"\n        Check if the entry has expired based on TTL.\n        Returns True if expired, False otherwise.\n        \"\"\"\n        if self.ttl is None:\n            return False\n        return (time.time() - self.timestamp) > self.ttl\n\n    def refresh_timestamp(self) -> None:\n        \"\"\"\n        Update the timestamp to current time (used on access for LRU).\n        \"\"\"\n        self.timestamp = time.time()\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A thread-safe LRU cache with optional TTL per entry and statistics tracking.\n\n    Attributes:\n        capacity: Maximum number of entries the cache can hold.\n        _cache: Dictionary mapping keys to LRUCacheEntry objects.\n        _access_order: List maintaining access order for LRU (most recent at end).\n        _lock: Threading lock for thread safety.\n        _hits: Number of successful get operations.\n        _misses: Number of failed get operations (key not found or expired).\n        _evictions: Number of entries removed due to capacity limit.\n    \"\"\"\n\n    def __init__(self, capacity: int):\n        \"\"\"\n        Initialize the LRU cache.\n\n        Args:\n            capacity: Maximum number of entries the cache can hold.\n                      Must be a positive integer.\n        \"\"\"\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self.capacity: int = capacity\n        self._cache: Dict[K, LRUCacheEntry[V]] = {}\n        self._access_order: list[K] = []  # Maintains LRU order: least recent to most recent\n        self._lock: Lock = Lock()\n        self._hits: int = 0\n        self._misses: int = 0\n        self._evictions: int = 0\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Retrieve the value associated with the given key if it exists and is not expired.\n\n        Args:\n            key: The key to look up.\n\n        Returns:\n            The value associated with the key if found and not expired, otherwise None.\n        \"\"\"\n        with self._lock:\n            if key not in self._cache:\n                self._misses += 1\n                return None\n\n            entry = self._cache[key]\n            if entry.is_expired():\n                # Remove expired entry\n                del self._cache[key]\n                self._access_order.remove(key)\n                self._misses += 1\n                return None\n\n            # Entry is valid: refresh timestamp for LRU and count as hit\n            entry.refresh_timestamp()\n            self._hits += 1\n            return entry.value\n\n    def put(self, key: K, value: V, ttl: Optional[float] = None) -> None:\n        \"\"\"\n        Insert or update a key-value pair in the cache.\n\n        If the key already exists, it is updated and moved to the most recent position.\n        If the cache is at capacity, the least recently used entry is evicted.\n\n        Args:\n            key: The key to store.\n            value: The value to associate with the key.\n            ttl: Optional time-to-live in seconds. If None, the entry never expires.\n        \"\"\"\n        with self._lock:\n            if key in self._cache:\n                # Update existing entry\n                entry = self._cache[key]\n                entry.value = value\n                if ttl is not None:\n                    entry.ttl = ttl\n                entry.refresh_timestamp()\n                # Move to end of access_order (most recent)\n                self._access_order.remove(key)\n                self._access_order.append(key)\n            else:\n                # New entry\n                if len(self._cache) >= self.capacity:\n                    # Evict least recently used entry\n                    lru_key = self._access_order.pop(0)\n                    del self._cache[lru_key]\n                    self._evictions += 1\n                # Add new entry\n                new_entry = LRUCacheEntry[V](value, ttl)\n                self._cache[key] = new_entry\n                self._access_order.append(key)\n\n    def delete(self, key: K) -> bool:\n        \"\"\"\n        Remove a key from the cache if it exists.\n\n        Args:\n            key: The key to delete.\n\n        Returns:\n            True if the key was found and removed, False otherwise.\n        \"\"\"\n        with self._lock:\n            if key in self._cache:\n                del self._cache[key]\n                self._access_order.remove(key)\n                return True\n            return False\n\n    def get_stats(self) -> dict[str, int]:\n        \"\"\"\n        Get current cache statistics.\n\n        Returns:\n            A dictionary containing hits, misses, and evictions.\n        \"\"\"\n        with self._lock:\n            return {\n                \"hits\": self._hits,\n                \"misses\": self._misses,\n                \"evictions\": self._evictions\n            }\n\n    def __len__(self) -> int:\n        \"\"\"\n        Return the number of non-expired entries currently in the cache.\n\n        Note: This does not automatically remove expired entries; they are removed\n        on access (get) or when trying to insert a new entry (put) if needed.\n        \"\"\"\n        with self._lock:\n            # Count only non-expired entries\n            count = 0\n            for key in list(self._cache.keys()):  # Use list to avoid mutation during iteration\n                entry = self._cache[key]\n                if not entry.is_expired():\n                    count += 1\n                else:\n                    # Clean up expired entry\n                    del self._cache[key]\n                    self._access_order.remove(key)\n            return len(self._cache)  # Actually, we should return the count we computed\n            # Correction: return the count of valid entries\n            return count\n\n    # For clarity and correctness, let's redefine __len__ properly\n    def __len__(self) -> int:\n        \"\"\"\n        Return the number of non-expired entries currently in the cache.\n        \"\"\"\n        with self._lock:\n            valid_count = 0\n            expired_keys = []\n            for key in self._cache:\n                entry = self._cache[key]\n                if entry.is_expired():\n                    expired_keys.append(key)\n                else:\n                    valid_count += 1\n            # Remove expired entries\n            for key in expired_keys:\n                del self._cache[key]\n                self._access_order.remove(key)\n            return valid_count\n\n\n# Pytest Test Suite\ndef test_lru_cache_basic_operations():\n    \"\"\"Test basic put, get, and delete operations.\"\"\"\n    cache = LRUCache[str, int](capacity=2)\n\n    # Put and get\n    cache.put(\"a\", 1)\n    assert cache.get(\"a\") == 1\n    assert cache.get_stats()[\"hits\"] == 1\n    assert cache.get_stats()[\"misses\"] == 0\n\n    # Get missing key\n    assert cache.get(\"b\") is None\n    assert cache.get_stats()[\"misses\"] == 1\n\n    # Delete\n    assert cache.delete(\"a\") is True\n    assert cache.get(\"a\") is None\n    assert cache.delete(\"a\") is False  # Already deleted\n\n    # Length\n    assert len(cache) == 0\n\n\ndef test_lru_cache_ttl_expiration():\n    \"\"\"Test TTL-based expiration.\"\"\"\n    cache = LRUCache[str, str](capacity=1)\n\n    # Put with TTL\n    cache.put(\"key\", \"value\", ttl=0.1)  # Expires in 0.1 seconds\n    assert cache.get(\"key\") == \"value\"  # Should be fresh\n\n    # Wait for expiration\n    time.sleep(0.2)\n    assert cache.get(\"key\") is None  # Should be expired\n    assert cache.get_stats()[\"misses\"] == 1  # Miss due to expiration\n\n    # Re-insert and check\n    cache.put(\"key\", \"value\", ttl=0.1)\n    assert cache.get(\"key\") == \"value\"\n    time.sleep(0.2)\n    assert cache.get(\"key\") is None\n\n\ndef test_lru_cache_lru_eviction():\n    \"\"\"Test LRU eviction when cache is full",
+      "response_words": 1003,
+      "effective_max_tokens": 2048,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Write a comprehensive Python module that implements a thread-safe LRU cache with the following features:\n1. Generic type support with TypeVar\n2. get(), put(), and delete() methods\n3. TTL (time-to-live) expiration per entry\n4. Thread safety with threading.Lock\n5. Statistics tracking (hits, misses, evictions)\n6. A complete pytest test suite at the bottom of the file\n\nInclude docstrings, type hints, and at least 5 test functions.",
+        "description": "Must produce substantial, coherent code without repetition at 1K+ tokens",
+        "expected_substr": [
+          "class",
+          "def get",
+          "def put",
+          "Lock",
+          "def test_"
+        ],
+        "min_tokens": 200,
+        "skip_min_tokens": false,
+        "check_fences": false,
+        "max_tokens": 2048,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "1a4432c55aa5"
+    }
+  ],
+  "system_at_end": {
+    "process_rss_mb": 23997.41,
+    "swap_used_mb": 42186.88,
+    "vm_pages_paged_out": null
+  },
+  "system_deltas": {
+    "rss_mb_load_delta": 4712.1,
+    "rss_mb_total_delta": 23907.24,
+    "swap_used_mb_delta": 4206.19,
+    "vm_pages_paged_out_delta": null
+  }
+}

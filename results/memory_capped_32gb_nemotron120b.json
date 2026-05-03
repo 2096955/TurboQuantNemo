@@ -1,0 +1,13 @@
+{
+  "model": "sjug/Nemotron-3-Super-120B-A12B-MLX-4bit",
+  "model_class": "120B-class MoE (88 layers, 512 experts, top-22)",
+  "memory_limit_gb": 25.6,
+  "peak_memory_mb": 16814.6,
+  "fits_under_limit": true,
+  "max_resident_experts": 4096,
+  "hit_rate": 0.591,
+  "decode_hit_rate": 0.604,
+  "budget_utilisation": 0.64,
+  "status": "PASS",
+  "note": "Optimized from max_resident=16 (8.7GB, 34% utilisation) to 4096 (16.8GB peak, 64% budget utilisation, 60% decode hit rate)"
+}

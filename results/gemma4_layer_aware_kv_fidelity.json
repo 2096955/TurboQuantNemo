@@ -1,0 +1,62 @@
+{
+  "schema_version": 3,
+  "mode": "multi_depth",
+  "model": "gemma4-layer-aware",
+  "seed": 42,
+  "depths": [
+    512,
+    2048
+  ],
+  "backends": {
+    "default": {
+      "by_depth": {
+        "512": {
+          "ppl": 3.2029,
+          "nll": 1.164062,
+          "n_tokens": 512
+        },
+        "2048": {
+          "ppl": 1.3483,
+          "nll": 0.298828,
+          "n_tokens": 2048
+        }
+      }
+    },
+    "turboquant": {
+      "by_depth": {
+        "512": {
+          "ppl": 3.518,
+          "nll": 1.257905,
+          "n_tokens": 512
+        },
+        "2048": {
+          "ppl": 1.4105,
+          "nll": 0.343922,
+          "n_tokens": 2048
+        }
+      },
+      "delta_ppl_vs_default": {
+        "512": 0.3151,
+        "2048": 0.0622
+      }
+    },
+    "isoquant": {
+      "by_depth": {
+        "512": {
+          "ppl": 3.2029,
+          "nll": 1.164062,
+          "n_tokens": 512
+        },
+        "2048": {
+          "ppl": 1.3483,
+          "nll": 0.298828,
+          "n_tokens": 2048
+        }
+      },
+      "delta_ppl_vs_default": {
+        "512": 0.0,
+        "2048": 0.0
+      }
+    }
+  }
+}

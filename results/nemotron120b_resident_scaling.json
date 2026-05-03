@@ -1,0 +1,46 @@
+{
+  "model": "sjug/Nemotron-3-Super-120B-A12B-MLX-4bit",
+  "target_gb": 25.6,
+  "results": [
+    {
+      "max_resident": 16,
+      "peak_mb": 8671.0,
+      "fits_32gb": true,
+      "tok_per_s": 1.1,
+      "hit_rate": 0.0,
+      "decode_hit": 0.0
+    },
+    {
+      "max_resident": 64,
+      "peak_mb": 9331.0,
+      "fits_32gb": true,
+      "tok_per_s": 1.1,
+      "hit_rate": 0.0,
+      "decode_hit": 0.0
+    },
+    {
+      "max_resident": 256,
+      "peak_mb": 9331.0,
+      "fits_32gb": true,
+      "tok_per_s": 1.1,
+      "hit_rate": 0.0,
+      "decode_hit": 0.0
+    },
+    {
+      "max_resident": 512,
+      "peak_mb": 9439.0,
+      "fits_32gb": true,
+      "tok_per_s": 1.0,
+      "hit_rate": 0.0,
+      "decode_hit": 0.0
+    },
+    {
+      "max_resident": 1024,
+      "peak_mb": 10207.0,
+      "fits_32gb": true,
+      "tok_per_s": 0.9,
+      "hit_rate": 0.339,
+      "decode_hit": 0.354
+    }
+  ]
+}

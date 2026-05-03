@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "model_path": "gemma4-layer-aware",
+  "expert_offload": true,
+  "max_resident_experts": 2048,
+  "kv_cache_type": "isoquant",
+  "use_predictor": false,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 200,
+  "tests": {
+    "ppl_at_depth": {
+      "test": "ppl_at_depth",
+      "windows": [
+        {
+          "context_tokens": 64,
+          "default_nll": 6.2188,
+          "default_ppl": 502.0752,
+          "candidate_nll": 6.2188,
+          "candidate_ppl": 502.0752,
+          "delta_nll_vs_default": 0.0,
+          "delta_ppl_vs_default": 0.0,
+          "logit_cosine_vs_default": 1.0,
+          "logit_top5_agreement_vs_default": 1.0,
+          "latency_s": 5.6
+        },
+        {
+          "context_tokens": 128,
+          "default_nll": 6.2188,
+          "default_ppl": 502.0752,
+          "candidate_nll": 6.2188,
+          "candidate_ppl": 502.0752,
+          "delta_nll_vs_default": 0.0,
+          "delta_ppl_vs_default": 0.0,
+          "logit_cosine_vs_default": 1.0,
+          "logit_top5_agreement_vs_default": 1.0,
+          "latency_s": 4.69
+        },
+        {
+          "context_tokens": 256,
+          "default_nll": 5.8438,
+          "default_ppl": 345.0709,
+          "candidate_nll": 5.8438,
+          "candidate_ppl": 345.0709,
+          "delta_nll_vs_default": 0.0,
+          "delta_ppl_vs_default": 0.0,
+          "logit_cosine_vs_default": 1.0,
+          "logit_top5_agreement_vs_default": 1.0,
+          "latency_s": 4.82
+        },
+        {
+          "context_tokens": 512,
+          "default_nll": 5.4375,
+          "default_ppl": 229.8668,
+          "candidate_nll": 5.4375,
+          "candidate_ppl": 229.8668,
+          "delta_nll_vs_default": 0.0,
+          "delta_ppl_vs_default": 0.0,
+          "logit_cosine_vs_default": 1.0,
+          "logit_top5_agreement_vs_default": 1.0,
+          "latency_s": 5.04
+        },
+        {
+          "context_tokens": 1024,
+          "default_nll": 2.8125,
+          "default_ppl": 16.6515,
+          "candidate_nll": 2.8125,
+          "candidate_ppl": 16.6515,
+          "delta_nll_vs_default": 0.0,
+          "delta_ppl_vs_default": 0.0,
+          "logit_cosine_vs_default": 1.0,
+          "logit_top5_agreement_vs_default": 1.0,
+          "latency_s": 5.82
+        },
+        {
+          "context_tokens": 2048,
+          "default_nll": 1.7812,
+          "default_ppl": 5.9373,
+          "candidate_nll": 1.7812,
+          "candidate_ppl": 5.9373,
+          "delta_nll_vs_default": 0.0,
+          "delta_ppl_vs_default": 0.0,
+          "logit_cosine_vs_default": 1.0,
+          "logit_top5_agreement_vs_default": 1.0,
+          "latency_s": 7.57
+        },
+        {
+          "context_tokens": 4096,
+          "default_nll": 1.0781,
+          "default_ppl": 2.9392,
+          "candidate_nll": 1.0781,
+          "candidate_ppl": 2.9392,
+          "delta_nll_vs_default": 0.0,
+          "delta_ppl_vs_default": 0.0,
+          "logit_cosine_vs_default": 1.0,
+          "logit_top5_agreement_vs_default": 1.0,
+          "latency_s": 13.0
+        }
+      ],
+      "summary": {
+        "avg_delta_ppl_vs_default": 0.0,
+        "avg_logit_cosine_vs_default": 1.0,
+        "avg_logit_top5_agreement_vs_default": 1.0,
+        "n_total": 7,
+        "total_passage_tokens": 7416,
+        "kv_cache_type": "isoquant"
+      }
+    }
+  },
+  "system_at_end": {
+    "peak_memory_gb": 17.01
+  }
+}

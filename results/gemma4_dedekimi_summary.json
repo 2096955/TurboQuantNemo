@@ -1,0 +1,150 @@
+{
+  "num_layers": 30,
+  "num_experts": 128,
+  "decay": 0.99,
+  "per_layer_entropy": [
+    {
+      "layer": 0,
+      "entropy": -0.0
+    },
+    {
+      "layer": 1,
+      "entropy": -0.0
+    },
+    {
+      "layer": 2,
+      "entropy": -0.0
+    },
+    {
+      "layer": 3,
+      "entropy": -0.0
+    },
+    {
+      "layer": 4,
+      "entropy": -0.0
+    },
+    {
+      "layer": 5,
+      "entropy": -0.0
+    },
+    {
+      "layer": 6,
+      "entropy": -0.0
+    },
+    {
+      "layer": 7,
+      "entropy": -0.0
+    },
+    {
+      "layer": 8,
+      "entropy": -0.0
+    },
+    {
+      "layer": 9,
+      "entropy": -0.0
+    },
+    {
+      "layer": 10,
+      "entropy": -0.0
+    },
+    {
+      "layer": 11,
+      "entropy": -0.0
+    },
+    {
+      "layer": 12,
+      "entropy": -0.0
+    },
+    {
+      "layer": 13,
+      "entropy": -0.0
+    },
+    {
+      "layer": 14,
+      "entropy": -0.0
+    },
+    {
+      "layer": 15,
+      "entropy": -0.0
+    },
+    {
+      "layer": 16,
+      "entropy": -0.0
+    },
+    {
+      "layer": 17,
+      "entropy": -0.0
+    },
+    {
+      "layer": 18,
+      "entropy": -0.0
+    },
+    {
+      "layer": 19,
+      "entropy": -0.0
+    },
+    {
+      "layer": 20,
+      "entropy": -0.0
+    },
+    {
+      "layer": 21,
+      "entropy": -0.0
+    },
+    {
+      "layer": 22,
+      "entropy": -0.0
+    },
+    {
+      "layer": 23,
+      "entropy": -0.0
+    },
+    {
+      "layer": 24,
+      "entropy": -0.0
+    },
+    {
+      "layer": 25,
+      "entropy": -0.0
+    },
+    {
+      "layer": 26,
+      "entropy": -0.0
+    },
+    {
+      "layer": 27,
+      "entropy": -0.0
+    },
+    {
+      "layer": 28,
+      "entropy": -0.0
+    },
+    {
+      "layer": 29,
+      "entropy": -0.0
+    }
+  ],
+  "activation_ema_summary": {
+    "active_layers": 0,
+    "total_layers": 30,
+    "mean_entropy": 0
+  },
+  "expert_cache": {
+    "hits": 18414,
+    "misses": 6490,
+    "evictions": 55322,
+    "hit_rate": 0.7393992932862191,
+    "prefill_hits": 77,
+    "prefill_misses": 587,
+    "prefill_hit_rate": 0.11596385542168675,
+    "decode_hits": 18337,
+    "decode_misses": 5903,
+    "decode_hit_rate": 0.756476897689769,
+    "avg_load_ms": 0.01183786795611474,
+    "resident_slots": 128,
+    "prefill_gather_calls": 30,
+    "decode_gather_calls": 3030,
+    "prefetch_requests": 48960,
+    "prefetch_already_cached": 0
+  }
+}

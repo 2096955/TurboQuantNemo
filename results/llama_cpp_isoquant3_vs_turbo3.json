@@ -1,0 +1,18 @@
+{
+  "model": "qwen2.5-1.5b-instruct-q6_k.gguf",
+  "hardware": "Apple M4 Max",
+  "n_prompt": 512,
+  "n_gen": 128,
+  "flash_attn": true,
+  "turbo3": {
+    "prompt_ts": 4100.9,
+    "gen_ts": 99.4
+  },
+  "isoquant3_fused": {
+    "prompt_ts": 4077.5,
+    "gen_ts": 95.8
+  },
+  "delta_prompt_pct": -0.6,
+  "delta_gen_pct": -3.6,
+  "conclusion": "isoquant3 fused is within 4% of turbo3 on both prompt and generation"
+}

@@ -1,0 +1,70 @@
+{
+  "gemma4_default": {
+    "model": "gemma-4-26b-a4b-it-4bit",
+    "kv_cache_type": "default",
+    "max_tokens": 500,
+    "total_time_s": 20.34,
+    "peak_memory_mb": 11634.0,
+    "per_token_latency_ms": {
+      "p50": 35.6,
+      "p95": 62.5,
+      "p99": 67.2,
+      "mean": 39.2
+    },
+    "p99_div_p50": 1.89,
+    "p99_under_3x_p50": true,
+    "latency_drift_ratio": 0.83,
+    "generated_tokens": 500
+  },
+  "gemma4_isoquant": {
+    "model": "gemma-4-26b-a4b-it-4bit",
+    "kv_cache_type": "isoquant",
+    "max_tokens": 500,
+    "total_time_s": 29.59,
+    "peak_memory_mb": 11672.3,
+    "per_token_latency_ms": {
+      "p50": 50.7,
+      "p95": 85.3,
+      "p99": 99.7,
+      "mean": 55.4
+    },
+    "p99_div_p50": 1.97,
+    "p99_under_3x_p50": true,
+    "latency_drift_ratio": 1.19,
+    "generated_tokens": 500
+  },
+  "qwen3_default": {
+    "model": "mlx-community/Qwen3-30B-A3B-4bit",
+    "kv_cache_type": "default",
+    "max_tokens": 500,
+    "total_time_s": 28.5,
+    "peak_memory_mb": 13469.8,
+    "per_token_latency_ms": {
+      "p50": 46.3,
+      "p95": 67.6,
+      "p99": 73.9,
+      "mean": 49.5
+    },
+    "p99_div_p50": 1.6,
+    "p99_under_3x_p50": true,
+    "latency_drift_ratio": 0.92,
+    "generated_tokens": 500
+  },
+  "qwen3_isoquant": {
+    "model": "mlx-community/Qwen3-30B-A3B-4bit",
+    "kv_cache_type": "isoquant",
+    "max_tokens": 500,
+    "total_time_s": 38.64,
+    "peak_memory_mb": 13115.5,
+    "per_token_latency_ms": {
+      "p50": 69.4,
+      "p95": 101.9,
+      "p99": 106.3,
+      "mean": 74.3
+    },
+    "p99_div_p50": 1.53,
+    "p99_under_3x_p50": true,
+    "latency_drift_ratio": 1.04,
+    "generated_tokens": 500
+  }
+}

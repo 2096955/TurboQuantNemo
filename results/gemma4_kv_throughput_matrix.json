@@ -1,0 +1,37 @@
+{
+  "model": "gemma-4-26b-a4b-it-4bit",
+  "prompt": "Write a Python function to compute the nth Fibonac...",
+  "max_tokens": 100,
+  "benchmarks": {
+    "default": {
+      "kv_cache_type": "default",
+      "prompt_tokens": 35,
+      "generated_tokens": 100,
+      "prefill_time_s": 0.6627,
+      "prefill_tok_per_s": 52.8,
+      "decode_time_s": 3.5513,
+      "decode_tok_per_s": 27.9,
+      "total_time_s": 4.214
+    },
+    "turboquant": {
+      "kv_cache_type": "turboquant",
+      "prompt_tokens": 35,
+      "generated_tokens": 100,
+      "prefill_time_s": 1.1019,
+      "prefill_tok_per_s": 31.8,
+      "decode_time_s": 6.4381,
+      "decode_tok_per_s": 15.4,
+      "total_time_s": 7.54
+    },
+    "isoquant": {
+      "kv_cache_type": "isoquant",
+      "prompt_tokens": 35,
+      "generated_tokens": 100,
+      "prefill_time_s": 1.533,
+      "prefill_tok_per_s": 22.8,
+      "decode_time_s": 4.713,
+      "decode_tok_per_s": 21.0,
+      "total_time_s": 6.246
+    }
+  }
+}

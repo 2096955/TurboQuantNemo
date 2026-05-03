@@ -1,0 +1,77 @@
+{
+  "benchmark": "isoquant_metal_vs_dense",
+  "results": [
+    {
+      "head_dim": 128,
+      "seq_len": 1,
+      "dense_ms": 0.183,
+      "metal_ms": 0.14,
+      "speedup": 1.31,
+      "roundtrip_err": "5.96e-07"
+    },
+    {
+      "head_dim": 128,
+      "seq_len": 32,
+      "dense_ms": 0.161,
+      "metal_ms": 0.129,
+      "speedup": 1.25,
+      "roundtrip_err": "8.34e-07"
+    },
+    {
+      "head_dim": 128,
+      "seq_len": 256,
+      "dense_ms": 0.117,
+      "metal_ms": 0.108,
+      "speedup": 1.08,
+      "roundtrip_err": "9.54e-07"
+    },
+    {
+      "head_dim": 256,
+      "seq_len": 1,
+      "dense_ms": 0.124,
+      "metal_ms": 0.115,
+      "speedup": 1.08,
+      "roundtrip_err": "6.78e-07"
+    },
+    {
+      "head_dim": 256,
+      "seq_len": 32,
+      "dense_ms": 0.117,
+      "metal_ms": 0.109,
+      "speedup": 1.08,
+      "roundtrip_err": "9.54e-07"
+    },
+    {
+      "head_dim": 256,
+      "seq_len": 256,
+      "dense_ms": 0.131,
+      "metal_ms": 0.119,
+      "speedup": 1.1,
+      "roundtrip_err": "9.54e-07"
+    },
+    {
+      "head_dim": 512,
+      "seq_len": 1,
+      "dense_ms": 0.146,
+      "metal_ms": 0.099,
+      "speedup": 1.48,
+      "roundtrip_err": "7.15e-07"
+    },
+    {
+      "head_dim": 512,
+      "seq_len": 32,
+      "dense_ms": 0.137,
+      "metal_ms": 0.119,
+      "speedup": 1.15,
+      "roundtrip_err": "9.54e-07"
+    },
+    {
+      "head_dim": 512,
+      "seq_len": 256,
+      "dense_ms": 0.206,
+      "metal_ms": 0.16,
+      "speedup": 1.28,
+      "roundtrip_err": "1.19e-06"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "description": "Memory-capped envelope validation for 32GB target (Profile A: 512 prefill, 128 decode). Produced by benchmark_moe_offload.py with --target-envelope-mb and --strict-gates. Host: 128GB Apple Silicon (synthetic cap, not hard-limited hardware).",
+  "date": "2026-04-11",
+  "nemotron_30b_proxy": {
+    "model": "nemotron-30b-mixed",
+    "target_envelope_mb": 25600,
+    "peak_memory_mb": 4166.78,
+    "fits_target_envelope": true,
+    "headroom_mb": 21433.22,
+    "max_resident_experts": 16,
+    "kv_cache_type": "isoquant",
+    "decode_tok_per_s": 28.28,
+    "prefill_plus_first_token_s": 1.69,
+    "process_rss_mb_at_end": 4754.38,
+    "status": "PASS",
+    "note": "30B proxy, not 120B. Real 32GB validation requires Nemotron-H 120B checkpoint on 32GB-class hardware."
+  }
+}
