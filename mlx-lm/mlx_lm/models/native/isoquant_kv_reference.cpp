@@ -49,13 +49,14 @@ static void unpack_3bit(
 // ============================================================
 
 std::vector<float> fused_qk_dot(
-    const uint32_t* K_packed,   // [H, T, packed_words]
+    const uint32_t* K_packed,   // [H, cache_stride, packed_words]
     const float* centroids,     // [num_levels]
-    const float* norms,         // [H, T]
+    const float* norms,         // [H, cache_stride]
     const float* query,         // [H, D]
     uint32_t H,
     uint32_t T,
-    uint32_t D
+    uint32_t D,
+    uint32_t cache_stride
 ) {
     uint32_t pw = D / 8;
     std::vector<float> scores(H * T);
@@ -64,7 +65,7 @@ std::vector<float> fused_qk_dot(
     for (uint32_t h = 0; h < H; ++h) {
         const float* q = query + h * D;
         for (uint32_t t = 0; t < T; ++t) {
-            const uint32_t* packed = K_packed + (h * T + t) * pw;
+            const uint32_t* packed = K_packed + (h * cache_stride + t) * pw;
             unpack_3bit(packed, centroids, k_vec.data(), D);
 
             float dot = 0.0f;
@@ -72,7 +73,7 @@ std::vector<float> fused_qk_dot(
                 dot += q[d] * k_vec[d];
             }
 
-            scores[h * T + t] = dot * norms[h * T + t];
+            scores[h * T + t] = dot * norms[h * cache_stride + t];
         }
     }
     return scores;
@@ -112,13 +113,14 @@ void softmax_inplace(float* scores, uint32_t T, uint32_t H) {
 // ============================================================
 
 std::vector<float> fused_value_accum(
-    const uint32_t* V_packed,       // [H, T, packed_words]
+    const uint32_t* V_packed,       // [H, cache_stride, packed_words]
     const float* centroids,         // [num_levels]
-    const float* norms,             // [H, T]
+    const float* norms,             // [H, cache_stride]
     const float* attn_weights,      // [H, T]
     uint32_t H,
     uint32_t T,
-    uint32_t D
+    uint32_t D,
+    uint32_t cache_stride
 ) {
     uint32_t pw = D / 8;
     std::vector<float> output(H * D, 0.0f);
@@ -128,10 +130,10 @@ std::vector<float> fused_value_accum(
         float* out = output.data() + h * D;
 
         for (uint32_t t = 0; t < T; ++t) {
-            float w = attn_weights[h * T + t] * norms[h * T + t];
+            float w = attn_weights[h * T + t] * norms[h * cache_stride + t];
             if (w == 0.0f) continue;
 
-            const uint32_t* packed = V_packed + (h * T + t) * pw;
+            const uint32_t* packed = V_packed + (h * cache_stride + t) * pw;
             unpack_3bit(packed, centroids, v_vec.data(), D);
 
             for (uint32_t d = 0; d < D; ++d) {
@@ -238,7 +240,9 @@ std::vector<float> fused_attention_reference(
     uint32_t H,
     uint32_t T,
     uint32_t D,
-    bool use_hadamard
+    bool use_hadamard,
+    uint32_t k_cache_stride,
+    uint32_t v_cache_stride
 ) {
     // Scale query
     std::vector<float> q_scaled(H * D);
@@ -247,13 +251,13 @@ std::vector<float> fused_attention_reference(
     }
 
     // Kernel A
-    auto scores = fused_qk_dot(K_packed, centroids, k_norms, q_scaled.data(), H, T, D);
+    auto scores = fused_qk_dot(K_packed, centroids, k_norms, q_scaled.data(), H, T, D, k_cache_stride);
 
     // Kernel B
     softmax_inplace(scores.data(), T, H);
 
     // Kernel C
-    auto output = fused_value_accum(V_packed, centroids, v_norms, scores.data(), H, T, D);
+    auto output = fused_value_accum(V_packed, centroids, v_norms, scores.data(), H, T, D, v_cache_stride);
 
     // Kernel D
     inverse_rotation_wht_so4(output.data(), so4_blocks, D, H, use_hadamard);

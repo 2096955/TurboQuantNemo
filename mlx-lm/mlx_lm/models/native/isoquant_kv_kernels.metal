@@ -345,6 +345,7 @@ kernel void fused_decode_attention_3bit(
     if (tid < head_dim) {
         q_local[tid] = q[head_idx * head_dim + tid];
     }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     if (tid == 0) {
         max_logit = -INFINITY;
         denom = 0.0f;

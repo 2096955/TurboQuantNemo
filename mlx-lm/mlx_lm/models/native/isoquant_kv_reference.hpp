@@ -8,11 +8,12 @@ namespace isoquant { namespace ref {
 
 // Kernel A: fused Q·Kᵀ from packed 3-bit K
 std::vector<float> fused_qk_dot(
-    const uint32_t* K_packed,   // [H, T, packed_words]
+    const uint32_t* K_packed,   // [H, cache_stride, packed_words]
     const float* centroids,     // [num_levels]
-    const float* norms,         // [H, T]
+    const float* norms,         // [H, cache_stride]
     const float* query,         // [H, D]
-    uint32_t H, uint32_t T, uint32_t D
+    uint32_t H, uint32_t T, uint32_t D,
+    uint32_t cache_stride
 );
 
 // Kernel B: in-place softmax
@@ -24,7 +25,8 @@ std::vector<float> fused_value_accum(
     const float* centroids,
     const float* norms,
     const float* attn_weights,
-    uint32_t H, uint32_t T, uint32_t D
+    uint32_t H, uint32_t T, uint32_t D,
+    uint32_t cache_stride
 );
 
 // Kernel D: inverse rotation (WHT + SO(4), in-place)
@@ -48,7 +50,9 @@ std::vector<float> fused_attention_reference(
     float scale,
     const float* so4_blocks,
     uint32_t H, uint32_t T, uint32_t D,
-    bool use_hadamard
+    bool use_hadamard,
+    uint32_t k_cache_stride,
+    uint32_t v_cache_stride
 );
 
 }}  // namespace isoquant::ref

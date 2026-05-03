@@ -297,6 +297,12 @@ MTL::Buffer* IsoQuantKVRuntime::pack_indices(
     enc->endEncoding();
     cmd->commit();
     cmd->waitUntilCompleted();
+    if (cmd->status() != MTL::CommandBufferStatusCompleted) {
+        NS::Error* err = cmd->error();
+        std::string msg = "metal command buffer failed: status=" + std::to_string(cmd->status());
+        if (err) msg += ", error=" + std::string(err->localizedDescription()->utf8String());
+        throw std::runtime_error(msg);
+    }
 
     src_buf->release();
     return dst_buf;
@@ -315,7 +321,13 @@ void IsoQuantKVRuntime::append_compressed(
     uint32_t pw = cache.packed_words_per_dim();
     uint32_t T  = cache.keys.seq_len;
 
-    assert(T + chunk_len <= cache.keys.capacity && "KV cache overflow");
+    if (T + chunk_len > cache.keys.capacity) {
+        throw std::runtime_error(
+            "isoquant cache overflow: T=" + std::to_string(T) +
+            ", chunk_len=" + std::to_string(chunk_len) +
+            ", capacity=" + std::to_string(cache.keys.capacity)
+        );
+    }
 
     // Pack indices on GPU
     uint32_t total_vals = H * chunk_len * D;
@@ -390,6 +402,12 @@ void IsoQuantKVRuntime::dispatch_fused_qk_dot(
     enc->endEncoding();
     cmd->commit();
     cmd->waitUntilCompleted();
+    if (cmd->status() != MTL::CommandBufferStatusCompleted) {
+        NS::Error* err = cmd->error();
+        std::string msg = "metal command buffer failed: status=" + std::to_string(cmd->status());
+        if (err) msg += ", error=" + std::string(err->localizedDescription()->utf8String());
+        throw std::runtime_error(msg);
+    }
 }
 
 void IsoQuantKVRuntime::dispatch_softmax(
@@ -413,6 +431,12 @@ void IsoQuantKVRuntime::dispatch_softmax(
     enc->endEncoding();
     cmd->commit();
     cmd->waitUntilCompleted();
+    if (cmd->status() != MTL::CommandBufferStatusCompleted) {
+        NS::Error* err = cmd->error();
+        std::string msg = "metal command buffer failed: status=" + std::to_string(cmd->status());
+        if (err) msg += ", error=" + std::string(err->localizedDescription()->utf8String());
+        throw std::runtime_error(msg);
+    }
 }
 
 void IsoQuantKVRuntime::dispatch_fused_value_accum(
@@ -454,6 +478,12 @@ void IsoQuantKVRuntime::dispatch_fused_value_accum(
     enc->endEncoding();
     cmd->commit();
     cmd->waitUntilCompleted();
+    if (cmd->status() != MTL::CommandBufferStatusCompleted) {
+        NS::Error* err = cmd->error();
+        std::string msg = "metal command buffer failed: status=" + std::to_string(cmd->status());
+        if (err) msg += ", error=" + std::string(err->localizedDescription()->utf8String());
+        throw std::runtime_error(msg);
+    }
 }
 
 double IsoQuantKVRuntime::profile_fused_value_accum_gpu_ms(
@@ -493,6 +523,12 @@ double IsoQuantKVRuntime::profile_fused_value_accum_gpu_ms(
     enc->endEncoding();
     cmd->commit();
     cmd->waitUntilCompleted();
+    if (cmd->status() != MTL::CommandBufferStatusCompleted) {
+        NS::Error* err = cmd->error();
+        std::string msg = "metal command buffer failed: status=" + std::to_string(cmd->status());
+        if (err) msg += ", error=" + std::string(err->localizedDescription()->utf8String());
+        throw std::runtime_error(msg);
+    }
 
     const double start = cmd->kernelStartTime();
     const double end = cmd->kernelEndTime();
@@ -528,6 +564,12 @@ void IsoQuantKVRuntime::dispatch_inverse_rotation(
     enc->endEncoding();
     cmd->commit();
     cmd->waitUntilCompleted();
+    if (cmd->status() != MTL::CommandBufferStatusCompleted) {
+        NS::Error* err = cmd->error();
+        std::string msg = "metal command buffer failed: status=" + std::to_string(cmd->status());
+        if (err) msg += ", error=" + std::string(err->localizedDescription()->utf8String());
+        throw std::runtime_error(msg);
+    }
 }
 
 // ============================================================
@@ -584,6 +626,12 @@ void IsoQuantKVRuntime::fused_attention_gpu(
     enc->endEncoding();
     cmd->commit();
     cmd->waitUntilCompleted();
+    if (cmd->status() != MTL::CommandBufferStatusCompleted) {
+        NS::Error* err = cmd->error();
+        std::string msg = "metal command buffer failed: status=" + std::to_string(cmd->status());
+        if (err) msg += ", error=" + std::string(err->localizedDescription()->utf8String());
+        throw std::runtime_error(msg);
+    }
 }
 
 void IsoQuantKVRuntime::fused_attention(

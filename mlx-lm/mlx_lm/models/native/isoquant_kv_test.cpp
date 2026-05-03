@@ -150,7 +150,8 @@ static bool test_fused_qk_dot() {
     // Run reference
     auto scores = isoquant::ref::fused_qk_dot(
         packed.data(), centroids.data(), k_norms.data(),
-        query.data(), NUM_HEADS, SEQ_LEN, HEAD_DIM
+        query.data(), NUM_HEADS, SEQ_LEN, HEAD_DIM,
+        SEQ_LEN  // cache_stride
     );
 
     // Manual verification for first score
@@ -226,7 +227,9 @@ static bool test_end_to_end_reference() {
         centroids.data(), k_norms.data(), v_norms.data(),
         query.data(), SCALE, so4_blocks.data(),
         NUM_HEADS, SEQ_LEN, HEAD_DIM,
-        /*use_hadamard=*/true
+        /*use_hadamard=*/true,
+        SEQ_LEN,  // k_cache_stride
+        SEQ_LEN   // v_cache_stride
     );
 
     // Basic sanity: output should be finite and non-zero
@@ -289,7 +292,9 @@ static bool test_metal_vs_reference() {
         centroids.data(), k_norms.data(), v_norms.data(),
         query.data(), SCALE, so4_blocks.data(),
         NUM_HEADS, SEQ_LEN, HEAD_DIM,
-        /*use_hadamard=*/true
+        /*use_hadamard=*/true,
+        SEQ_LEN,  // k_cache_stride
+        SEQ_LEN   // v_cache_stride
     );
 
     // Metal path
@@ -324,7 +329,8 @@ static bool test_metal_vs_reference() {
 
         auto scores_ref = isoquant::ref::fused_qk_dot(
             k_packed.data(), centroids.data(), k_norms.data(),
-            q_scaled.data(), NUM_HEADS, SEQ_LEN, HEAD_DIM
+            q_scaled.data(), NUM_HEADS, SEQ_LEN, HEAD_DIM,
+            SEQ_LEN  // cache_stride
         );
 
         auto q_buf = make_shared_buffer(device, q_scaled.size() * sizeof(float), q_scaled.data());
@@ -347,7 +353,8 @@ static bool test_metal_vs_reference() {
 
             auto output_rot_ref = isoquant::ref::fused_value_accum(
                 v_packed.data(), centroids.data(), v_norms.data(),
-                scores_softmax_ref.data(), NUM_HEADS, SEQ_LEN, HEAD_DIM
+                scores_softmax_ref.data(), NUM_HEADS, SEQ_LEN, HEAD_DIM,
+                SEQ_LEN  // cache_stride
             );
             runtime.dispatch_fused_value_accum(cache, scores_buf, output_rot_buf);
             auto* output_rot_gpu = static_cast<float*>(output_rot_buf->contents());
