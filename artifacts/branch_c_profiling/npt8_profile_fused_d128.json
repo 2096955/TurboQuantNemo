@@ -1,0 +1,150 @@
+{
+  "model": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+  "decode_steps": 50,
+  "roofline": {
+    "hardware": {
+      "chip": "Apple M4 Max",
+      "memory_gb": 128,
+      "gpu_cores": 40,
+      "macos_version": "26.3.1",
+      "metal_gpu_family": "applegpu_g16s"
+    },
+    "calibration": {
+      "peak_fp16_tflops": 14.46,
+      "peak_fp32_tflops": 10.29,
+      "peak_memory_bandwidth_gbs": 256.1,
+      "theoretical_memory_bandwidth_gbs": 546.0,
+      "bandwidth_efficiency_ratio": 0.469,
+      "noop_dispatch_us": 115.23
+    },
+    "power_baseline": {
+      "avg_package_watts": null,
+      "avg_gpu_watts": null
+    },
+    "valid": false,
+    "warnings": [
+      "Bandwidth efficiency 0.47 < 0.5 - calibration may be unreliable (too few iters=500)"
+    ],
+    "timestamp": "2026-04-27T21:46:37Z"
+  },
+  "configs": [
+    {
+      "T": 4096,
+      "default_total_ms_per_step": 10.636284999927739,
+      "iso_unpatched_ms_per_step": 19.03794999991078,
+      "iso_fused_ms_per_step": 17.997208340093493,
+      "fused_encode_active": true,
+      "iso_instrumented_ms_per_step": 36.53601500001969,
+      "instrumentation_overhead_pct": 91.91149782508575,
+      "gap_ms": 8.40166499998304,
+      "components": [
+        {
+          "name": "compress_batch",
+          "call_count": 1000,
+          "avg_ms_per_step": 12.481082722515566,
+          "pct_of_instrumented_total": 34.16104006555953,
+          "gap_attribution_pct": 77.40801052105553
+        },
+        {
+          "name": "pack_indices_3bit",
+          "call_count": 1000,
+          "avg_ms_per_step": 5.22334555935231,
+          "pct_of_instrumented_total": 14.296429315976292,
+          "gap_attribution_pct": 32.39532955614925
+        },
+        {
+          "name": "inverse_rotation",
+          "call_count": 500,
+          "avg_ms_per_step": 3.700831499299966,
+          "pct_of_instrumented_total": 10.129269706337627,
+          "gap_attribution_pct": 22.952656432416184
+        },
+        {
+          "name": "metal_kernel",
+          "call_count": 500,
+          "avg_ms_per_step": 3.4442723999381997,
+          "pct_of_instrumented_total": 9.427060942295824,
+          "gap_attribution_pct": 21.361470002184323
+        },
+        {
+          "name": "fa2_merge",
+          "call_count": 500,
+          "avg_ms_per_step": 2.3623097987729125,
+          "pct_of_instrumented_total": 6.465701852738016,
+          "gap_attribution_pct": 14.65110886794526
+        },
+        {
+          "name": "query_rotation",
+          "call_count": 500,
+          "avg_ms_per_step": 2.3282958386698738,
+          "pct_of_instrumented_total": 6.372604780977397,
+          "gap_attribution_pct": 14.440153373133176
+        }
+      ],
+      "sum_components_ms": 29.54013781854883,
+      "residual_ms": 6.99587718147086,
+      "residual_pct": 19.14789333611531,
+      "missing_components": [],
+      "tiled_kernel_observed": true
+    },
+    {
+      "T": 8192,
+      "default_total_ms_per_step": 11.147594999929424,
+      "iso_unpatched_ms_per_step": 19.935817499936093,
+      "iso_fused_ms_per_step": 19.061979159887414,
+      "fused_encode_active": true,
+      "iso_instrumented_ms_per_step": 36.831452500046,
+      "instrumentation_overhead_pct": 84.75014882215925,
+      "gap_ms": 8.788222500006668,
+      "components": [
+        {
+          "name": "compress_batch",
+          "call_count": 1000,
+          "avg_ms_per_step": 12.539125895418692,
+          "pct_of_instrumented_total": 34.04461416612074,
+          "gap_attribution_pct": 77.22917971990435
+        },
+        {
+          "name": "pack_indices_3bit",
+          "call_count": 1000,
+          "avg_ms_per_step": 5.103490919864271,
+          "pct_of_instrumented_total": 13.856339007694299,
+          "gap_attribution_pct": 31.432686834502597
+        },
+        {
+          "name": "inverse_rotation",
+          "call_count": 500,
+          "avg_ms_per_step": 3.6484233201190364,
+          "pct_of_instrumented_total": 9.905727503183535,
+          "gap_attribution_pct": 22.470843871717488
+        },
+        {
+          "name": "metal_kernel",
+          "call_count": 500,
+          "avg_ms_per_step": 3.59359844122082,
+          "pct_of_instrumented_total": 9.756874077166335,
+          "gap_attribution_pct": 22.133174367410227
+        },
+        {
+          "name": "fa2_merge",
+          "call_count": 500,
+          "avg_ms_per_step": 2.3250066000036895,
+          "pct_of_instrumented_total": 6.312557453444949,
+          "gap_attribution_pct": 14.319846060980401
+        },
+        {
+          "name": "query_rotation",
+          "call_count": 500,
+          "avg_ms_per_step": 2.2728989402821753,
+          "pct_of_instrumented_total": 6.171081469782753,
+          "gap_attribution_pct": 13.99891206199354
+        }
+      ],
+      "sum_components_ms": 29.482544116908684,
+      "residual_ms": 7.348908383137314,
+      "residual_pct": 19.952806322607387,
+      "missing_components": [],
+      "tiled_kernel_observed": true
+    }
+  ]
+}

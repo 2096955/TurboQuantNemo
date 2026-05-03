@@ -1,0 +1,139 @@
+{
+  "harness": "benchmark_nvfp4_isoquant",
+  "profile": "custom-4096p512d",
+  "prefill_tokens": 4096,
+  "decode_tokens": 512,
+  "seed": 42,
+  "isoquant_bits": 3,
+  "expert_offload": false,
+  "models": {
+    "baseline": {
+      "path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-4bit",
+      "quant": "affine-4bit"
+    },
+    "nvfp4": {
+      "path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+      "quant": "nvfp4-4bit"
+    }
+  },
+  "runs": {
+    "baseline_default": {
+      "status": "skipped",
+      "reason": "user --skip"
+    },
+    "baseline_isoquant": {
+      "status": "skipped",
+      "reason": "user --skip"
+    },
+    "nvfp4_default": {
+      "profile": "custom-4096p512d",
+      "load_time_s": 3.685651041989331,
+      "peak_memory_after_load_mb": 18605.02954864502,
+      "system_after_load": {
+        "process_rss_mb": 19394.2,
+        "swap_used_mb": 3859.88,
+        "vm_pages_paged_out": null
+      },
+      "prefill_plus_first_token_s": 5.429927624994889,
+      "prefill_step_size": 64,
+      "decode_tok_per_s": 109.98539084886887,
+      "decode_split_point_tokens": null,
+      "decode_first_half_tok_per_s": null,
+      "decode_second_half_tok_per_s": null,
+      "peak_memory_mb": 18772.6338596344,
+      "kv_cache_type": "default",
+      "expert_offload": false,
+      "use_predictor": false,
+      "use_dedekimi_observer": false,
+      "task_expert_cliques": false,
+      "expert_cache": {},
+      "kv_cache": null,
+      "warm_second_pass": false,
+      "warm_pass_decode_tok_per_s": null,
+      "warm_pass_peak_memory_mb": null,
+      "warm_pass_expert_cache": {},
+      "system_at_end": {
+        "process_rss_mb": 19404.89,
+        "swap_used_mb": 3859.88,
+        "vm_pages_paged_out": null
+      },
+      "target_envelope_mb": null,
+      "status": "ok",
+      "label": "nvfp4+defaultKV",
+      "model_path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+      "model_quant": "nvfp4-4bit"
+    },
+    "nvfp4_isoquant": {
+      "profile": "custom-4096p512d",
+      "load_time_s": 1.273921291998704,
+      "peak_memory_after_load_mb": 18605.029550552368,
+      "system_after_load": {
+        "process_rss_mb": 19564.48,
+        "swap_used_mb": 3859.88,
+        "vm_pages_paged_out": null
+      },
+      "prefill_plus_first_token_s": 6.775265832999139,
+      "prefill_step_size": 64,
+      "decode_tok_per_s": 50.644502187058464,
+      "decode_split_point_tokens": null,
+      "decode_first_half_tok_per_s": null,
+      "decode_second_half_tok_per_s": null,
+      "peak_memory_mb": 19153.156480789185,
+      "kv_cache_type": "isoquant",
+      "expert_offload": false,
+      "use_predictor": false,
+      "use_dedekimi_observer": false,
+      "task_expert_cliques": false,
+      "expert_cache": {},
+      "kv_cache": {
+        "prefill_calls": 640,
+        "prefill_tokens": 40950,
+        "decode_calls": 5130,
+        "decode_tokens": 5130,
+        "compress_calls": 10280,
+        "decompress_calls": 0,
+        "read_keys_calls": 640,
+        "read_values_calls": 640,
+        "finalize_calls": 10,
+        "fused_metal_attempts": 5130,
+        "fused_metal_failures": 0,
+        "packed_cache_hits": 10260,
+        "packed_cache_misses": 0,
+        "fallback_invocations": 0,
+        "unfused_fallback_calls": 0,
+        "packed_key_repack_ms": 0,
+        "packed_value_repack_ms": 0,
+        "fused_qk_ms": 0,
+        "fused_softmax_ms": 0,
+        "fused_value_ms": 0,
+        "fused_value_tiled_ms": 0,
+        "fused_inverse_ms": 0,
+        "fused_single_kernel_ms": 0,
+        "fused_metal_total_ms": 0,
+        "decode_key_compress_ms": 0,
+        "decode_value_compress_ms": 0,
+        "decode_concat_ms": 0,
+        "packed_cache_hit_rate": 1.0,
+        "fused_metal_success_rate": 1.0,
+        "packed_repack_ms_total": 0,
+        "fused_kernel_ms_total": 0,
+        "decode_write_ms_total": 0
+      },
+      "warm_second_pass": false,
+      "warm_pass_decode_tok_per_s": null,
+      "warm_pass_peak_memory_mb": null,
+      "warm_pass_expert_cache": {},
+      "system_at_end": {
+        "process_rss_mb": 19540.73,
+        "swap_used_mb": 3859.88,
+        "vm_pages_paged_out": null
+      },
+      "target_envelope_mb": null,
+      "status": "ok",
+      "label": "nvfp4+isoquant",
+      "model_path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+      "model_quant": "nvfp4-4bit"
+    }
+  },
+  "deltas": {}
+}

@@ -1,0 +1,532 @@
+{
+  "model": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+  "decode_steps": 80,
+  "repeats": 5,
+  "timestamp": "2026-04-28T14:54:33Z",
+  "configs_per_T": [
+    {
+      "T": 4096,
+      "measurements": {
+        "baseline": {
+          "mean": 11.394702187499206,
+          "median": 11.581175524952414,
+          "std": 0.4254922338490434,
+          "p25": 11.358402600035333,
+          "p75": 11.622303637523146,
+          "samples": [
+            10.595090112474281,
+            11.581175524952414,
+            11.816539062510856,
+            11.622303637523146,
+            11.358402600035333
+          ],
+          "label": "Default KV (no IsoQuant)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 0,
+            "total_layers": 40,
+            "flags": {}
+          },
+          "activation_after": {}
+        },
+        "iso": {
+          "mean": 19.69333020999329,
+          "median": 19.716852087458392,
+          "std": 0.14385893023036744,
+          "p25": 19.544206249975105,
+          "p75": 19.74556927507365,
+          "samples": [
+            19.92400364997593,
+            19.74556927507365,
+            19.544206249975105,
+            19.716852087458392,
+            19.536019787483383
+          ],
+          "label": "IsoQuant (FUSED_ENCODE=0, NPT8=1, concat)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": false,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "concat_append",
+              "use_metal_runtime": false
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": false,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        },
+        "fused_enc": {
+          "mean": 18.601257290010835,
+          "median": 18.490276037482545,
+          "std": 0.21910795092105,
+          "p25": 18.46711093749036,
+          "p75": 18.835442712497752,
+          "samples": [
+            18.32849582506242,
+            18.835442712497752,
+            18.46711093749036,
+            18.8849609375211,
+            18.490276037482545
+          ],
+          "label": "IsoQuant (FUSED_ENCODE=1, NPT8=1, concat)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": true,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "concat_append",
+              "use_metal_runtime": false
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": true,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        },
+        "no_npt8": {
+          "mean": 20.822833227484807,
+          "median": 20.84941302500738,
+          "std": 0.21868586950177474,
+          "p25": 20.7491385499452,
+          "p75": 21.000539575015864,
+          "samples": [
+            21.000539575015864,
+            21.06808019998425,
+            20.44699478747134,
+            20.7491385499452,
+            20.84941302500738
+          ],
+          "label": "IsoQuant (FUSED_ENCODE=0, NPT8=0, concat)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": false,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "concat_append",
+              "use_metal_runtime": false
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": false,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        },
+        "prealloc": {
+          "mean": 19.250111352503154,
+          "median": 19.22309009996752,
+          "std": 0.15762847982110204,
+          "p25": 19.18718281249312,
+          "p75": 19.293434900009743,
+          "samples": [
+            19.22309009996752,
+            19.18718281249312,
+            19.293434900009743,
+            19.03199166254126,
+            19.514857287504128
+          ],
+          "label": "IsoQuant (FUSED_ENCODE=0, NPT8=1, prealloc)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": false,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "prealloc",
+              "use_metal_runtime": false
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": false,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        },
+        "metal_rot": {
+          "mean": 20.249948542495986,
+          "median": 20.276085937439348,
+          "std": 0.1697198471686444,
+          "p25": 20.06853177499579,
+          "p75": 20.33332343744405,
+          "samples": [
+            20.06853177499579,
+            20.276085937439348,
+            20.33332343744405,
+            20.061298437576625,
+            20.510503125024115
+          ],
+          "label": "IsoQuant (FUSED_ENCODE=0, NPT8=1, USE_METAL=1)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": false,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "concat_append",
+              "use_metal_runtime": true
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": false,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        },
+        "no_inv_rot": {
+          "mean": 18.075767290029034,
+          "median": 17.928363537521363,
+          "std": 0.23731728094767277,
+          "p25": 17.896148437557713,
+          "p75": 18.251292187505896,
+          "samples": [
+            18.455918750078126,
+            17.896148437557713,
+            18.251292187505896,
+            17.847113537482073,
+            17.928363537521363
+          ],
+          "label": "IsoQuant, inverse rotation \u2192 identity (SYNTHETIC)",
+          "synthetic": true,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": false,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "concat_append",
+              "use_metal_runtime": false
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": false,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        }
+      },
+      "gap_ms": 8.135676562505978,
+      "deltas": {
+        "baseline": {
+          "delta_ms": 8.135676562505978,
+          "pct_of_gap": 100.0
+        },
+        "iso": {
+          "delta_ms": 0.0,
+          "pct_of_gap": 0.0
+        },
+        "fused_enc": {
+          "delta_ms": 1.2265760499758471,
+          "pct_of_gap": 15.07650950172524
+        },
+        "no_npt8": {
+          "delta_ms": -1.1325609375489876,
+          "pct_of_gap": -13.920918916178405
+        },
+        "prealloc": {
+          "delta_ms": 0.4937619874908705,
+          "pct_of_gap": 6.069095590235465
+        },
+        "metal_rot": {
+          "delta_ms": -0.5592338499809557,
+          "pct_of_gap": -6.873845656035995
+        },
+        "no_inv_rot": {
+          "delta_ms": 1.7884885499370284,
+          "pct_of_gap": 21.983279893149195
+        }
+      }
+    },
+    {
+      "T": 8192,
+      "measurements": {
+        "baseline": {
+          "mean": 11.507855835025111,
+          "median": 11.472241150022455,
+          "std": 0.10011788203252853,
+          "p25": 11.470732812540518,
+          "p75": 11.495639062468399,
+          "samples": [
+            11.470732812540518,
+            11.495639062468399,
+            11.698173437525838,
+            11.472241150022455,
+            11.402492712568346
+          ],
+          "label": "Default KV (no IsoQuant)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 0,
+            "total_layers": 40,
+            "flags": {}
+          },
+          "activation_after": {}
+        },
+        "iso": {
+          "mean": 20.1382591699803,
+          "median": 19.599026049945678,
+          "std": 1.010388053553134,
+          "p25": 19.574106250001932,
+          "p75": 19.793268749981507,
+          "samples": [
+            19.599026049945678,
+            19.574106250001932,
+            19.572590112511534,
+            22.152304687460855,
+            19.793268749981507
+          ],
+          "label": "IsoQuant (FUSED_ENCODE=0, NPT8=1, concat)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": false,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "concat_append",
+              "use_metal_runtime": false
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": false,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        },
+        "fused_enc": {
+          "mean": 18.642408955020073,
+          "median": 18.65171978752187,
+          "std": 0.0780304287191355,
+          "p25": 18.644114062499284,
+          "p75": 18.70924635004485,
+          "samples": [
+            18.70924635004485,
+            18.644114062499284,
+            18.49657968750762,
+            18.65171978752187,
+            18.710384887526743
+          ],
+          "label": "IsoQuant (FUSED_ENCODE=1, NPT8=1, concat)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": true,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "concat_append",
+              "use_metal_runtime": false
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": true,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        },
+        "no_npt8": {
+          "mean": 22.690338230022462,
+          "median": 22.655981775005785,
+          "std": 0.06669161393172049,
+          "p25": 22.633403637519223,
+          "p75": 22.741227612459625,
+          "samples": [
+            22.625653650084132,
+            22.795424475043546,
+            22.633403637519223,
+            22.655981775005785,
+            22.741227612459625
+          ],
+          "label": "IsoQuant (FUSED_ENCODE=0, NPT8=0, concat)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": false,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "concat_append",
+              "use_metal_runtime": false
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": false,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        },
+        "prealloc": {
+          "mean": 19.007528747515607,
+          "median": 19.035005724981602,
+          "std": 0.43866492075692687,
+          "p25": 18.844547912522103,
+          "p75": 19.16356666251886,
+          "samples": [
+            19.035005724981602,
+            18.844547912522103,
+            19.16356666251886,
+            18.32262916250329,
+            19.671894275052182
+          ],
+          "label": "IsoQuant (FUSED_ENCODE=0, NPT8=1, prealloc)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": false,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "prealloc",
+              "use_metal_runtime": false
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": false,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        },
+        "metal_rot": {
+          "mean": 20.925985107496672,
+          "median": 20.986388549954427,
+          "std": 0.25243340836193606,
+          "p25": 20.825925525059574,
+          "p75": 21.123823437483225,
+          "samples": [
+            21.20277448748311,
+            20.491013537503022,
+            20.986388549954427,
+            20.825925525059574,
+            21.123823437483225
+          ],
+          "label": "IsoQuant (FUSED_ENCODE=0, NPT8=1, USE_METAL=1)",
+          "synthetic": false,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": false,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "concat_append",
+              "use_metal_runtime": true
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": false,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        },
+        "no_inv_rot": {
+          "mean": 19.488446872510394,
+          "median": 19.493277600031433,
+          "std": 0.10429023431165188,
+          "p25": 19.43651197498184,
+          "p75": 19.5920109375038,
+          "samples": [
+            19.319963012549124,
+            19.43651197498184,
+            19.493277600031433,
+            19.600470837485773,
+            19.5920109375038
+          ],
+          "label": "IsoQuant, inverse rotation \u2192 identity (SYNTHETIC)",
+          "synthetic": true,
+          "activation_before": {
+            "iso_layers": 10,
+            "total_layers": 40,
+            "flags": {
+              "head_dim": 256,
+              "bit_width": 3,
+              "fused_encode": false,
+              "fused_metal_ok": null,
+              "supports_fused": true,
+              "cache_mode": "concat_append",
+              "use_metal_runtime": false
+            }
+          },
+          "activation_after": {
+            "fused_encode_after": false,
+            "fused_metal_ok_after": true,
+            "fallback_after": false
+          }
+        }
+      },
+      "gap_ms": 8.126784899923223,
+      "deltas": {
+        "baseline": {
+          "delta_ms": 8.126784899923223,
+          "pct_of_gap": 100.0
+        },
+        "iso": {
+          "delta_ms": 0.0,
+          "pct_of_gap": 0.0
+        },
+        "fused_enc": {
+          "delta_ms": 0.9473062624238082,
+          "pct_of_gap": 11.656593278760925
+        },
+        "no_npt8": {
+          "delta_ms": -3.0569557250601065,
+          "pct_of_gap": -37.61580702214706
+        },
+        "prealloc": {
+          "delta_ms": 0.5640203249640763,
+          "pct_of_gap": 6.940263977817413
+        },
+        "metal_rot": {
+          "delta_ms": -1.3873625000087486,
+          "pct_of_gap": -17.071480506662056
+        },
+        "no_inv_rot": {
+          "delta_ms": 0.1057484499142447,
+          "pct_of_gap": 1.30123352859067
+        }
+      }
+    }
+  ]
+}
