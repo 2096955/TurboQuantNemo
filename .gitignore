@@ -90,3 +90,21 @@ README_TurboQuantNemo.md
 .DS_Store
 Thumbs.db
 .worktrees/
+
+# Editor / merge backups
+*.bak
+*.orig
+
+# Runtime evidence outputs (regenerable)
+results/agent_memory_eval/
+results/comparison/
+results/profile/
+results/runs/
+results/soak/
+results/soak_nemotron120b/
+results/v1_diagnostics/
+artifacts/failure-boundary/
+artifacts/kimi_k26_predictor/
+artifacts/load-test/
+artifacts/stock-comparison/
+artifacts/variance/
