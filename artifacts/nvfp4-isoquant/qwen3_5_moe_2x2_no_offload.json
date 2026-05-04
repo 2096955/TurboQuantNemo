@@ -1,0 +1,237 @@
+{
+  "harness": "benchmark_nvfp4_isoquant",
+  "profile": "A",
+  "prefill_tokens": 512,
+  "decode_tokens": 128,
+  "seed": 42,
+  "isoquant_bits": 3,
+  "expert_offload": false,
+  "models": {
+    "baseline": {
+      "path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-4bit",
+      "quant": "affine-4bit"
+    },
+    "nvfp4": {
+      "path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+      "quant": "nvfp4-4bit"
+    }
+  },
+  "runs": {
+    "baseline_default": {
+      "profile": "A",
+      "load_time_s": 3.9087403332814574,
+      "peak_memory_after_load_mb": 18605.02954864502,
+      "system_after_load": {
+        "process_rss_mb": 19405.14,
+        "swap_used_mb": 40191.62,
+        "vm_pages_paged_out": null
+      },
+      "prefill_plus_first_token_s": 1.1033490407280624,
+      "prefill_step_size": 64,
+      "decode_tok_per_s": 112.22180161298446,
+      "decode_split_point_tokens": null,
+      "decode_first_half_tok_per_s": null,
+      "decode_second_half_tok_per_s": null,
+      "peak_memory_mb": 18695.388010025024,
+      "kv_cache_type": "default",
+      "expert_offload": false,
+      "use_predictor": false,
+      "use_dedekimi_observer": false,
+      "task_expert_cliques": false,
+      "expert_cache": {},
+      "kv_cache": null,
+      "warm_second_pass": false,
+      "warm_pass_decode_tok_per_s": null,
+      "warm_pass_peak_memory_mb": null,
+      "warm_pass_expert_cache": {},
+      "system_at_end": {
+        "process_rss_mb": 19415.61,
+        "swap_used_mb": 40191.62,
+        "vm_pages_paged_out": null
+      },
+      "target_envelope_mb": null,
+      "status": "ok",
+      "label": "baseline+defaultKV",
+      "model_path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-4bit",
+      "model_quant": "affine-4bit"
+    },
+    "baseline_isoquant": {
+      "profile": "A",
+      "load_time_s": 1.767704791855067,
+      "peak_memory_after_load_mb": 18605.029550552368,
+      "system_after_load": {
+        "process_rss_mb": 19601.72,
+        "swap_used_mb": 40191.62,
+        "vm_pages_paged_out": null
+      },
+      "prefill_plus_first_token_s": 2.3645025831647217,
+      "prefill_step_size": 64,
+      "decode_tok_per_s": 30.974148461760567,
+      "decode_split_point_tokens": null,
+      "decode_first_half_tok_per_s": null,
+      "decode_second_half_tok_per_s": null,
+      "peak_memory_mb": 19582.515562057495,
+      "kv_cache_type": "isoquant",
+      "expert_offload": false,
+      "use_predictor": false,
+      "use_dedekimi_observer": false,
+      "task_expert_cliques": false,
+      "expert_cache": {},
+      "kv_cache": {
+        "prefill_calls": 80,
+        "prefill_tokens": 5110,
+        "decode_calls": 1290,
+        "decode_tokens": 1290,
+        "compress_calls": 2600,
+        "decompress_calls": 0,
+        "read_keys_calls": 80,
+        "read_values_calls": 80,
+        "finalize_calls": 10,
+        "fused_metal_attempts": 1290,
+        "fused_metal_failures": 0,
+        "packed_cache_hits": 0,
+        "packed_cache_misses": 2580,
+        "fallback_invocations": 0,
+        "unfused_fallback_calls": 0,
+        "packed_cache_hit_rate": 0.0,
+        "fused_metal_success_rate": 1.0
+      },
+      "warm_second_pass": false,
+      "warm_pass_decode_tok_per_s": null,
+      "warm_pass_peak_memory_mb": null,
+      "warm_pass_expert_cache": {},
+      "system_at_end": {
+        "process_rss_mb": 19611.19,
+        "swap_used_mb": 40191.62,
+        "vm_pages_paged_out": null
+      },
+      "target_envelope_mb": null,
+      "status": "ok",
+      "label": "baseline+isoquant",
+      "model_path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-4bit",
+      "model_quant": "affine-4bit"
+    },
+    "nvfp4_default": {
+      "profile": "A",
+      "load_time_s": 3.830310415942222,
+      "peak_memory_after_load_mb": 18605.05274772644,
+      "system_after_load": {
+        "process_rss_mb": 21739.89,
+        "swap_used_mb": 40191.62,
+        "vm_pages_paged_out": null
+      },
+      "prefill_plus_first_token_s": 1.2830532495863736,
+      "prefill_step_size": 64,
+      "decode_tok_per_s": 107.45178857285629,
+      "decode_split_point_tokens": null,
+      "decode_first_half_tok_per_s": null,
+      "decode_second_half_tok_per_s": null,
+      "peak_memory_mb": 18695.442457199097,
+      "kv_cache_type": "default",
+      "expert_offload": false,
+      "use_predictor": false,
+      "use_dedekimi_observer": false,
+      "task_expert_cliques": false,
+      "expert_cache": {},
+      "kv_cache": null,
+      "warm_second_pass": false,
+      "warm_pass_decode_tok_per_s": null,
+      "warm_pass_peak_memory_mb": null,
+      "warm_pass_expert_cache": {},
+      "system_at_end": {
+        "process_rss_mb": 19690.73,
+        "swap_used_mb": 40191.62,
+        "vm_pages_paged_out": null
+      },
+      "target_envelope_mb": null,
+      "status": "ok",
+      "label": "nvfp4+defaultKV",
+      "model_path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+      "model_quant": "nvfp4-4bit"
+    },
+    "nvfp4_isoquant": {
+      "profile": "A",
+      "load_time_s": 1.652575375046581,
+      "peak_memory_after_load_mb": 18605.029554367065,
+      "system_after_load": {
+        "process_rss_mb": 19802.08,
+        "swap_used_mb": 40191.62,
+        "vm_pages_paged_out": null
+      },
+      "prefill_plus_first_token_s": 2.235847792122513,
+      "prefill_step_size": 64,
+      "decode_tok_per_s": 46.27826000805735,
+      "decode_split_point_tokens": null,
+      "decode_first_half_tok_per_s": null,
+      "decode_second_half_tok_per_s": null,
+      "peak_memory_mb": 18858.606412887573,
+      "kv_cache_type": "isoquant",
+      "expert_offload": false,
+      "use_predictor": false,
+      "use_dedekimi_observer": false,
+      "task_expert_cliques": false,
+      "expert_cache": {},
+      "kv_cache": {
+        "prefill_calls": 80,
+        "prefill_tokens": 5110,
+        "decode_calls": 1290,
+        "decode_tokens": 1290,
+        "compress_calls": 2600,
+        "decompress_calls": 0,
+        "read_keys_calls": 80,
+        "read_values_calls": 80,
+        "finalize_calls": 10,
+        "fused_metal_attempts": 1290,
+        "fused_metal_failures": 0,
+        "packed_cache_hits": 0,
+        "packed_cache_misses": 2580,
+        "fallback_invocations": 0,
+        "unfused_fallback_calls": 0,
+        "packed_cache_hit_rate": 0.0,
+        "fused_metal_success_rate": 1.0
+      },
+      "warm_second_pass": false,
+      "warm_pass_decode_tok_per_s": null,
+      "warm_pass_peak_memory_mb": null,
+      "warm_pass_expert_cache": {},
+      "system_at_end": {
+        "process_rss_mb": 19771.78,
+        "swap_used_mb": 40191.62,
+        "vm_pages_paged_out": null
+      },
+      "target_envelope_mb": null,
+      "status": "ok",
+      "label": "nvfp4+isoquant",
+      "model_path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+      "model_quant": "nvfp4-4bit"
+    }
+  },
+  "deltas": {
+    "isoquant_only_vs_baseline": {
+      "decode_tps_delta_pct": -72.4,
+      "prefill_ttft_delta_pct": 114.3,
+      "peak_mem_delta_pct": 4.75
+    },
+    "nvfp4_only_vs_baseline": {
+      "decode_tps_delta_pct": -4.25,
+      "prefill_ttft_delta_pct": 16.29,
+      "peak_mem_delta_pct": 0.0
+    },
+    "combined_vs_baseline": {
+      "decode_tps_delta_pct": -58.76,
+      "prefill_ttft_delta_pct": 102.64,
+      "peak_mem_delta_pct": 0.87
+    },
+    "independence_check": {
+      "iso_factor_vs_baseline": 0.276,
+      "nvfp4_factor_vs_baseline": 0.9575,
+      "combined_factor_vs_baseline": 0.4124,
+      "predicted_combined_factor_multiplicative": 0.2643,
+      "predicted_combined_tok_per_s": 29.66,
+      "actual_combined_tok_per_s": 46.28,
+      "actual_over_predicted_ratio": 1.5604,
+      "interpretation": "actual exceeds independent-effects prediction (constructive interaction — overheads overlap or share a bottleneck)",
+      "note": "Two changes are independent if their effects compose multiplicatively. Adding percentage deltas overstates the combined effect for two throughput-reducing changes and is mathematically incorrect."
+    }
+  }
+}

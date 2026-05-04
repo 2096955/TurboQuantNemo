@@ -1,0 +1,50 @@
+{
+  "profile": "A",
+  "load_time_s": 1.7821555000264198,
+  "peak_memory_after_load_mb": 1288.4493598937988,
+  "system_after_load": {
+    "process_rss_mb": 2133.39,
+    "swap_used_mb": 23479.56,
+    "vm_pages_paged_out": null
+  },
+  "prefill_plus_first_token_s": 24.36588462512009,
+  "prefill_step_size": 64,
+  "decode_tok_per_s": 1.0123642981341283,
+  "decode_split_point_tokens": null,
+  "decode_first_half_tok_per_s": null,
+  "decode_second_half_tok_per_s": null,
+  "peak_memory_mb": 2444.992280960083,
+  "kv_cache_type": "default",
+  "expert_offload": true,
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "task_expert_cliques": false,
+  "expert_cache": {
+    "hits": 0,
+    "misses": 36272,
+    "evictions": 36256,
+    "hit_rate": 0.0,
+    "prefill_hits": 0,
+    "prefill_misses": 5312,
+    "prefill_hit_rate": 0.0,
+    "decode_hits": 0,
+    "decode_misses": 30960,
+    "decode_hit_rate": 0.0,
+    "avg_load_ms": 3.8448335055799405,
+    "resident_slots": 16,
+    "prefill_gather_calls": 240,
+    "decode_gather_calls": 3870,
+    "prefetch_requests": 0,
+    "prefetch_already_cached": 0
+  },
+  "warm_second_pass": false,
+  "warm_pass_decode_tok_per_s": null,
+  "warm_pass_peak_memory_mb": null,
+  "warm_pass_expert_cache": {},
+  "system_at_end": {
+    "process_rss_mb": 2456.23,
+    "swap_used_mb": 23479.56,
+    "vm_pages_paged_out": null
+  },
+  "target_envelope_mb": null
+}

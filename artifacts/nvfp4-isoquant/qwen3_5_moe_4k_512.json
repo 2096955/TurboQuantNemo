@@ -1,0 +1,237 @@
+{
+  "harness": "benchmark_nvfp4_isoquant",
+  "profile": "custom-4096p512d",
+  "prefill_tokens": 4096,
+  "decode_tokens": 512,
+  "seed": 42,
+  "isoquant_bits": 3,
+  "expert_offload": false,
+  "models": {
+    "baseline": {
+      "path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-4bit",
+      "quant": "affine-4bit"
+    },
+    "nvfp4": {
+      "path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+      "quant": "nvfp4-4bit"
+    }
+  },
+  "runs": {
+    "baseline_default": {
+      "profile": "A",
+      "load_time_s": 4.075224457774311,
+      "peak_memory_after_load_mb": 18605.02954864502,
+      "system_after_load": {
+        "process_rss_mb": 19396.09,
+        "swap_used_mb": 40143.62,
+        "vm_pages_paged_out": null
+      },
+      "prefill_plus_first_token_s": 5.9986967500299215,
+      "prefill_step_size": 64,
+      "decode_tok_per_s": 107.64545160816436,
+      "decode_split_point_tokens": null,
+      "decode_first_half_tok_per_s": null,
+      "decode_second_half_tok_per_s": null,
+      "peak_memory_mb": 18772.6338596344,
+      "kv_cache_type": "default",
+      "expert_offload": false,
+      "use_predictor": false,
+      "use_dedekimi_observer": false,
+      "task_expert_cliques": false,
+      "expert_cache": {},
+      "kv_cache": null,
+      "warm_second_pass": false,
+      "warm_pass_decode_tok_per_s": null,
+      "warm_pass_peak_memory_mb": null,
+      "warm_pass_expert_cache": {},
+      "system_at_end": {
+        "process_rss_mb": 19406.67,
+        "swap_used_mb": 40143.62,
+        "vm_pages_paged_out": null
+      },
+      "target_envelope_mb": null,
+      "status": "ok",
+      "label": "baseline+defaultKV",
+      "model_path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-4bit",
+      "model_quant": "affine-4bit"
+    },
+    "baseline_isoquant": {
+      "profile": "A",
+      "load_time_s": 1.5420944169163704,
+      "peak_memory_after_load_mb": 18605.029550552368,
+      "system_after_load": {
+        "process_rss_mb": 19561.94,
+        "swap_used_mb": 40143.62,
+        "vm_pages_paged_out": null
+      },
+      "prefill_plus_first_token_s": 8.099549500271678,
+      "prefill_step_size": 64,
+      "decode_tok_per_s": 16.457918238136365,
+      "decode_split_point_tokens": null,
+      "decode_first_half_tok_per_s": null,
+      "decode_second_half_tok_per_s": null,
+      "peak_memory_mb": 20474.319261550903,
+      "kv_cache_type": "isoquant",
+      "expert_offload": false,
+      "use_predictor": false,
+      "use_dedekimi_observer": false,
+      "task_expert_cliques": false,
+      "expert_cache": {},
+      "kv_cache": {
+        "prefill_calls": 640,
+        "prefill_tokens": 40950,
+        "decode_calls": 5130,
+        "decode_tokens": 5130,
+        "compress_calls": 10280,
+        "decompress_calls": 0,
+        "read_keys_calls": 640,
+        "read_values_calls": 640,
+        "finalize_calls": 10,
+        "fused_metal_attempts": 5130,
+        "fused_metal_failures": 0,
+        "packed_cache_hits": 0,
+        "packed_cache_misses": 10260,
+        "fallback_invocations": 0,
+        "unfused_fallback_calls": 0,
+        "packed_cache_hit_rate": 0.0,
+        "fused_metal_success_rate": 1.0
+      },
+      "warm_second_pass": false,
+      "warm_pass_decode_tok_per_s": null,
+      "warm_pass_peak_memory_mb": null,
+      "warm_pass_expert_cache": {},
+      "system_at_end": {
+        "process_rss_mb": 19569.45,
+        "swap_used_mb": 40143.62,
+        "vm_pages_paged_out": null
+      },
+      "target_envelope_mb": null,
+      "status": "ok",
+      "label": "baseline+isoquant",
+      "model_path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-4bit",
+      "model_quant": "affine-4bit"
+    },
+    "nvfp4_default": {
+      "profile": "A",
+      "load_time_s": 3.919445125386119,
+      "peak_memory_after_load_mb": 18605.033338546753,
+      "system_after_load": {
+        "process_rss_mb": 21706.66,
+        "swap_used_mb": 40143.62,
+        "vm_pages_paged_out": null
+      },
+      "prefill_plus_first_token_s": 6.053021874744445,
+      "prefill_step_size": 64,
+      "decode_tok_per_s": 101.33144637761885,
+      "decode_split_point_tokens": null,
+      "decode_first_half_tok_per_s": null,
+      "decode_second_half_tok_per_s": null,
+      "peak_memory_mb": 18772.637647628784,
+      "kv_cache_type": "default",
+      "expert_offload": false,
+      "use_predictor": false,
+      "use_dedekimi_observer": false,
+      "task_expert_cliques": false,
+      "expert_cache": {},
+      "kv_cache": null,
+      "warm_second_pass": false,
+      "warm_pass_decode_tok_per_s": null,
+      "warm_pass_peak_memory_mb": null,
+      "warm_pass_expert_cache": {},
+      "system_at_end": {
+        "process_rss_mb": 19660.47,
+        "swap_used_mb": 40143.62,
+        "vm_pages_paged_out": null
+      },
+      "target_envelope_mb": null,
+      "status": "ok",
+      "label": "nvfp4+defaultKV",
+      "model_path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+      "model_quant": "nvfp4-4bit"
+    },
+    "nvfp4_isoquant": {
+      "profile": "A",
+      "load_time_s": 1.6776022077538073,
+      "peak_memory_after_load_mb": 18605.029554367065,
+      "system_after_load": {
+        "process_rss_mb": 19781.66,
+        "swap_used_mb": 40143.62,
+        "vm_pages_paged_out": null
+      },
+      "prefill_plus_first_token_s": 8.337584624998271,
+      "prefill_step_size": 64,
+      "decode_tok_per_s": 19.828821182546978,
+      "decode_split_point_tokens": null,
+      "decode_first_half_tok_per_s": null,
+      "decode_second_half_tok_per_s": null,
+      "peak_memory_mb": 19110.15637397766,
+      "kv_cache_type": "isoquant",
+      "expert_offload": false,
+      "use_predictor": false,
+      "use_dedekimi_observer": false,
+      "task_expert_cliques": false,
+      "expert_cache": {},
+      "kv_cache": {
+        "prefill_calls": 640,
+        "prefill_tokens": 40950,
+        "decode_calls": 5130,
+        "decode_tokens": 5130,
+        "compress_calls": 10280,
+        "decompress_calls": 0,
+        "read_keys_calls": 640,
+        "read_values_calls": 640,
+        "finalize_calls": 10,
+        "fused_metal_attempts": 5130,
+        "fused_metal_failures": 0,
+        "packed_cache_hits": 0,
+        "packed_cache_misses": 10260,
+        "fallback_invocations": 0,
+        "unfused_fallback_calls": 0,
+        "packed_cache_hit_rate": 0.0,
+        "fused_metal_success_rate": 1.0
+      },
+      "warm_second_pass": false,
+      "warm_pass_decode_tok_per_s": null,
+      "warm_pass_peak_memory_mb": null,
+      "warm_pass_expert_cache": {},
+      "system_at_end": {
+        "process_rss_mb": 19749.06,
+        "swap_used_mb": 40143.62,
+        "vm_pages_paged_out": null
+      },
+      "target_envelope_mb": null,
+      "status": "ok",
+      "label": "nvfp4+isoquant",
+      "model_path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+      "model_quant": "nvfp4-4bit"
+    }
+  },
+  "deltas": {
+    "isoquant_only_vs_baseline": {
+      "decode_tps_delta_pct": -84.71,
+      "prefill_ttft_delta_pct": 35.02,
+      "peak_mem_delta_pct": 9.06
+    },
+    "nvfp4_only_vs_baseline": {
+      "decode_tps_delta_pct": -5.87,
+      "prefill_ttft_delta_pct": 0.91,
+      "peak_mem_delta_pct": 0.0
+    },
+    "combined_vs_baseline": {
+      "decode_tps_delta_pct": -81.58,
+      "prefill_ttft_delta_pct": 38.99,
+      "peak_mem_delta_pct": 1.8
+    },
+    "independence_check": {
+      "iso_factor_vs_baseline": 0.1529,
+      "nvfp4_factor_vs_baseline": 0.9413,
+      "combined_factor_vs_baseline": 0.1842,
+      "predicted_combined_factor_multiplicative": 0.1439,
+      "predicted_combined_tok_per_s": 15.49,
+      "actual_combined_tok_per_s": 19.83,
+      "actual_over_predicted_ratio": 1.2799,
+      "interpretation": "actual exceeds independent-effects prediction (constructive interaction \u2014 overheads overlap or share a bottleneck)",
+      "note": "Two changes are independent if their effects compose multiplicatively. Adding percentage deltas overstates the combined effect for two throughput-reducing changes and is mathematically incorrect."
+    }
+  }
+}

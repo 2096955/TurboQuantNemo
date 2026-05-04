@@ -1,0 +1,33 @@
+{
+  "profile": "A",
+  "load_time_s": 2.104293124983087,
+  "peak_memory_after_load_mb": 10454.199359893799,
+  "system_after_load": {
+    "process_rss_mb": 11264.23,
+    "swap_used_mb": 23439.56,
+    "vm_pages_paged_out": null
+  },
+  "prefill_plus_first_token_s": 0.9317928329110146,
+  "prefill_step_size": 64,
+  "decode_tok_per_s": 109.83064736553615,
+  "decode_split_point_tokens": null,
+  "decode_first_half_tok_per_s": null,
+  "decode_second_half_tok_per_s": null,
+  "peak_memory_mb": 10649.22142791748,
+  "kv_cache_type": "default",
+  "expert_offload": false,
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "task_expert_cliques": false,
+  "expert_cache": {},
+  "warm_second_pass": false,
+  "warm_pass_decode_tok_per_s": null,
+  "warm_pass_peak_memory_mb": null,
+  "warm_pass_expert_cache": {},
+  "system_at_end": {
+    "process_rss_mb": 11275.33,
+    "swap_used_mb": 23439.56,
+    "vm_pages_paged_out": null
+  },
+  "target_envelope_mb": null
+}

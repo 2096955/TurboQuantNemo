@@ -1,0 +1,42 @@
+{
+  "harness": "benchmark_nvfp4_isoquant",
+  "profile": "A",
+  "prefill_tokens": 512,
+  "decode_tokens": 128,
+  "seed": 42,
+  "isoquant_bits": 3,
+  "expert_offload": true,
+  "models": {
+    "baseline": {
+      "path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-4bit",
+      "quant": "affine-4bit"
+    },
+    "nvfp4": {
+      "path": "/Users/anthonylui/Models/Qwen3.6-35B-A3B-nvfp4",
+      "quant": "nvfp4-4bit"
+    }
+  },
+  "runs": {
+    "baseline_default": {
+      "status": "error",
+      "error_type": "ValueError",
+      "error": "expert_offload for qwen3_5_moe requires repacked per-expert weights. You must run `python -m mlx_lm.repack_experts` on this checkpoint first to split stacked SwitchGLU tensors."
+    },
+    "baseline_isoquant": {
+      "status": "error",
+      "error_type": "ValueError",
+      "error": "expert_offload for qwen3_5_moe requires repacked per-expert weights. You must run `python -m mlx_lm.repack_experts` on this checkpoint first to split stacked SwitchGLU tensors."
+    },
+    "nvfp4_default": {
+      "status": "error",
+      "error_type": "ValueError",
+      "error": "expert_offload for qwen3_5_moe requires repacked per-expert weights. You must run `python -m mlx_lm.repack_experts` on this checkpoint first to split stacked SwitchGLU tensors."
+    },
+    "nvfp4_isoquant": {
+      "status": "error",
+      "error_type": "ValueError",
+      "error": "expert_offload for qwen3_5_moe requires repacked per-expert weights. You must run `python -m mlx_lm.repack_experts` on this checkpoint first to split stacked SwitchGLU tensors."
+    }
+  },
+  "deltas": {}
+}
