@@ -264,7 +264,7 @@ static bool test_metal_vs_reference() {
     }
 
     isoquant::IsoQuantKVRuntime runtime(device);
-    if (!runtime.load_pipeline("isoquant_kv_kernels.metallib")) {
+    if (!runtime.load_pipeline(getenv("ISOQUANT_METALLIB_PATH") ? getenv("ISOQUANT_METALLIB_PATH") : "isoquant_kv_kernels.metallib")) {
         printf("SKIP (metallib not found — run cmake first)\n");
         device->release();
         return true;

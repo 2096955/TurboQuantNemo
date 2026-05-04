@@ -148,6 +148,19 @@ bool IsoQuantKVRuntime::load_pipeline(const std::string& metallib_path) {
         impl_->pso_value_accum_dim  = impl_->make_pso("fused_value_accum_3bit_dimparallel");
         impl_->pso_inverse_rot  = impl_->make_pso("inverse_rotation_wht_so4");
         impl_->pso_pack_indices = impl_->make_pso("pack_indices_3bit");
+
+        // HIGH 6: Validate threadgroup memory for D=512 kernel
+        if (impl_->pso_inverse_rot) {
+            size_t max_tg_mem = impl_->pso_inverse_rot->maxTotalThreadgroupMemory();
+            size_t required_tg_mem = 512 * sizeof(float);  // vec[512] in threadgroup
+            if (required_tg_mem > max_tg_mem) {
+                throw std::runtime_error(
+                    "Kernel inverse_rotation_wht_so4 requires " +
+                    std::to_string(required_tg_mem) + " bytes threadgroup memory, but device limit is " +
+                    std::to_string(max_tg_mem) + " bytes (D=512 may not fit on this GPU)"
+                );
+            }
+        }
         impl_->ready = true;
     } catch (...) {
         impl_->ready = false;
@@ -291,7 +304,9 @@ MTL::Buffer* IsoQuantKVRuntime::pack_indices(
     enc->setBytes(&total_values, sizeof(uint32_t), 2);
 
     MTL::Size grid(packed_count, 1, 1);
-    MTL::Size group(std::min(packed_count, 256u), 1, 1);
+    uint32_t tg_raw = std::min(packed_count, 256u);
+    uint32_t tg_size = (tg_raw > 0) ? (1u << (31 - __builtin_clz(tg_raw))) : 1u;
+    MTL::Size group(tg_size, 1, 1);
     enc->dispatchThreads(grid, group);
 
     enc->endEncoding();
@@ -651,21 +666,23 @@ void IsoQuantKVRuntime::fused_attention(
     // Allocate output on GPU
     auto out_buf = make_buffer(impl_->device, vec_bytes);
 
-    // Apply attention scale to query before dispatch
+    // Apply attention scale in a scratch buffer (do not mutate caller's data)
     // score = (q * scale) · k * norm
     // We bake scale into the query to avoid an extra pass.
-    auto q_ptr = static_cast<float*>(q_buf->contents());
+    auto q_scaled_buf = make_buffer(impl_->device, vec_bytes);
+    auto q_ptr = static_cast<float*>(q_scaled_buf->contents());
+    std::memcpy(q_ptr, query, vec_bytes);
     for (size_t i = 0; i < (size_t)H * D; ++i) {
         q_ptr[i] *= scale;
     }
 
-    fused_attention_gpu(cache, q_buf, scale, out_buf, threads_per_tg);
+    fused_attention_gpu(cache, q_scaled_buf, scale, out_buf, threads_per_tg);
 
     // Copy result back to host
     std::memcpy(output, out_buf->contents(), vec_bytes);
+    q_scaled_buf->release();
 
     q_buf->release();
     out_buf->release();
 }
 
-}  // namespace isoquant
