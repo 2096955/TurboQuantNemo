@@ -32,6 +32,7 @@ class _OffsetCache(_BaseCache):
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class ModelArgs(BaseModelArgs):
     model_type: str = "gemma4_text"
@@ -305,6 +306,24 @@ class Attention(nn.Module):
 
             output = scaled_dot_product_attention(
                 queries, keys, values, cache=None, scale=self.scale, mask=mask
+            )
+        elif isinstance(cache, TurboQuantKVCache) and not isinstance(
+            cache, IsoQuantKVCache
+        ):
+            keys_reconstructed = cache.reconstruct_keys()
+            values_reconstructed = cache.get_values()
+
+            if mask is not None and isinstance(mask, mx.array):
+                if mask.shape[-1] != keys_reconstructed.shape[-2]:
+                    mask = mask[..., -keys_reconstructed.shape[-2] :]
+
+            output = scaled_dot_product_attention(
+                queries,
+                keys_reconstructed,
+                values_reconstructed,
+                cache=None,
+                scale=self.scale,
+                mask=mask,
             )
         else:
             if mask is not None and isinstance(mask, mx.array):

@@ -26,6 +26,7 @@ from .switch_layers import SwitchGLU
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class ModelArgs(BaseModelArgs):
     model_type: str
@@ -113,6 +114,8 @@ class Qwen3NextAttention(nn.Module):
             max_position_embeddings=args.max_position_embeddings,
         )
 
+        self._isoquant_warned = False
+
     def __call__(
         self,
         x: mx.array,
@@ -163,7 +166,9 @@ class Qwen3NextAttention(nn.Module):
                 scale=self.scale,
                 mask=mask,
             )
-        elif isinstance(cache, TurboQuantKVCache) and not isinstance(cache, IsoQuantKVCache):
+        elif isinstance(cache, TurboQuantKVCache) and not isinstance(
+            cache, IsoQuantKVCache
+        ):
             keys_reconstructed = cache.reconstruct_keys()
             values_reconstructed = cache.get_values()
             output = scaled_dot_product_attention(

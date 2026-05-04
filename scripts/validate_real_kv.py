@@ -209,6 +209,32 @@ def prefill_then_teacher_forced_decode(
     # that defines finalize_deferred_prefill); no-op on default caches.
     finalize_deferred_kv_caches(cache)
 
+    # ---- Phase 2b: assert IsoQuant MLA caches are now fused-capable ----
+    # Codex audit HIGH 4: the harness must prove it actually exercises the
+    # fused NPT16 path, not silently validate the reconstruct fallback.
+    # If supports_fused_latent_attention is False here, the wrong code path
+    # is being measured (e.g. wrong --bits, wrong head_dim, finalize never ran).
+    try:
+        from mlx_lm.models.kimi_mla_isoquant_dkv import KimiMLAIsoQuantCache
+    except ImportError:
+        KimiMLAIsoQuantCache = None  # type: ignore[assignment]
+    if KimiMLAIsoQuantCache is not None:
+        non_fused = [
+            ci
+            for ci, c in enumerate(cache)
+            if isinstance(c, KimiMLAIsoQuantCache)
+            and not getattr(c, "supports_fused_latent_attention", False)
+        ]
+        if non_fused:
+            raise RuntimeError(
+                "IsoQuant MLA caches at indices "
+                f"{non_fused} report supports_fused_latent_attention=False after "
+                "finalize_deferred_kv_caches(); the harness would silently "
+                "validate the reconstruct fallback instead of the fused NPT16 "
+                "path. Check --bits (must be 3), head_dim, and that the model "
+                "actually has KimiMLAIsoQuantCache instances."
+            )
+
     # ---- Phase 3: teacher-forced decode loop ----
     # At step i, feed tokens[:, prefill_len + i : prefill_len + i + 1] and
     # capture the logit for predicting tokens[:, prefill_len + i + 1].
@@ -249,6 +275,32 @@ def compute_metrics(
             "ppl_drift": float("nan"),
             "mean_logit_cosine": float("nan"),
             "window_ppl_drifts": [],
+        }
+
+    # Codex audit HIGH 5: reject non-finite logits before any metric is computed.
+    # `nan < threshold` and `nan > threshold` both evaluate False, so a NaN-
+    # poisoned run would silently report PASS while metrics are nonsense.
+    if not np.isfinite(logits_ref).all():
+        return {
+            "n_compared_positions": int(n),
+            "top1_match_rate": float("nan"),
+            "ppl_ref": float("nan"),
+            "ppl_iso": float("nan"),
+            "ppl_drift": float("nan"),
+            "mean_logit_cosine": float("nan"),
+            "window_ppl_drifts": [],
+            "non_finite_reason": "FP16 reference logits contain NaN/Inf",
+        }
+    if not np.isfinite(logits_iso).all():
+        return {
+            "n_compared_positions": int(n),
+            "top1_match_rate": float("nan"),
+            "ppl_ref": float("nan"),
+            "ppl_iso": float("nan"),
+            "ppl_drift": float("nan"),
+            "mean_logit_cosine": float("nan"),
+            "window_ppl_drifts": [],
+            "non_finite_reason": "IsoQuant logits contain NaN/Inf",
         }
 
     ref = logits_ref
@@ -444,8 +496,16 @@ def evaluate_gate(
 ) -> GateVerdict:
     reasons: list[str] = []
 
+    # Codex audit HIGH 5: any non-finite metric is a hard FAIL. `nan < threshold`
+    # and `nan > threshold` both evaluate False, so without an explicit guard
+    # a NaN-poisoned run would silently report PASS.
     for r in results:
-        if r.top1_match_rate < top1_threshold:
+        if not math.isfinite(r.top1_match_rate):
+            reasons.append(
+                f"context={r.context_tokens}: top1_match_rate is non-finite "
+                f"({r.top1_match_rate}) — likely NaN/Inf in logits"
+            )
+        elif r.top1_match_rate < top1_threshold:
             reasons.append(
                 f"context={r.context_tokens}: top1_match_rate {r.top1_match_rate:.4f} "
                 f"< threshold {top1_threshold:.4f}"
@@ -459,7 +519,12 @@ def evaluate_gate(
             eight_k_results,
             key=lambda r: abs(r.context_tokens - eight_k_target),
         )
-        if anchor.ppl_drift > ppl_drift_threshold:
+        if not math.isfinite(anchor.ppl_drift):
+            reasons.append(
+                f"context={anchor.context_tokens}: ppl_drift is non-finite "
+                f"({anchor.ppl_drift}) — likely NaN/Inf in logits"
+            )
+        elif anchor.ppl_drift > ppl_drift_threshold:
             reasons.append(
                 f"context={anchor.context_tokens}: ppl_drift {anchor.ppl_drift:.4f} "
                 f"> §10 threshold {ppl_drift_threshold:.4f}"
@@ -467,7 +532,14 @@ def evaluate_gate(
 
     # §9 test 3: per-window drift slope must be ≤ tolerance.
     for r in results:
-        if r.long_context_slope is not None and r.long_context_slope > slope_tolerance:
+        if r.long_context_slope is None:
+            continue
+        if not math.isfinite(r.long_context_slope):
+            reasons.append(
+                f"context={r.context_tokens}: window-drift slope is non-finite "
+                f"({r.long_context_slope}) — likely NaN/Inf in per-window PPL"
+            )
+        elif r.long_context_slope > slope_tolerance:
             reasons.append(
                 f"context={r.context_tokens}: window-drift slope {r.long_context_slope:.4f} "
                 f"> tolerance {slope_tolerance:.4f} — possible RoPE smearing"

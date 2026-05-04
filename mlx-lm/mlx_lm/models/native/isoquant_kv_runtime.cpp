@@ -149,9 +149,14 @@ bool IsoQuantKVRuntime::load_pipeline(const std::string& metallib_path) {
         impl_->pso_inverse_rot  = impl_->make_pso("inverse_rotation_wht_so4");
         impl_->pso_pack_indices = impl_->make_pso("pack_indices_3bit");
 
-        // HIGH 6: Validate threadgroup memory for D=512 kernel
-        if (impl_->pso_inverse_rot) {
-            size_t max_tg_mem = impl_->pso_inverse_rot->maxTotalThreadgroupMemory();
+        // HIGH 6: Validate threadgroup memory for D=512 kernel against device limit.
+        // The kernel statically declares `threadgroup float vec[512]` (2048 bytes).
+        // MTL::Device::maxThreadgroupMemoryLength is the per-threadgroup byte cap
+        // (typically 32 KB on M1/M2, varies on M3/M4). We compare the kernel's
+        // requirement against the device cap at PSO setup so misconfiguration
+        // surfaces here, not as a Metal driver error at first dispatch.
+        if (impl_->pso_inverse_rot && impl_->device) {
+            size_t max_tg_mem = impl_->device->maxThreadgroupMemoryLength();
             size_t required_tg_mem = 512 * sizeof(float);  // vec[512] in threadgroup
             if (required_tg_mem > max_tg_mem) {
                 throw std::runtime_error(
