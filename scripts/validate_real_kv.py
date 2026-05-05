@@ -122,6 +122,11 @@ class ContextResult:
     long_context_slope: Optional[float] = None
     setup_seconds_ref: float = 0.0
     setup_seconds_iso: float = 0.0
+    # Codex audit: source-specific reason when compute_metrics rejected non-
+    # finite logits (e.g. "FP16 reference logits contain NaN/Inf" vs "IsoQuant
+    # logits contain NaN/Inf"). None on the happy path. Lets per-context JSON
+    # consumers attribute a NaN-poisoned gate failure to ref vs iso.
+    non_finite_reason: Optional[str] = None
 
 
 @dataclass
@@ -479,6 +484,7 @@ def evaluate_context(
         long_context_slope=slope,
         setup_seconds_ref=setup_ref,
         setup_seconds_iso=setup_iso,
+        non_finite_reason=metrics.get("non_finite_reason"),
     )
 
 

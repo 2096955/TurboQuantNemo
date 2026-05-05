@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 
@@ -167,8 +168,19 @@ bool IsoQuantKVRuntime::load_pipeline(const std::string& metallib_path) {
             }
         }
         impl_->ready = true;
+    } catch (const std::exception& e) {
+        // Codex audit: the prior `catch (...)` swallowed descriptive errors
+        // (e.g. the threadgroup-memory overflow throw at HIGH 6) so callers
+        // only saw load_pipeline() returning false. Capture and surface the
+        // message via stderr while preserving the bool return contract.
+        impl_->ready = false;
+        std::fprintf(stderr,
+            "IsoQuantKVRuntime::load_pipeline failed: %s\n", e.what());
+        return false;
     } catch (...) {
         impl_->ready = false;
+        std::fprintf(stderr,
+            "IsoQuantKVRuntime::load_pipeline failed (non-std exception)\n");
         return false;
     }
     return true;
