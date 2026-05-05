@@ -1,0 +1,33 @@
+============================= test session starts ==============================
+collecting ... collected 19 items
+
+mlx-lm/tests/test_fused_npt8.py::test_fused_npt8_matches_stable_3kernel_no_inverse_rotation PASSED [  5%]
+mlx-lm/tests/test_fused_npt8.py::test_fused_npt8_also_matches_tiled_v_accum_path PASSED [ 10%]
+mlx-lm/tests/test_fused_npt8.py::test_fused_npt8_with_mask PASSED        [ 15%]
+mlx-lm/tests/test_fused_npt8.py::test_fused_npt8_with_storage_stride PASSED [ 21%]
+mlx-lm/tests/test_fused_npt8.py::test_fused_npt8_inverse_rotation_non_identity PASSED [ 26%]
+mlx-lm/tests/test_fused_npt8.py::test_fused_npt8_with_hadamard PASSED    [ 31%]
+mlx-lm/tests/test_fused_npt8.py::test_npt8_cache_level_dispatch PASSED   [ 36%]
+mlx-lm/tests/test_fused_npt8.py::test_npt8_cache_level_prealloc_mode PASSED [ 42%]
+mlx-lm/tests/test_fused_npt8_tiled.py::test_tiled_matches_v1_single_pass PASSED [ 47%]
+mlx-lm/tests/test_fused_npt8_tiled.py::test_tiled_matches_3kernel_reference PASSED [ 52%]
+mlx-lm/tests/test_fused_npt8_tiled.py::test_tiled_with_partial_last_tile PASSED [ 57%]
+mlx-lm/tests/test_fused_npt8_tiled.py::test_tiled_with_mask PASSED       [ 63%]
+mlx-lm/tests/test_fused_npt8_tiled.py::test_tiled_with_storage_stride PASSED [ 68%]
+mlx-lm/tests/test_fused_npt8_tiled.py::test_tiled_with_rotation PASSED   [ 73%]
+mlx-lm/tests/test_fused_npt8_tiled.py::test_tiled_with_hadamard PASSED   [ 78%]
+mlx-lm/tests/test_fused_npt8_tiled.py::test_npt8_tiled_cache_level_dispatch PASSED [ 84%]
+mlx-lm/tests/test_fused_npt8_tiled.py::test_tiled_single_tile PASSED     [ 89%]
+mlx-lm/tests/test_fused_npt8_tiled.py::test_tiled_mha_no_gqa PASSED      [ 94%]
+mlx-lm/tests/test_fused_npt8_tiled.py::test_tiled_combined_mask_rotation_stride PASSED [100%]
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 19 passed, 2 warnings in 2.59s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
