@@ -1,0 +1,3 @@
+mlx-lm/tests/test_fused_npt8_tiled.py:300:        pytest.skip("IsoQuant fallback — no TQ codebook for D=256, 3-bit")
+mlx-lm/tests/test_fused_npt8.py:260:        pytest.skip("IsoQuant fallback — no TQ codebook for D=256, 3-bit")
+mlx-lm/tests/test_fused_npt8.py:326:        pytest.skip("IsoQuant fallback — no TQ codebook for D=256, 3-bit")

@@ -1,0 +1,4 @@
+d836434e35fe3bcde13050d388f5e14d9431c1ecdb8e49efac22df56e39e4a40  mlx-lm/tests/test_fused_npt8.py
+aa1d9cdc0ee8007733f28def0abaea231a43ecf727a2d129c8886e500acff7ca  mlx-lm/tests/test_fused_npt8_tiled.py
+cba8bc3228ceb67578a5631cfb9a55c43422cc3ab1d53d386457074fb81393a4  mlx-lm/mlx_lm/models/fused_kv_decode_npt8.py
+b5337f019770523ca8e7cfd8e922e8b000c0c582956b8edb2a72907ecbd125b3  mlx-lm/mlx_lm/models/fused_kv_decode_npt8_tiled.py
