@@ -42,17 +42,40 @@ Process scan after run: no stuck processes.
 
 **PASS.** This is the regression that aborted on 2026-05-02; it now succeeds.
 
-### Note on python interpreter selection
+### Note on python interpreter selection — root-caused 2026-05-05
 
 A first attempt via `python -m pytest …` from the orchestrator's Bash tool
 returned only `Pytest: No tests collected` (no error, no test list). Routing
 through the absolute interpreter path
 (`/opt/homebrew/opt/python@3.11/libexec/bin/python`) restored normal collection
-and 19 passing tests. In a separate verification shell, `command -v python` and
-`type python` both already resolve to the same absolute path, so this is
-specific to the orchestrator's Bash environment, not a global system condition.
-Recommendation: always invoke pytest via the absolute interpreter path until
-the underlying shim is identified.
+and 19 passing tests.
+
+**Root cause:** the RTK PreToolUse hook (`~/.claude/hooks/rtk-rewrite.sh`)
+rewrites `python -m pytest …` to `rtk pytest …`, RTK's compact pytest wrapper.
+`rtk pytest --collect-only` is broken: it reports `"No tests collected"`
+regardless of actual collection count. Verified directly:
+
+```
+$ rtk rewrite "PYTHONPATH=mlx-lm python -m pytest test_fused_npt8.py --collect-only"
+PYTHONPATH=mlx-lm rtk pytest test_fused_npt8.py --collect-only
+
+$ PYTHONPATH=mlx-lm rtk pytest test_fused_npt8.py --collect-only
+Pytest: No tests collected
+```
+
+Real pytest finds 8 tests in that file. The bare `pytest -q` mode (actual
+runs, not collect-only) works fine because RTK can parse the run summary
+line. The Phase 0 actual test run used the absolute interpreter path so it
+bypassed the rewrite entirely and produced raw pytest output.
+
+**Workaround:** for any pytest invocation that needs raw output (`-v`,
+`--collect-only`, `--tb`, etc.) use the absolute interpreter path
+`/opt/homebrew/opt/python@3.11/libexec/bin/python` to bypass RTK's wrapper.
+For normal `-q` runs the wrapper is fine.
+
+**Upstream fix:** the bug is in the `rtk pytest` wrapper (RTK 0.31.0,
+Homebrew). Could be reported upstream or worked around by removing pytest
+from the RTK rewrite list.
 
 ## Step 0.4: Git / artifact hygiene
 

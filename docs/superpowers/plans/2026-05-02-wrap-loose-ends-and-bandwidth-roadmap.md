@@ -208,12 +208,27 @@ The immediate priority is not to add more speculative mechanisms. It is to close
     - `prealloc`: T=4096 +0.61 (stable), T=8192 +1.27 (2 outliers)
     - `combined`: T=4096 +1.33 (1 outlier), T=8192 **+2.14** (1 outlier)
     - `no_npt8` sanity: T=4096 -1.08, T=8192 -2.55 (NPT8 helps; keep on)
-  - Quality evidence (FINAL — current code): `artifacts/branch_c_profiling/write_path_quality_gate/`
-    (`baseline_iso.json`, `fused_encode.json`, `prealloc.json`, `combined.json`,
-    `QUALITY_GATE_MEMO.md`). Greedy/seed=42 micro-suite: response text
-    **byte-identical** across all 4 configs; peak memory identical at
-    18711.9 MB. Harness `FAIL` is false-fail of strict repetition gate on
-    correct trivially-short answers and applies equally to baseline.
+  - Quality evidence (CORRECTED 2026-05-05 after self-review):
+    1. **Qwen3.6 micro suite** (`write_path_quality_gate/`): 2 prompts × 48
+       tokens, byte-identical across all 4 configs. Originally claimed as
+       "no quality regression"; after self-review this is recognised as
+       **a coincidence of trivially-short responses, not evidence of
+       numerical equivalence**.
+    2. **Gemma4 default suite** (`write_path_quality_gate_gemma4/`,
+       `QUALITY_GATE_GEMMA4_MEMO.md`): 5 prompts × 200 tokens on Gemma4
+       (head_dim=256, non-fallback IsoQuant fused attention path). All 4
+       conditions PASS harness 5/5. Byte-identity check reveals:
+       - `prealloc` is **byte-identical to baseline** on all 5 prompts —
+         the buffer-bump append is numerically equivalent.
+       - `FUSED_ENCODE=1` produces **measurably different outputs** on
+         4 of 5 prompts (the fused Metal compress/pack kernel does math in
+         a different float-op order, drift accumulates over response).
+       - Drift does NOT break per-task harness criteria but DOES change
+         what the model says.
+       - `combined` is 23% faster end-to-end (38.6s vs 50.0s baseline).
+    3. **Disposition (per user direction):** promote `combined` anyway,
+       document drift as "within harness gate" — not bit-reproducible vs
+       baseline, but per-task quality holds and end-to-end faster.
   - **Code-identity gap (Codex audit 2026-05-05):** the FUSED_ENCODE Metal
     path was committed AFTER the 2026-04-28 perf runs:
     `mlx-lm/mlx_lm/models/fused_kv_compress.py` first appears in `57cb5f5`
@@ -226,12 +241,50 @@ The immediate priority is not to add more speculative mechanisms. It is to close
     promoted as the recommended default for IsoQuant write path on this
     model class. Single-flag variants remain opt-in. v2 reproduction
     confirms the wins on currently-committed code.
-  - **Caveat (quality):** signal is from the micro suite (2 prompts, 48 token
-    cap) because the IsoQuant reconstruct fallback path on Qwen3.6
-    head_dim=128 is too slow for the v2 default suite (5×200 tokens) —
-    initial default-suite run exceeded 25 min wall budget and was cancelled.
-    Larger-suite validation of the IsoQuant fallback path is a separate item,
-    not gating §3.4.
+  - **Runtime default flipped (2026-05-05):** `mlx_isoquant.py` env-default
+    reads (lines ~448 and ~537 after the comment block) changed:
+    `ISOQUANT_CACHE_MODE` default `concat_append` → `prealloc`;
+    `ISOQUANT_FUSED_ENCODE` default `0` → `1`.
+    IsoQuant cache instances constructed by **production code paths**
+    without explicit env vars now run in `combined` mode (50-test pytest
+    suite still passes: test_fused_npt8 + test_fused_npt8_tiled +
+    test_iso_incremental_pack + test_fused_kv_compress). The defensive
+    `getattr(self, "_cache_mode", "concat_append")` fallbacks elsewhere in
+    the file were intentionally left at `concat_append` because they only
+    fire if `__init__` did not run — they are safety nets, not active
+    defaults. Users requiring bit-reproducibility vs the prior default can
+    opt out with `ISOQUANT_FUSED_ENCODE=0` and/or
+    `ISOQUANT_CACHE_MODE=concat_append`.
+    **Scripts override these defaults** and were intentionally left at the
+    old values so ablation baselines remain reproducible. Per Codex audit
+    2026-05-06, the script-level overrides are not uniform — explicit
+    breakdown:
+    - `scripts/profile_ablation.py` (`ENV_DEFAULTS` dict): preserves BOTH
+      old defaults (`FUSED_ENCODE=0`, `CACHE_MODE=concat_append`).
+    - `scripts/profile_metal_counters.py` (`ENV_DEFAULTS` dict + lines
+      982, 984): preserves BOTH old defaults; Phase B2 overrides
+      explicitly when measuring fused-encode.
+    - `scripts/profile_npt8_metal.py` (lines 29-34 area + Phase B2
+      cleanup at line ~406): originally pinned ONLY
+      `CACHE_MODE=concat_append` and was therefore vulnerable to silently
+      inheriting the new `FUSED_ENCODE=1` runtime default in Phase B
+      "IsoQuant unpatched". Patched 2026-05-06 in two places: (i)
+      `os.environ.setdefault("ISOQUANT_FUSED_ENCODE", "0")` at the top so
+      the first Phase B starts unpatched, and (ii) Phase B2's `finally`
+      cleanup now sets `os.environ["ISOQUANT_FUSED_ENCODE"] = "0"` instead
+      of popping the env var, so subsequent T-loop iterations'
+      "unpatched" Phase B remains unpatched.
+    Anyone re-running those scripts to measure the new defaults must edit
+    the script's `ENV_DEFAULTS` or pass overrides; the runtime flip alone
+    does not propagate into them.
+  - **Caveat (quality, superseded):** the original §3.4 closure used only
+    the Qwen3.6 micro suite (2 prompts × 48 tokens) because the IsoQuant
+    reconstruct fallback path on Qwen3.6 head_dim=128 is too slow for the
+    default suite. Gap-2 closure on 2026-05-05 added the Gemma4 default
+    suite (head_dim=256, non-fallback path) which superseded the
+    micro-suite-only gate. Larger-suite validation of the IsoQuant
+    *fallback* path on Qwen3.6 specifically remains a separate item, not
+    gating §3.4.
 
 ---
 

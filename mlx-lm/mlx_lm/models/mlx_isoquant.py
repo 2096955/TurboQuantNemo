@@ -438,9 +438,16 @@ class IsoQuantKVCache(TurboQuantKVCache):
         )
         self._packed_keys_cache: mx.array | None = None
         self._packed_values_cache: mx.array | None = None
-        self._cache_mode = os.environ.get("ISOQUANT_CACHE_MODE", "concat_append")
+        # Runtime defaults graduated by §3.4 (2026-05-05): combined =
+        # FUSED_ENCODE=1 + CACHE_MODE=prealloc. Evidence:
+        # artifacts/branch_c_profiling/write_path_ablation_paired_v2.json,
+        # artifacts/branch_c_profiling/write_path_quality_gate_gemma4/.
+        # FUSED_ENCODE introduces measurable numerical drift but per-task
+        # quality holds; opt out with ISOQUANT_FUSED_ENCODE=0 if bit-
+        # reproducibility vs the prior default is required.
+        self._cache_mode = os.environ.get("ISOQUANT_CACHE_MODE", "prealloc")
         self._fused_encode_requested = (
-            os.environ.get("ISOQUANT_FUSED_ENCODE", "0") == "1"
+            os.environ.get("ISOQUANT_FUSED_ENCODE", "1") == "1"
         )
         self._use_fused_encode = False
         self._fused_encode_verified = False
@@ -520,9 +527,16 @@ class IsoQuantKVCache(TurboQuantKVCache):
         self._fused_metal_ok = None
         self._packed_keys_cache = None
         self._packed_values_cache = None
-        self._cache_mode = os.environ.get("ISOQUANT_CACHE_MODE", "concat_append")
+        # Runtime defaults graduated by §3.4 (2026-05-05): combined =
+        # FUSED_ENCODE=1 + CACHE_MODE=prealloc. Evidence:
+        # artifacts/branch_c_profiling/write_path_ablation_paired_v2.json,
+        # artifacts/branch_c_profiling/write_path_quality_gate_gemma4/.
+        # FUSED_ENCODE introduces measurable numerical drift but per-task
+        # quality holds; opt out with ISOQUANT_FUSED_ENCODE=0 if bit-
+        # reproducibility vs the prior default is required.
+        self._cache_mode = os.environ.get("ISOQUANT_CACHE_MODE", "prealloc")
         self._fused_encode_requested = (
-            os.environ.get("ISOQUANT_FUSED_ENCODE", "0") == "1"
+            os.environ.get("ISOQUANT_FUSED_ENCODE", "1") == "1"
         )
         self._use_fused_encode = False
         self._fused_encode_verified = False

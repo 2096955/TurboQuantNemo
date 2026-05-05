@@ -1,0 +1,174 @@
+{
+  "version": 5,
+  "harness_version": "v2",
+  "model_path": "/Users/anthonylui/QwenCoderLocal/gemma-4-26b-a4b-it-4bit",
+  "expert_offload": false,
+  "kv_cache_type": "isoquant",
+  "use_predictor": false,
+  "use_dedekimi_observer": false,
+  "task_expert_cliques": false,
+  "max_resident_experts": null,
+  "max_cached_shards": null,
+  "seed": 42,
+  "temp": 0.0,
+  "max_tokens": 200,
+  "max_prompt_wall_s": 240.0,
+  "suite": "default",
+  "prompt_names": [
+    "Code Generation",
+    "Instruction Following",
+    "Basic Reasoning",
+    "List Generation",
+    "Math"
+  ],
+  "strict": true,
+  "max_word_repeat_ratio_default": 0.22,
+  "n_pass": 5,
+  "n_total": 5,
+  "memory": {
+    "peak_mb": 14018.9,
+    "cap_mb": null,
+    "capped": false,
+    "fits_cap": null
+  },
+  "system_before_load": {
+    "process_rss_mb": 444.83,
+    "swap_used_mb": 7.38,
+    "vm_pages_paged_out": null
+  },
+  "system_after_load": {
+    "process_rss_mb": 14616.39,
+    "swap_used_mb": 7.38,
+    "vm_pages_paged_out": null
+  },
+  "results": [
+    {
+      "name": "Code Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 5.6605,
+      "response": "```python\ndef fibonacci(n):\n    if n <= 0:\n        return 0\n    elif n == 1:\n        return 1\n    \n    a, b = 0, 1\n    for _ in range(2, n + 1):\n        a, b = b, a + b\n    return b\n```",
+      "response_words": 37,
+      "effective_max_tokens": 200,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Write a Python function to compute the nth Fibonacci number. Output only the function, no explanation.",
+        "description": "Must produce a Python function definition",
+        "expected_substr": [
+          "def ",
+          "return"
+        ],
+        "min_tokens": 15,
+        "skip_min_tokens": true,
+        "check_fences": false,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "8263a69c67a5"
+    },
+    {
+      "name": "Instruction Following",
+      "passed": true,
+      "failures": [],
+      "latency_s": 9.2472,
+      "response": "Imagine you have a magic clock and a magic flashlight. The theory of relativity is basically two big ideas from a man named Albert Einstein.\n\n### 1. Everything is \"Relative\" (The Moving Car Idea)\nImagine you are sitting in a car with your favorite toy. To you, the toy is sitting perfectly still. But to a person standing on the sidewalk watching you drive past, the toy is zooming past them really fast!\n\nSo, who is right? Is the toy still or is it moving? \n\n**The answer is: Both!** It just depends on where you are standing. That\u2019s the first part of relativity.\n\n***\n\n### 2. Time can stretch (The Space-Time Idea)\nThis is the really weird part. Imagine you have a magic clock. \n\nIf you went on a super-fast rocket ship\u2014faster than anything we\u2019ve ever seen\u2014and flew around space for a little while, something crazy would happen.",
+      "response_words": 148,
+      "effective_max_tokens": 200,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "Explain the theory of relativity to a 5 year old.",
+        "description": "Must produce a coherent multi-sentence explanation",
+        "expected_substr": [],
+        "min_tokens": 30,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "7a20ff4f2bc2"
+    },
+    {
+      "name": "Basic Reasoning",
+      "passed": true,
+      "failures": [],
+      "latency_s": 5.7446,
+      "response": "Here is the step-by-step breakdown:\n\n1.  **Starting amount:** You have 3 apples.\n2.  **Action:** You eat 1 apple (this is a subtraction of 1).\n3.  **Calculation:** 3 - 1 = 2.\n\n**Result:** You have **2** apples left.",
+      "response_words": 37,
+      "effective_max_tokens": 200,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "If I have 3 apples and eat 1, how many apples do I have left? Think step by step.",
+        "description": "Must arrive at the answer 2",
+        "expected_substr": [
+          "2"
+        ],
+        "min_tokens": 15,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "92adb85e8027"
+    },
+    {
+      "name": "List Generation",
+      "passed": true,
+      "failures": [],
+      "latency_s": 8.8818,
+      "response": "Here are five programming languages and one key strength of each:\n\n1.  **Python** \u2013 **Simplicity:** Its clean, readable syntax makes it easy for beginners to learn and quick for professionals to write.\n2.  **JavaScript** \u2013 **Versatility:** It is the essential language of the web, capable of running on both the client-side (browsers) and the server-side (Node.js).\n3.  **C++** \u2013 **Performance:** It provides low-level memory management and high execution speed, making it ideal for resource-intensive applications like games and operating systems.\n4.  **Rust** \u2013 **Memory Safety:** It offers high performance while preventing common programming errors (like memory leaks and crashes) through its unique ownership system.\n5.  **SQL** \u2013 **Data Manipulation:** It is the industry standard for managing, querying, and interacting with relational databases.",
+      "response_words": 122,
+      "effective_max_tokens": 200,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "List 5 programming languages and one strength of each.",
+        "description": "Must produce a structured list",
+        "expected_substr": [],
+        "min_tokens": 30,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "30c57b0468d7"
+    },
+    {
+      "name": "Math",
+      "passed": true,
+      "failures": [],
+      "latency_s": 9.0986,
+      "response": "To solve **17 * 24**, you can use several methods. Here are two common ways:\n\n### Method 1: The Distributive Property (Breaking it down)\nYou can break one of the numbers into smaller parts to make the multiplication easier. Let's break 24 into **20 + 4**.\n\n1.  Multiply 17 by 20:\n    $17 \\times 20 = 340$\n2.  Multiply 17 by 4:\n    $17 \\times 4 = 68$\n3.  Add the two results together:\n    $340 + 68 = 408$\n\n---\n\n### Method 2: The Standard Algorithm (Long Multiplication)\nThis is the traditional way of stacking the numbers.\n\n**Step 1: Multiply 17 by 4 (the ones place)**\n*   $4 \\",
+      "response_words": 107,
+      "effective_max_tokens": 200,
+      "likely_near_cap": false,
+      "prompt_spec": {
+        "text": "What is 17 * 24? Show your work.",
+        "description": "Must compute 408",
+        "expected_substr": [
+          "408"
+        ],
+        "min_tokens": 10,
+        "skip_min_tokens": false,
+        "check_fences": true,
+        "max_tokens": null,
+        "max_words": null,
+        "max_word_repeat_ratio": null
+      },
+      "prompt_spec_hash": "95870b648c2f"
+    }
+  ],
+  "system_at_end": {
+    "process_rss_mb": 14726.69,
+    "swap_used_mb": 7.38,
+    "vm_pages_paged_out": null
+  },
+  "system_deltas": {
+    "rss_mb_load_delta": 14171.56,
+    "rss_mb_total_delta": 14281.86,
+    "swap_used_mb_delta": 0.0,
+    "vm_pages_paged_out_delta": null
+  }
+}

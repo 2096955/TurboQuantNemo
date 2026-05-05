@@ -27,6 +27,12 @@ from collections import defaultdict
 os.environ["ISOQUANT_USE_NPT8_FUSED"] = "1"
 os.environ["ISOQUANT_BITS"] = "3"
 os.environ.setdefault("ISOQUANT_CACHE_MODE", "concat_append")
+# Pin fused-encode OFF as the script baseline so Phase B "IsoQuant unpatched"
+# does not silently inherit the post-§3.4 runtime default of FUSED_ENCODE=1
+# (added 2026-05-06 after §3.4 graduated FUSED_ENCODE=1 globally).
+# Phase B2 explicitly sets ISOQUANT_FUSED_ENCODE=1 and its `finally` restores
+# it to "0" (NOT pop) so subsequent T-loop iterations remain unpatched.
+os.environ.setdefault("ISOQUANT_FUSED_ENCODE", "0")
 
 mx = None
 load = None
@@ -398,7 +404,12 @@ def main():
             print(f"    speedup: {speedup:.2f}x")
             del cache_iso_b2
         finally:
-            os.environ.pop("ISOQUANT_FUSED_ENCODE", None)
+            # Restore script-baseline (FUSED_ENCODE=0) instead of popping —
+            # popping would leave the next iteration's Phase B "unpatched"
+            # vulnerable to inheriting the post-§3.4 runtime default of
+            # FUSED_ENCODE=1. The setdefault at the top of the file pinned
+            # this; restore explicitly here too.
+            os.environ["ISOQUANT_FUSED_ENCODE"] = "0"
 
         # Phase C: IsoQuant instrumented (fresh cache, patched)
         print("\n  Phase C: IsoQuant instrumented (6-component decomposition)...")

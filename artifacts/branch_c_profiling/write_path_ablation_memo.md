@@ -76,8 +76,12 @@ before final §3.4 sign-off).
 
 **GRADUATE** for `combined` (FUSED_ENCODE=1 + CACHE_MODE=prealloc).
 
-Quality gate (current code, 2026-05-05): byte-identical responses + identical
-peak memory across all 4 configs (`write_path_quality_gate/QUALITY_GATE_MEMO.md`).
+Quality gate — Qwen3.6 micro-suite ONLY (2 prompts × 48 tokens, current code,
+2026-05-05): byte-identical responses + identical peak memory across all 4
+configs (`write_path_quality_gate/QUALITY_GATE_MEMO.md`).
+**This finding alone is not sufficient evidence of numerical equivalence —
+see the Quality caveat below for the Gemma4 default-suite finding which
+shows FUSED_ENCODE introduces drift.**
 
 Perf gate v2 (current code, 2026-05-05T15:51Z, clean boot): all three candidates
 reproduce as wins. **Sign reproduces in 6/6 cells (all positive).** Magnitude
@@ -112,6 +116,25 @@ Key observations:
 - All activation receipts confirm kernels fired (fused_encode_after=True for
   fused_enc/combined; fallback_after=False everywhere).
 
-§3.4 closes as GRADUATE on the strength of v2 perf reproduction + identical
-quality. Promote `combined` (FUSED_ENCODE=1 + CACHE_MODE=prealloc) as the
-recommended default for IsoQuant write path. Single-flag variants remain opt-in.
+§3.4 closes as GRADUATE on the strength of v2 perf reproduction + harness
+quality PASS. Promote `combined` (FUSED_ENCODE=1 + CACHE_MODE=prealloc) as
+the recommended default for IsoQuant write path. Single-flag variants remain
+opt-in.
+
+**Quality caveat (2026-05-05 self-review correction):** the original Qwen3.6
+micro-suite byte-identity check was a coincidence of trivially-short
+responses. The Gemma4 default suite
+(`write_path_quality_gate_gemma4/QUALITY_GATE_GEMMA4_MEMO.md`) shows
+`prealloc` is byte-identical to baseline but `FUSED_ENCODE=1` introduces
+measurable numerical drift — outputs differ from baseline at the byte level
+on 4 of 5 default prompts. The drift does NOT break per-task harness
+criteria (5/5 PASS) but does change what the model says. Per user direction
+2026-05-05 ("promote combined anyway, document drift as 'within harness
+gate'"), this is documented but not blocking promotion.
+
+**Runtime default flipped (2026-05-05):** `mlx_isoquant.py` env-default
+reads at lines ~441 and ~523 now resolve to `prealloc` and `1` instead of
+`concat_append` and `0`. Every IsoQuant cache instance constructed without
+explicit env vars now runs in `combined` mode. 50-test IsoQuant pytest suite
+still passes. Opt-out: `ISOQUANT_FUSED_ENCODE=0` and/or
+`ISOQUANT_CACHE_MODE=concat_append`.
