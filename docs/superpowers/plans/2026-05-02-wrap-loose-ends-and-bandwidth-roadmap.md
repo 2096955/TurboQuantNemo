@@ -183,13 +183,55 @@ The immediate priority is not to add more speculative mechanisms. It is to close
   - If residual remains large, treat Python/MLX dispatch and allocation as the bottleneck.
   - Artifacts: **`artifacts/metal-counters/profile_with_write_e2e.json`** (`comparison`≈95–102% of E2E gap @ T=4096/8192, Qwen3.6 nvfp4) and **`artifacts/metal-counters/write_path_attribution_memo.md`**.
 
-- [ ] **Step 3.4: Decide whether fused encode and prealloc graduate**
-  - Gate with paired repeats at 4K and 8K:
-    - `ISOQUANT_FUSED_ENCODE=1`
-    - `ISOQUANT_CACHE_MODE=prealloc`
-    - both together
-  - Artifact: `artifacts/branch_c_profiling/write_path_ablation_paired.json`.
-  - Only promote if the win is stable and no quality/PPL regression appears.
+- [x] **Step 3.4: Decide whether fused encode and prealloc graduate** — **GRADUATE** (closed 2026-05-05 with v2 reproduction)
+  - Perf evidence v2 (current code, clean boot 2026-05-05T15:51Z):
+    `artifacts/branch_c_profiling/write_path_ablation_paired_v2.json`. All
+    three candidates reproduce as wins. **Sign reproduces 6/6 cells (all
+    positive); magnitude is 5/6 cells equal or larger.** The exception is
+    `prealloc @ T=8192` which is smaller in v2 (+0.75 vs v1 +1.27, ratio
+    0.58×). v2 deliberately ran only the three §3.4 candidates
+    (`--configs fused_enc prealloc combined`); sanity configs `no_npt8` and
+    `metal_fwd` were not re-measured and the v1 rows below remain pinned
+    for context. **`combined` is stable signal at both T=4096 and T=8192**
+    (was outlier×1 at both in v1):
+    - `fused_enc`: T=4096 +2.89 (outlier×2), T=8192 +2.70 (outlier×1)
+    - `prealloc`: T=4096 +0.68 (noisy), T=8192 +0.75 (outlier×2)
+    - `combined`: T=4096 **+2.93 (stable)**, T=8192 **+2.73 (stable)**
+    - T=8192 paired_gap is harness-flagged INVALID (2 outliers in gap itself
+      → % gap suppressed; absolute Δ remains valid)
+  - Perf evidence v1 (historical, PROVISIONAL — pre-commit code):
+    `artifacts/branch_c_profiling/write_path_ablation_paired.json`
+    (merged from `ablation_paired.json` 2026-04-28T21:03Z + `ablation_combined.json`
+    2026-04-28T21:35Z — see memo `write_path_ablation_memo.md`). Per decode
+    step paired delta vs iso baseline (positive = variant faster):
+    - `fused_enc`: T=4096 +1.23 (stable), T=8192 +1.92 (1 outlier)
+    - `prealloc`: T=4096 +0.61 (stable), T=8192 +1.27 (2 outliers)
+    - `combined`: T=4096 +1.33 (1 outlier), T=8192 **+2.14** (1 outlier)
+    - `no_npt8` sanity: T=4096 -1.08, T=8192 -2.55 (NPT8 helps; keep on)
+  - Quality evidence (FINAL — current code): `artifacts/branch_c_profiling/write_path_quality_gate/`
+    (`baseline_iso.json`, `fused_encode.json`, `prealloc.json`, `combined.json`,
+    `QUALITY_GATE_MEMO.md`). Greedy/seed=42 micro-suite: response text
+    **byte-identical** across all 4 configs; peak memory identical at
+    18711.9 MB. Harness `FAIL` is false-fail of strict repetition gate on
+    correct trivially-short answers and applies equally to baseline.
+  - **Code-identity gap (Codex audit 2026-05-05):** the FUSED_ENCODE Metal
+    path was committed AFTER the 2026-04-28 perf runs:
+    `mlx-lm/mlx_lm/models/fused_kv_compress.py` first appears in `57cb5f5`
+    (2026-05-02); the import was added in `40501b2` (2026-04-29). The
+    2026-04-28 ablation ran against uncommitted local code which cannot now
+    be reconstructed bit-exactly. The activation receipts confirm
+    FUSED_ENCODE was active at run time, but the perf delta numbers cannot
+    be tied to the currently-committed code without a rerun.
+  - **Promotion (final):** `combined` (FUSED_ENCODE=1 + CACHE_MODE=prealloc)
+    promoted as the recommended default for IsoQuant write path on this
+    model class. Single-flag variants remain opt-in. v2 reproduction
+    confirms the wins on currently-committed code.
+  - **Caveat (quality):** signal is from the micro suite (2 prompts, 48 token
+    cap) because the IsoQuant reconstruct fallback path on Qwen3.6
+    head_dim=128 is too slow for the v2 default suite (5×200 tokens) —
+    initial default-suite run exceeded 25 min wall budget and was cancelled.
+    Larger-suite validation of the IsoQuant fallback path is a separate item,
+    not gating §3.4.
 
 ---
 
