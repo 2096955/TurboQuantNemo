@@ -378,8 +378,8 @@ The immediate priority is not to add more speculative mechanisms. It is to close
   - Run the deferred KV fidelity/PPL test for the mixed 16 GB profile.
   - Artifact: `results/qwen36_kv_fidelity.json` or `artifacts/qwen36/kv_fidelity.json`.
 
-- [ ] **Step 5.4: Kimi K2.6 decode acceleration lane**
-  - Current evidence:
+- [~] **Step 5.4: Kimi K2.6 decode acceleration lane** — first action complete-with-caveat 2026-05-06
+  - Current evidence (unchanged from prior memory):
     - source checkpoint: `/Volumes/Samsung9904tb/Kimi-K2.6` (~554 GB),
     - offload load/decode smoke passes,
     - Kimi MLA IsoQuant cache and `trim()` exist,
@@ -387,14 +387,33 @@ The immediate priority is not to add more speculative mechanisms. It is to close
     - default MLA cache is still the faster measured Kimi decode path,
     - predictor/cliques did not produce a stable speed win,
     - 2-bit expert conversion scripts exist, but the generated checkpoint was deleted and must be regenerated before speculative testing.
-  - Next actions:
-    1. Run a clean default-cache `max_resident_experts` sweep before further KV work:
-       ```bash
-       PYTHONPATH=mlx-lm python scripts/sweep_kimi_default_cache_residency.py \
-         --model /Volumes/Samsung9904tb/Kimi-K2.6 \
-         --sweep-values 64,128,200,400,800,1200 \
-         --output artifacts/kimi_k26_residency/default_cache_sweep.json
-       ```
+  - **First action (default-cache residency sweep): COMPLETE-WITH-CAVEAT 2026-05-06.**
+    Two sweeps run on this clean boot, both committed:
+    - v1 `default_cache_sweep.json` (values 64,128,200,400,800): under-explored
+      the useful regime — values 64-400 all gave 0% hit rate; 800 had 74% hit
+      rate but was 3× slower than 128 (later shown to be a sweep-state
+      artifact, not reproducible).
+    - v2 `default_cache_sweep_v2.json` (values 448,480,512,560,640,720,800,
+      per Codex audit): confirmed sharp threshold cliff at exactly 480
+      (= 60 MoE layers × 8 top-k = per-step working set). 448 = 0% hits,
+      480 = 68% hits. Above 480, throughput plateau is shallow (0.484-0.568
+      tok/s, ~17% spread, std comparable to spread). v1's 800-cell anomaly
+      did NOT reproduce in v2 (v2 800 = 0.494 tok/s vs v1 = 0.172) and
+      Codex confirmed expert load counters are nearly identical between
+      runs — slowdown is in uninstrumented step latency, cause unknown.
+    - **Provisional guidance:** never use `max_resident_experts < 480`; use
+      480 (RAM-safe) or 720 (v2 mechanical winner) for operational
+      deployment. Do NOT crown a "best" residency without paired-repeat
+      measurement.
+    - Memo with full analysis + Codex audit history:
+      `artifacts/kimi_k26_residency/RESIDENCY_SWEEP_MEMO.md`
+    - Codex collaboration logs:
+      `logs/codex-delegations/lane-c-residency-analysis-*.log` (round 1),
+      `logs/codex-delegations/lane-c-v2-analysis-*.log` (round 2).
+  - **Remaining actions (deferred):**
+    1. (Optional) Paired-repeat measurement at top contenders 480/720/800
+       using ABBA protocol (similar to profile_ablation.py). Only needed
+       before a benchmark-grade "best" claim.
     2. If disk/time is approved, regenerate the 2-bit per-expert checkpoint and load-smoke it after the `.scales` gate fix.
     3. Run `scripts/profile_kimi_speculative.py` only after a working draft checkpoint exists.
     4. Run the NPT16 parity gate (synthetic now; real-weight MLA block documented in JSON) before treating NPT16 as more than synthetic-correct:
@@ -403,7 +422,7 @@ The immediate priority is not to add more speculative mechanisms. It is to close
          --output artifacts/kimi_k26_profiling/npt16_real_weight_logit_parity.json
        ```
   - Artifacts:
-    - `artifacts/kimi_k26_residency/default_cache_sweep.json`,
+    - **`artifacts/kimi_k26_residency/default_cache_sweep.json` (v1)** + **`default_cache_sweep_v2.json` (v2)** + **`RESIDENCY_SWEEP_MEMO.md`** + **`memory_snapshot_pre_v2.json`** — populated 2026-05-06.
     - regenerated 2-bit checkpoint integrity/load-smoke JSON,
     - `artifacts/kimi_k26_speculative/speculative_smoke.json`,
     - `artifacts/kimi_k26_profiling/npt16_real_weight_logit_parity.json`.
