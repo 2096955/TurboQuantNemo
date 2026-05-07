@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 2 quantize Kimi K2.6 bf16 -> 2-bit routed experts, chunked-eval edition.
+"""Stage 2 quantize Kimi K2.6 -> 2-bit routed experts, chunked-eval edition.
 
 Why this exists: the standard `mlx_lm convert --quantize --mixed-expert-bits 2`
 path crashes with kIOGPUCommandBufferCallbackErrorTimeout during save_safetensors
@@ -11,10 +11,26 @@ Fix: same quantize_model + same predicate, but before save we walk every leaf
 parameter and call mx.eval + mx.synchronize per tensor. This forces small,
 bounded Metal command buffers and avoids the watchdog.
 
-Usage:
+Two source modes:
+
+(1) bf16 source (the original two-stage path):
     PYTHONPATH=mlx-lm python3 scripts/convert_kimi_2bit_chunked.py \
         --src /Volumes/Samsung9904tb/Kimi-K2.6-bf16 \
         --dst /Volumes/Samsung9904tb/Kimi-K2.6-2bit-experts
+
+(2) 4-bit pack-quantized source, in-memory dequantize-then-requantize
+    (saves ~1.9 TB of disk by skipping the bf16 intermediate):
+    PYTHONPATH=mlx-lm python3 scripts/convert_kimi_2bit_chunked.py \
+        --src /Volumes/Samsung9904tb/Kimi-K2.6 \
+        --dst /Volumes/Samsung9904tb/Kimi-K2.6-2bit-experts \
+        --source-quantized
+
+In mode (2) the dequantize step swaps QuantizedSwitchLinear -> SwitchLinear in
+the module tree (so the quantize predicate's `to_quantized` check fires) and
+mx.dequantize is lazy: bf16 weights only materialize one tensor at a time
+inside the per-shard chunked save loop. Disk peak: source + 2-bit final
+(~856 GB). The two-stage path peaks at source + bf16 intermediate + 2-bit
+final (~2.76 TB).
 """
 
 from __future__ import annotations
@@ -77,13 +93,25 @@ def assert_kimi_volume(*paths: Path) -> None:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--src", required=True, help="bf16 intermediate path")
+    p.add_argument(
+        "--src",
+        required=True,
+        help="Source path. bf16 dequantized checkpoint by default; pass "
+        "--source-quantized to point at the 4-bit pack-quantized source.",
+    )
     p.add_argument("--dst", required=True, help="2-bit final output path")
     p.add_argument("--mixed-expert-bits", type=int, default=2)
     p.add_argument("--shared-expert-bits", type=int, default=4)
     p.add_argument("--q-bits", type=int, default=4)
     p.add_argument("--q-group-size", type=int, default=64)
     p.add_argument("--q-mode", default="affine")
+    p.add_argument(
+        "--source-quantized",
+        action="store_true",
+        help="Source is already pack-quantized (e.g. the upstream Kimi K2.6 "
+        "checkpoint). dequantize_model() is run in-memory before "
+        "quantize_model() so the bf16 intermediate never hits disk.",
+    )
     args = p.parse_args()
 
     sys.stdout.reconfigure(line_buffering=True)
@@ -98,7 +126,7 @@ def main():
     import mlx.core as mx
     from mlx.utils import tree_flatten
     from mlx_lm.convert import _build_mixed_expert_quant_predicate
-    from mlx_lm.utils import load, quantize_model, save_config
+    from mlx_lm.utils import dequantize_model, load, quantize_model, save_config
 
     print(f"[load] {src}", flush=True)
     t0 = time.time()
@@ -109,6 +137,19 @@ def main():
         lazy=True,
     )
     print(f"[load] done in {time.time() - t0:.1f}s", flush=True)
+
+    if args.source_quantized:
+        print("[dequantize] in-memory dequantize before requantize", flush=True)
+        t0 = time.time()
+        model = dequantize_model(model)
+        # Drop the source quantization stanza so quantize_model can write the
+        # new one cleanly. mx.dequantize is lazy — no eval triggered here.
+        config.pop("quantization", None)
+        config.pop("quantization_config", None)
+        print(
+            f"[dequantize] graph rebuilt in {time.time() - t0:.1f}s (lazy)",
+            flush=True,
+        )
 
     predicate = _build_mixed_expert_quant_predicate(
         mixed_expert_bits=args.mixed_expert_bits,
