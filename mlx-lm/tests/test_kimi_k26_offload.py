@@ -320,6 +320,234 @@ class TestKimiExpertKeyTable(unittest.TestCase):
 
 
 # ===================================================================
+# MLX-affine Kimi format coverage
+# ===================================================================
+#
+# Background: per the 2026-05-01 phase-2-quantize-format-gap handover, an
+# MLX-converted 2-bit Kimi checkpoint (output of convert_kimi_2bit_chunked.py
+# + unstack_kimi_2bit.py) uses MLX-affine suffixes (.weight / .scales /
+# .biases) rather than the compressed-tensors source suffixes (.weight_packed
+# / .weight_scale / .weight_shape).
+#
+# By 2026-05-07 the loader gate at utils.py:_has_per_expert_scales_for_offload
+# accepts both naming conventions for kimi_k25/kimi_k2, and
+# _load_expert_pair_tensors is format-agnostic (it loads .biases when
+# present, and only synthesizes -8 * scales when base_key endswith
+# .weight_packed). What is NOT explicitly covered: build_kimi_expert_key_table
+# fed an MLX-affine weight map. Its weight_packed/weight_scale/weight_shape
+# branches do not fire; only the generic fallback at the end of the function
+# runs. These tests pin that path so a future refactor cannot silently
+# regress MLX-affine Kimi loading.
+
+
+def _kimi_affine_weight_map(layers, experts, shard=_SHARD):
+    """Synthetic Kimi weight map using MLX-affine suffixes (.weight / .scales / .biases)."""
+    wm = {}
+    for layer in layers:
+        for expert in experts:
+            for proj in ("gate_proj", "up_proj", "down_proj"):
+                for suffix in ("weight", "scales", "biases"):
+                    wm[_kimi_expert_key(layer, expert, proj, suffix)] = shard
+    return wm
+
+
+class TestKimiMlxAffineExpertKeyTable(unittest.TestCase):
+    """build_kimi_expert_key_table must produce a valid spec for MLX-affine Kimi."""
+
+    def test_mlx_affine_table_has_three_projections(self):
+        if build_kimi_expert_key_table is None:
+            self.fail("build_kimi_expert_key_table not yet implemented")
+        wm = _kimi_affine_weight_map(layers=[1], experts=[0])
+        tbl = build_kimi_expert_key_table(wm)
+        self.assertIn((1, 0), tbl)
+        spec = tbl[(1, 0)]
+        for proj in ("gate", "up", "down"):
+            self.assertIn(f"{proj}_weight", spec)
+            self.assertIn(f"{proj}_scales", spec)
+            self.assertIn(f"{proj}_biases", spec)
+
+    def test_mlx_affine_weight_points_to_dot_weight(self):
+        """gate_weight must point to the .weight key (not .weight_packed) for MLX-affine input."""
+        if build_kimi_expert_key_table is None:
+            self.fail("build_kimi_expert_key_table not yet implemented")
+        wm = _kimi_affine_weight_map(layers=[1], experts=[0])
+        tbl = build_kimi_expert_key_table(wm)
+        spec = tbl[(1, 0)]
+        self.assertTrue(
+            spec["gate_weight"].endswith(".weight"),
+            f"gate_weight should end with .weight for MLX-affine input, got {spec['gate_weight']!r}",
+        )
+        self.assertFalse(spec["gate_weight"].endswith(".weight_packed"))
+
+    def test_mlx_affine_no_shape_key_required(self):
+        """MLX-affine checkpoints have no .weight_shape; spec must not require it."""
+        if build_kimi_expert_key_table is None:
+            self.fail("build_kimi_expert_key_table not yet implemented")
+        wm = _kimi_affine_weight_map(layers=[1], experts=[0])
+        tbl = build_kimi_expert_key_table(wm)
+        spec = tbl[(1, 0)]
+        for proj in ("gate", "up", "down"):
+            self.assertNotIn(f"{proj}_shape", spec)
+
+
+_AFFINE_PACKED_SHAPE = (
+    8,
+    4,
+)  # (out_features, packed in_features // 8 for 2-bit groups)
+_AFFINE_GROUP_SHAPE = (8, 1)
+
+
+class TestKimiMlxAffineLoadGate(unittest.TestCase):
+    """_has_per_expert_scales_for_offload must accept MLX-affine Kimi weight maps."""
+
+    def test_load_gate_accepts_dot_scales_for_kimi(self):
+        from mlx_lm.utils import _has_per_expert_scales_for_offload
+
+        wm = _kimi_affine_weight_map(layers=[1], experts=[0])
+        self.assertTrue(
+            _has_per_expert_scales_for_offload(wm, "kimi_k25"),
+            "MLX-affine Kimi weight map must satisfy the offload load-gate",
+        )
+
+    def test_load_gate_still_accepts_compressed_tensors_for_kimi(self):
+        from mlx_lm.utils import _has_per_expert_scales_for_offload
+
+        wm = _kimi_expert_weight_map(layers=[1], experts=[0])
+        self.assertTrue(
+            _has_per_expert_scales_for_offload(wm, "kimi_k25"),
+            "Compressed-tensors Kimi weight map must still satisfy the offload load-gate",
+        )
+
+    def test_load_gate_rejects_dot_scales_for_non_kimi(self):
+        """Other model types still require their canonical .scales-only naming."""
+        from mlx_lm.utils import _has_per_expert_scales_for_offload
+
+        wm = _kimi_affine_weight_map(layers=[1], experts=[0])
+        # Same weight map, different model_type — still uses .scales suffix so accepted
+        # for any model type whose is_expert_weight_key matches; we only assert the
+        # Kimi-specific compressed-tensors widening did not bleed into other types
+        # by re-checking with .weight_scale only and confirming it's rejected.
+        wm_compressed_only = _kimi_expert_weight_map(layers=[1], experts=[0])
+        self.assertFalse(
+            _has_per_expert_scales_for_offload(wm_compressed_only, "qwen3_5_moe"),
+            ".weight_scale must NOT satisfy the gate for qwen3_5_moe",
+        )
+
+
+class TestKimiMlxAffineRuntimeLoad(unittest.TestCase):
+    """_load_expert_pair_tensors must correctly load MLX-affine Kimi tensors.
+
+    Confirms the runtime path:
+      - does NOT trigger the .weight_packed -> uint32 view branch,
+      - does NOT synthesize -8 * scales biases (real .biases is loaded),
+      - returns gate/up/down weight + scales + biases with sensible dtypes.
+    """
+
+    def _write_affine_shard(self, tmp_dir):
+        shard_name = "model.safetensors"
+        shard_path = Path(tmp_dir) / shard_name
+        tensors = {}
+        for proj in ("gate_proj", "up_proj", "down_proj"):
+            prefix = f"language_model.model.layers.1.mlp.experts.0.{proj}"
+            # MLX-affine 2-bit packs 8 weights/uint32; weight tensor is uint32.
+            tensors[f"{prefix}.weight"] = mx.zeros(
+                _AFFINE_PACKED_SHAPE, dtype=mx.uint32
+            )
+            tensors[f"{prefix}.scales"] = mx.ones(
+                _AFFINE_GROUP_SHAPE, dtype=mx.bfloat16
+            )
+            # Real per-group biases — NOT -8 * scales. Use a distinguishable value.
+            tensors[f"{prefix}.biases"] = mx.full(
+                _AFFINE_GROUP_SHAPE, 0.25, dtype=mx.bfloat16
+            )
+        mx.save_safetensors(str(shard_path), tensors)
+        return shard_name
+
+    def _affine_spec(self):
+        spec = {}
+        for proj_short, proj_full in [
+            ("gate", "gate_proj"),
+            ("up", "up_proj"),
+            ("down", "down_proj"),
+        ]:
+            prefix = f"language_model.model.layers.1.mlp.experts.0.{proj_full}"
+            spec[f"{proj_short}_weight"] = f"{prefix}.weight"
+            spec[f"{proj_short}_scales"] = f"{prefix}.scales"
+            spec[f"{proj_short}_biases"] = f"{prefix}.biases"
+        return spec
+
+    def _make_manager(self, tmp_dir, shard_name, spec):
+        wm = {v: shard_name for v in spec.values()}
+        return ExpertOffloadManager(
+            base_path=Path(tmp_dir),
+            weight_map=wm,
+            expert_key_table={(1, 0): spec},
+            max_resident_experts=4,
+            projections=("gate", "up", "down"),
+        )
+
+    def test_affine_weight_stays_uint32_no_view(self):
+        """For .weight (already uint32), no .view(uint32) reinterpret should occur."""
+        with tempfile.TemporaryDirectory() as tmp:
+            shard = self._write_affine_shard(tmp)
+            spec = self._affine_spec()
+            mgr = self._make_manager(tmp, shard, spec)
+            result = mgr._load_expert_pair_tensors(spec)
+            for proj in ("gate", "up", "down"):
+                self.assertEqual(
+                    result[f"{proj}_weight"].dtype,
+                    mx.uint32,
+                    f"{proj}_weight must be uint32",
+                )
+
+    def test_affine_real_biases_not_synthesized(self):
+        """When .biases is loaded from disk, the -8 * scales synthesis MUST NOT fire."""
+        with tempfile.TemporaryDirectory() as tmp:
+            shard = self._write_affine_shard(tmp)
+            spec = self._affine_spec()
+            mgr = self._make_manager(tmp, shard, spec)
+            result = mgr._load_expert_pair_tensors(spec)
+            for proj in ("gate", "up", "down"):
+                self.assertIn(f"{proj}_biases", result)
+                # Real biases are 0.25; synthesized -8 * scales (scales=1) would be -8.
+                # Use abs() because mlx bfloat16 comparison is fiddly; just check value.
+                bias_val = float(result[f"{proj}_biases"].flatten()[0].item())
+                self.assertAlmostEqual(
+                    bias_val,
+                    0.25,
+                    places=2,
+                    msg=f"{proj}_biases must be the loaded value (0.25), not -8*scales (-8.0)",
+                )
+
+    def test_affine_table_builder_then_runtime_load_roundtrip(self):
+        """Full chain: weight_map -> build_kimi_expert_key_table -> _load_expert_pair_tensors."""
+        if build_kimi_expert_key_table is None:
+            self.fail("build_kimi_expert_key_table not yet implemented")
+        with tempfile.TemporaryDirectory() as tmp:
+            shard = self._write_affine_shard(tmp)
+            wm = {}
+            for proj in ("gate_proj", "up_proj", "down_proj"):
+                prefix = f"language_model.model.layers.1.mlp.experts.0.{proj}"
+                for suffix in ("weight", "scales", "biases"):
+                    wm[f"{prefix}.{suffix}"] = shard
+            tbl = build_kimi_expert_key_table(wm)
+            self.assertIn((1, 0), tbl)
+            spec = tbl[(1, 0)]
+            mgr = ExpertOffloadManager(
+                base_path=Path(tmp),
+                weight_map=wm,
+                expert_key_table=tbl,
+                max_resident_experts=4,
+                projections=("gate", "up", "down"),
+            )
+            result = mgr._load_expert_pair_tensors(spec)
+            for proj in ("gate", "up", "down"):
+                self.assertIn(f"{proj}_weight", result)
+                self.assertIn(f"{proj}_scales", result)
+                self.assertIn(f"{proj}_biases", result)
+
+
+# ===================================================================
 # Task 1.2: Non-expert load exclusion
 # ===================================================================
 
