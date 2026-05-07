@@ -27,10 +27,18 @@ Two source modes:
 
 In mode (2) the dequantize step swaps QuantizedSwitchLinear -> SwitchLinear in
 the module tree (so the quantize predicate's `to_quantized` check fires) and
-mx.dequantize is lazy: bf16 weights only materialize one tensor at a time
-inside the per-shard chunked save loop. Disk peak: source + 2-bit final
-(~856 GB). The two-stage path peaks at source + bf16 intermediate + 2-bit
-final (~2.76 TB).
+mx.dequantize is lazy: the bf16 graph stays symbolic through the dequantize
+phase (verified: RSS delta 0.00 GB during dequantize_model on Kimi K2.6).
+The per-tensor mx.eval + mx.synchronize in the save loop bounds materialised
+memory to one quantized projection's subgraph at a time — i.e. one
+{weight, scales, biases} triple per dispatch, not literally one tensor —
+since mx.quantize emits all three outputs from a single op (Codex review
+2026-05-07 MEDIUM #4). That bound is tight enough to keep RSS well under
+the 32 GB budget; the whole-graph eval that the standard mlx_lm.convert
+triggers is what the chunked loop avoids.
+
+Disk peak: source + 2-bit final (~856 GB). The two-stage path peaks at
+source + bf16 intermediate + 2-bit final (~2.76 TB).
 """
 
 from __future__ import annotations
