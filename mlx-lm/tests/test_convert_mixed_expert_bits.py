@@ -46,6 +46,41 @@ class ConvertMixedExpertBitsTest(unittest.TestCase):
                 mode="affine",
             )
 
+    def test_shared_expert_bits_applies_to_singular_path(self):
+        """Llama 4 / Qwen3-Next / Qwen2-MoE use singular `.shared_expert.`."""
+        pred = _build_mixed_expert_quant_predicate(
+            mixed_expert_bits=2,
+            shared_expert_bits=6,
+            default_bits=4,
+            default_group_size=64,
+            mode="affine",
+        )
+        dense_module = nn.Linear(16, 32, bias=False)
+        cfg = pred("model.layers.1.mlp.shared_expert.gate_proj", dense_module)
+        self.assertEqual(cfg["bits"], 6)
+
+    def test_shared_expert_bits_applies_to_plural_path(self):
+        """Kimi K2.x / DeepSeek V3 use plural `.shared_experts.`. Without
+        explicit support, --shared-expert-bits silently no-ops on those
+        models (Codex review 2026-05-07, MEDIUM #3)."""
+        pred = _build_mixed_expert_quant_predicate(
+            mixed_expert_bits=2,
+            shared_expert_bits=6,
+            default_bits=4,
+            default_group_size=64,
+            mode="affine",
+        )
+        dense_module = nn.Linear(16, 32, bias=False)
+        cfg = pred(
+            "language_model.model.layers.1.mlp.shared_experts.gate_proj",
+            dense_module,
+        )
+        self.assertEqual(
+            cfg["bits"],
+            6,
+            "Kimi/DeepSeek shared_experts (plural) must honor --shared-expert-bits",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

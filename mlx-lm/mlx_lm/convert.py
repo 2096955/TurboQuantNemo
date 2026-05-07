@@ -114,7 +114,14 @@ def _build_mixed_expert_quant_predicate(
     )
 
     def _predicate(path: str, module: nn.Module) -> Union[bool, dict]:
-        if ".shared_expert." in path and isinstance(module, nn.Linear):
+        # Match both naming conventions: singular `.shared_expert.` (Llama 4,
+        # Qwen3-Next, Qwen2-MoE) and plural `.shared_experts.` (Kimi K2.x,
+        # DeepSeek V3). Without the plural form, --shared-expert-bits silently
+        # had no effect on Kimi/DeepSeek shared experts (Codex review
+        # 2026-05-07, MEDIUM #3).
+        if (".shared_expert." in path or ".shared_experts." in path) and isinstance(
+            module, nn.Linear
+        ):
             return {
                 "bits": resolved_shared_bits,
                 "group_size": default_group_size,
