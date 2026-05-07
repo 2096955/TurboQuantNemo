@@ -23,6 +23,41 @@ DST="${KIMI_DST:-/Volumes/Samsung9904tb/Kimi-K2.6-2bit-experts}"
 INTERMEDIATE="${KIMI_INTERMEDIATE:-/Volumes/Samsung9904tb/Kimi-K2.6-bf16}"
 KEEP_INTERMEDIATE="${KEEP_INTERMEDIATE:-0}"  # set to 1 to skip intermediate cleanup
 
+# Volume guard — Kimi conversions must target /Volumes/Samsung9904tb only.
+# Internal disk cannot fit the 1.1 TB bf16 intermediate, and a phantom mount
+# would silently misroute multi-TB writes. Verify the volume identity before
+# any path validation. Set KIMI_VOLUME_GUARD=0 to bypass (not recommended).
+KIMI_VOLUME_GUARD="${KIMI_VOLUME_GUARD:-1}"
+KIMI_REQUIRED_VOLUME="/Volumes/Samsung9904tb"
+
+if [ "$KIMI_VOLUME_GUARD" = "1" ]; then
+    for path in "$SRC" "$DST" "$INTERMEDIATE"; do
+        case "$path" in
+            "$KIMI_REQUIRED_VOLUME"|"$KIMI_REQUIRED_VOLUME"/*) ;;
+            *)
+                echo "ERROR: $path is not under $KIMI_REQUIRED_VOLUME." >&2
+                echo "  Kimi conversions must target the Samsung 4 TB SSD only." >&2
+                echo "  Set KIMI_VOLUME_GUARD=0 to bypass (you almost certainly should not)." >&2
+                exit 1
+                ;;
+        esac
+    done
+    if [ ! -d "$KIMI_REQUIRED_VOLUME" ]; then
+        echo "ERROR: $KIMI_REQUIRED_VOLUME is not mounted." >&2
+        exit 1
+    fi
+    DISKUTIL_INFO=$(diskutil info "$KIMI_REQUIRED_VOLUME" 2>/dev/null || true)
+    if ! echo "$DISKUTIL_INFO" | grep -q "Volume Name:.*Samsung9904tb"; then
+        echo "ERROR: $KIMI_REQUIRED_VOLUME does not report Volume Name 'Samsung9904tb'." >&2
+        echo "  Possible phantom mount. Run 'diskutil info $KIMI_REQUIRED_VOLUME' and resolve before retrying." >&2
+        exit 1
+    fi
+    if ! echo "$DISKUTIL_INFO" | grep -q "File System Personality:.*APFS"; then
+        echo "ERROR: $KIMI_REQUIRED_VOLUME is not APFS as expected." >&2
+        exit 1
+    fi
+fi
+
 if [ ! -d "$SRC" ]; then
     echo "ERROR: source not found: $SRC" >&2
     exit 1

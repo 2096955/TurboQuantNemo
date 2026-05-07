@@ -35,6 +35,8 @@ MLX_LM_ROOT = REPO_ROOT / "mlx-lm"
 if MLX_LM_ROOT.exists() and str(MLX_LM_ROOT) not in sys.path:
     sys.path.insert(0, str(MLX_LM_ROOT))
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 
 _STACKED_RE = re.compile(
     r"^(?P<prefix>(?:language_model\.)?model\.layers\.\d+\.mlp)"
@@ -94,9 +96,12 @@ def main():
     )
     args = p.parse_args()
 
+    from convert_kimi_2bit_chunked import assert_kimi_volume
+
     sys.stdout.reconfigure(line_buffering=True)
     src = Path(args.src)
     dst = Path(args.dst)
+    assert_kimi_volume(src, dst)
     if not src.is_dir():
         raise SystemExit(f"src not found: {src}")
     if dst.exists():

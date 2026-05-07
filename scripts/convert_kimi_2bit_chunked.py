@@ -20,6 +20,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -28,6 +30,49 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MLX_LM_ROOT = REPO_ROOT / "mlx-lm"
 if MLX_LM_ROOT.exists() and str(MLX_LM_ROOT) not in sys.path:
     sys.path.insert(0, str(MLX_LM_ROOT))
+
+KIMI_REQUIRED_VOLUME = Path("/Volumes/Samsung9904tb")
+
+
+def assert_kimi_volume(*paths: Path) -> None:
+    """Refuse to run unless every path lives on the expected Samsung 4 TB SSD.
+
+    Bypass with KIMI_VOLUME_GUARD=0 (not recommended). The diskutil identity
+    check guards against phantom mounts where /Volumes/Samsung9904tb routes
+    to a different physical disk after a reconnect.
+    """
+    if os.environ.get("KIMI_VOLUME_GUARD", "1") == "0":
+        return
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        try:
+            resolved.relative_to(KIMI_REQUIRED_VOLUME)
+        except ValueError:
+            raise SystemExit(
+                f"Refusing to use {resolved}: Kimi conversions must target "
+                f"{KIMI_REQUIRED_VOLUME} only. Set KIMI_VOLUME_GUARD=0 to bypass."
+            )
+    if not KIMI_REQUIRED_VOLUME.is_dir():
+        raise SystemExit(f"{KIMI_REQUIRED_VOLUME} is not mounted.")
+    try:
+        info = subprocess.run(
+            ["diskutil", "info", str(KIMI_REQUIRED_VOLUME)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise SystemExit(f"diskutil info failed for {KIMI_REQUIRED_VOLUME}: {exc}")
+    if "Volume Name:" not in info or "Samsung9904tb" not in info:
+        raise SystemExit(
+            f"{KIMI_REQUIRED_VOLUME} does not report Volume Name 'Samsung9904tb'; "
+            "possible phantom mount."
+        )
+    if "APFS" not in info:
+        raise SystemExit(f"{KIMI_REQUIRED_VOLUME} is not APFS as expected.")
 
 
 def main():
@@ -44,6 +89,7 @@ def main():
     sys.stdout.reconfigure(line_buffering=True)
     src = Path(args.src)
     dst = Path(args.dst)
+    assert_kimi_volume(src, dst)
     if not src.is_dir():
         raise SystemExit(f"src not found: {src}")
     if dst.exists():
