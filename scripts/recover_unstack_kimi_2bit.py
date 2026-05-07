@@ -16,8 +16,11 @@ SRC = Path(
     "/Volumes/Samsung9904tb/Kimi-K2.6-2bit-experts"
 )  # for config.json + tokenizer pass-through
 
-# Step 1: list tmp shards in numeric order
-tmp_re = re.compile(r"^model-(\d{5})-of-XXXXX\.safetensors\.tmp\.safetensors$")
+# Step 1: list tmp shards in numeric order. Accept both legacy and current
+# tmp filename patterns:
+#   - legacy (pre-fix): model-NNNNN-of-XXXXX.safetensors.tmp.safetensors
+#   - current:          model-NNNNN-of-XXXXX.tmp.safetensors
+tmp_re = re.compile(r"^model-(\d{5})-of-XXXXX\.(?:safetensors\.)?tmp\.safetensors$")
 tmp_files = []
 for p in sorted(DST.iterdir()):
     m = tmp_re.match(p.name)

@@ -138,7 +138,13 @@ def main():
         if not out_buffer:
             return
         idx = len(tmp_shards) + 1
-        tmp_name = f"model-{idx:05d}-of-XXXXX.safetensors.tmp"
+        # NB: mx.save_safetensors auto-appends ".safetensors" if the path
+        # does not end in it, which previously yielded
+        # "model-NNNNN-of-XXXXX.safetensors.tmp.safetensors" on disk while
+        # the Path object kept the shorter name and the rename pass
+        # crashed (FileNotFoundError). Use a path that already ends in
+        # .safetensors so the on-disk and in-memory names match.
+        tmp_name = f"model-{idx:05d}-of-XXXXX.tmp.safetensors"
         tmp_path = dst / tmp_name
         mx.save_safetensors(str(tmp_path), out_buffer, metadata={"format": "mlx"})
         for k in out_buffer:
