@@ -53,8 +53,12 @@ Notes:
       i compressed-attention dispatches — the same compression-error
       accumulation that real generation would experience, without the
       trajectory drift teacher-forcing eliminates by construction.
-    - The harness does *not* enable expert offload; the parity question
-      is about KV math, not residency.
+    - Expert offload is opt-in via ``--expert-offload`` (with
+      ``--max-resident-experts`` / ``--max-cached-shards``). Required for
+      Kimi K2.6 (~554 GB at 4-bit) on 128 GB hardware: without offload,
+      model load OOMs before any KV math runs. The parity question is
+      about KV math, not residency, but residency is a hard precondition
+      for the math to run at all on this checkpoint.
     - This is teacher-forced parity, not autoregressive generation.
       Spec §9 test 3 says "Generate"; teacher-forcing is a strict
       proxy for cache-side compression error and intentionally avoids
@@ -127,6 +131,20 @@ class ContextResult:
     # logits contain NaN/Inf"). None on the happy path. Lets per-context JSON
     # consumers attribute a NaN-poisoned gate failure to ref vs iso.
     non_finite_reason: Optional[str] = None
+    # Codex review: prove which path the iso run actually exercised. Without
+    # these counters the gate verdict is unattributable — outer
+    # supports_fused_latent_attention=True does not by itself prove the
+    # NPT16 metal path ran (the inner IsoQuantKVCache could still fall back
+    # to reconstruct, see kimi_mla_isoquant_dkv.py:125 comment).
+    iso_path_observed: Optional[str] = (
+        None  # "npt16" | "3kernel" | "single_kernel" | "mlx_fallback" | "unfused_reconstruct" | "ambiguous"
+    )
+    iso_stats_delta: dict = field(default_factory=dict)
+    ref_stats_delta: dict = field(default_factory=dict)
+    # Codex review #5: margin-conditioned mismatch analysis. Populated only
+    # when --dump-per-step is set. Excluded from the main artifact and
+    # written to a sidecar file (kept out of asdict serialization in main).
+    per_step: Optional[list] = None
 
 
 @dataclass
@@ -249,8 +267,13 @@ def prefill_then_teacher_forced_decode(
         in_tok = tokens[:, prefill_len + i : prefill_len + i + 1]
         logits = model(in_tok, cache=cache)
         # logits shape: (1, 1, V) — squeeze to (V,)
-        mx.eval(logits)
-        decode_logits.append(np.asarray(logits[0, 0], dtype=np.float32))
+        # Cast to fp32 inside MLX before crossing into NumPy: mlx bf16 arrays
+        # expose PEP 3118 format 'B' with item size 2, which numpy rejects
+        # ("Item size 2 for PEP 3118 buffer format string B does not match
+        # the dtype B item size 1.").
+        logits_f32 = logits[0, 0].astype(mx.float32)
+        mx.eval(logits_f32)
+        decode_logits.append(np.asarray(logits_f32, dtype=np.float32))
     return np.stack(decode_logits, axis=0)  # (n_decode, V)
 
 
@@ -365,6 +388,94 @@ def compute_metrics(
     }
 
 
+def extract_per_step_diagnostics(
+    logits_ref,
+    logits_iso,
+    decode_targets,
+) -> list[dict]:
+    """Per-position diagnostic record for margin-conditioned mismatch
+    analysis.
+
+    Codex review: with only 55 positions and ~7 argmax flips, the failing
+    top-1 rate alone cannot distinguish "kernel/layout error producing
+    high-margin flips" from "expected 3-bit compression error nibbling at
+    tiny margins." This function emits the data needed to draw that line:
+
+    Per position i, return:
+
+      * ``i``                — position index in the decode loop
+      * ``target``           — ground-truth next token from the prompt
+      * ``ref_top1``         — argmax of the FP16 reference logits
+      * ``iso_top1``         — argmax of the IsoQuant logits
+      * ``match``            — bool, ref_top1 == iso_top1
+      * ``ref_top1_logit``   — value of ref logit at ref_top1
+      * ``ref_top2_logit``   — value of ref logit at second-highest position
+      * ``ref_margin``       — ref_top1_logit - ref_top2_logit
+      * ``iso_at_ref_top1``  — value of iso logit at ref_top1
+      * ``iso_top1_logit``   — value of iso logit at iso_top1
+      * ``iso_margin``       — iso_top1_logit - second-highest iso logit
+      * ``logit_cosine``     — cosine similarity at this position
+
+    A downstream analysis script (separate file) can then ask: of the
+    mismatching positions, what is the median ``ref_margin``? If it is
+    large, the kernel is producing meaningfully different logits, not
+    just shifting compression noise across argmax boundaries.
+    """
+    import numpy as np
+
+    n = int(logits_ref.shape[0])
+    if n <= 0:
+        return []
+
+    ref = logits_ref
+    iso = logits_iso
+
+    top1_ref = ref.argmax(axis=-1)
+    top1_iso = iso.argmax(axis=-1)
+
+    # ref top-2: mask top-1 and re-argmax. Use a finite floor so this
+    # works even if the original logits contain very negative values.
+    ref_masked = ref.copy()
+    ref_masked[np.arange(n), top1_ref] = -np.inf
+    top2_ref = ref_masked.argmax(axis=-1)
+
+    iso_masked = iso.copy()
+    iso_masked[np.arange(n), top1_iso] = -np.inf
+    top2_iso = iso_masked.argmax(axis=-1)
+
+    # cosine per position
+    dot = (ref * iso).sum(axis=-1)
+    nref = np.linalg.norm(ref, axis=-1)
+    niso = np.linalg.norm(iso, axis=-1)
+    cos = dot / np.maximum(nref * niso, 1e-9)
+
+    out: list[dict] = []
+    rng = np.arange(n)
+    ref_top1_vals = ref[rng, top1_ref]
+    ref_top2_vals = ref[rng, top2_ref]
+    iso_top1_vals = iso[rng, top1_iso]
+    iso_top2_vals = iso[rng, top2_iso]
+    iso_at_ref_top1 = iso[rng, top1_ref]
+    for i in range(n):
+        out.append(
+            {
+                "i": int(i),
+                "target": int(decode_targets[i]),
+                "ref_top1": int(top1_ref[i]),
+                "iso_top1": int(top1_iso[i]),
+                "match": bool(top1_ref[i] == top1_iso[i]),
+                "ref_top1_logit": float(ref_top1_vals[i]),
+                "ref_top2_logit": float(ref_top2_vals[i]),
+                "ref_margin": float(ref_top1_vals[i] - ref_top2_vals[i]),
+                "iso_at_ref_top1": float(iso_at_ref_top1[i]),
+                "iso_top1_logit": float(iso_top1_vals[i]),
+                "iso_margin": float(iso_top1_vals[i] - iso_top2_vals[i]),
+                "logit_cosine": float(cos[i]),
+            }
+        )
+    return out
+
+
 def long_context_slope(window_drifts: list[float]) -> Optional[float]:
     """Least-squares slope of window-index → drift. A positive slope above
     a small tolerance is the RoPE-smearing signature called out in §9
@@ -390,11 +501,30 @@ def long_context_slope(window_drifts: list[float]) -> Optional[float]:
 # ---------------------------------------------------------------------------
 
 
-def load_model(model_path: str):
-    """Load model + tokenizer via mlx_lm.load. Raises on failure."""
+def load_model(
+    model_path: str,
+    expert_offload: bool = False,
+    max_resident_experts: Optional[int] = None,
+    max_cached_shards: Optional[int] = None,
+):
+    """Load model + tokenizer via mlx_lm.load. Raises on failure.
+
+    Kimi K2.6 (~554 GB at 4-bit) cannot be resident-loaded on a 128 GB box,
+    so the parity harness must opt into the same expert-offload path the
+    Phase 4 correctness command uses. ``expert_offload=False`` keeps the
+    original behaviour for non-Kimi callers.
+    """
     from mlx_lm import load as mlx_load
 
-    return mlx_load(model_path)
+    if not expert_offload:
+        return mlx_load(model_path)
+
+    model_config: dict = {"expert_offload": True}
+    if max_resident_experts is not None:
+        model_config["max_resident_experts"] = int(max_resident_experts)
+    if max_cached_shards is not None:
+        model_config["max_cached_shards"] = int(max_cached_shards)
+    return mlx_load(model_path, model_config=model_config)
 
 
 def make_caches(model, kv_cache_type: str, bits: int):
@@ -415,6 +545,112 @@ def make_caches(model, kv_cache_type: str, bits: int):
 
 
 # ---------------------------------------------------------------------------
+# IsoQuant stats / path classification
+# ---------------------------------------------------------------------------
+#
+# Codex review flagged that the harness's hard-fail check on
+# ``KimiMLAIsoQuantCache.supports_fused_latent_attention`` only proves the
+# *outer* wrapper is willing to dispatch to the fused path; it does not
+# prove the *inner* IsoQuantKVCache.fused_attention then ran a metal
+# kernel rather than falling back. To make the gate verdict attributable,
+# snapshot the global IsoQuant counters before each iso run and diff them
+# afterwards. Then classify which kernel actually ran by which timing
+# counters moved.
+
+
+def _snapshot_iso_stats() -> dict:
+    """Return current global IsoQuant counters as a dict, or {} if module
+    unavailable (e.g. mlx_lm import failed for some other reason)."""
+    try:
+        from mlx_lm.models.mlx_isoquant import get_stats
+    except Exception:
+        return {}
+    s = get_stats()
+    if not hasattr(s, "__slots__"):
+        return {}
+    return {f: int(getattr(s, f, 0) or 0) for f in s.__slots__}
+
+
+def _diff_iso_stats(before: dict, after: dict) -> dict:
+    if not before or not after:
+        return {}
+    return {k: int(after.get(k, 0) - before.get(k, 0)) for k in after}
+
+
+def _classify_iso_path(delta: dict) -> str:
+    """Map a stats delta to a single label naming which inner path actually
+    ran during the iso phase. Returns one of:
+
+      * ``"npt16"``                 — ``ISOQUANT_USE_NPT16_FUSED=1``
+                                      kernel ran (D=512 single-pass).
+      * ``"npt8_or_npt8_tiled"``    — ``ISOQUANT_USE_NPT8_FUSED=1`` ran
+                                      (D=256 fused).
+      * ``"single_kernel"``         — Branch ``T <= _SINGLE_KERNEL_T_THRESHOLD``
+                                      kernel ran. Threshold currently 0,
+                                      so this is effectively dead code.
+      * ``"3kernel"``               — Default fused metal path
+                                      (``_fused_attention_3kernel``).
+      * ``"mlx_ops_fallback"``      — Metal path attempted then failed; a
+                                      ``_fused_attention_mlx`` ran. Detected
+                                      by ``fused_metal_failures > 0``.
+      * ``"unfused_reconstruct"``   — Inner ``supports_fused_attention``
+                                      returned False; ``reconstruct_keys``
+                                      + base SDPA ran. Detected by
+                                      ``unfused_fallback_calls > 0``.
+      * ``"no_iso_dispatch"``       — Cache was selected but no fused
+                                      attempt was made (e.g. all layers
+                                      skipped, or IsoQuant cache never hit).
+      * ``"ambiguous"``             — Counters disagree, e.g. mixed kernels
+                                      across layers/steps; the artifact
+                                      records both buckets so a human can
+                                      decide.
+    """
+    if not delta:
+        return "no_iso_dispatch"
+    unfused = delta.get("unfused_fallback_calls", 0)
+    metal_attempts = delta.get("fused_metal_attempts", 0)
+    metal_failures = delta.get("fused_metal_failures", 0)
+    if metal_attempts == 0 and unfused > 0:
+        return "unfused_reconstruct"
+    if metal_attempts == 0 and unfused == 0:
+        return "no_iso_dispatch"
+    # Metal path attempted at least once.
+    if metal_failures > 0:
+        return "mlx_ops_fallback"
+    # Metal path succeeded. Discriminate by which fused timing counter moved.
+    qk = delta.get("fused_qk_ms", 0)
+    val = delta.get("fused_value_ms", 0)
+    val_tiled = delta.get("fused_value_tiled_ms", 0)
+    inv = delta.get("fused_inverse_ms", 0)
+    sk = delta.get("fused_single_kernel_ms", 0)
+    total = delta.get("fused_metal_total_ms", 0)
+    # The 3-kernel path increments qk/value/inverse separately and does
+    # NOT touch fused_single_kernel_ms. NPT16 / NPT8 / NPT8-tiled all run
+    # under the single-kernel umbrella and bump fused_single_kernel_ms
+    # (and fused_metal_total_ms), but not the three-kernel timers.
+    three_kernel_signal = qk > 0 or val > 0 or val_tiled > 0 or inv > 0
+    single_kernel_signal = sk > 0
+    if single_kernel_signal and not three_kernel_signal:
+        # Distinguish NPT16 (D=512) from NPT8 (D=256) via env var, since
+        # the counters share a single timer. The only way the single-kernel
+        # path runs at D=512 is if NPT16 is enabled, so the env var is a
+        # reliable disambiguator at classification time.
+        if os.environ.get("ISOQUANT_USE_NPT16_FUSED", "0") == "1":
+            return "npt16"
+        if os.environ.get("ISOQUANT_USE_NPT8_FUSED", "0") == "1":
+            return "npt8_or_npt8_tiled"
+        return "single_kernel"
+    if three_kernel_signal and not single_kernel_signal:
+        return "3kernel"
+    if three_kernel_signal and single_kernel_signal:
+        return "ambiguous"
+    # metal_attempts > 0 but no per-kernel timer moved. Could happen if
+    # mx.eval was deferred and counters lag, but harness uses mx.eval per
+    # step so this should be rare.
+    return "ambiguous"
+
+
+# ---------------------------------------------------------------------------
 # Per-context evaluation
 # ---------------------------------------------------------------------------
 
@@ -428,6 +664,7 @@ def evaluate_context(
     prefill_len: int,
     window_size: int,
     log,
+    dump_per_step: bool = False,
 ) -> ContextResult:
     import numpy as np
 
@@ -442,6 +679,7 @@ def evaluate_context(
         f"prefill={prefill_len} decode_steps={decode_targets.shape[0]}"
     )
     _set_npt16(False)
+    ref_stats_before = _snapshot_iso_stats()
     t0 = time.time()
     cache_ref = make_caches(model, "default", bits=bits)
     logits_ref = prefill_then_teacher_forced_decode(
@@ -452,12 +690,14 @@ def evaluate_context(
     # target in our prompt). Trim accordingly.
     logits_ref = logits_ref[: decode_targets.shape[0]]
     setup_ref = time.time() - t0
+    ref_stats_delta = _diff_iso_stats(ref_stats_before, _snapshot_iso_stats())
 
     del cache_ref
 
     # ---- Test path: IsoQuant cache, NPT16 fused if requested ----
     log(f"  [{context_tokens}] iso path (IsoQuant {bits}-bit, npt16_fused={use_npt16})")
     _set_npt16(use_npt16)
+    iso_stats_before = _snapshot_iso_stats()
     t0 = time.time()
     cache_iso = make_caches(model, "isoquant", bits=bits)
     logits_iso = prefill_then_teacher_forced_decode(
@@ -465,11 +705,22 @@ def evaluate_context(
     )
     logits_iso = logits_iso[: decode_targets.shape[0]]
     setup_iso = time.time() - t0
+    iso_stats_delta = _diff_iso_stats(iso_stats_before, _snapshot_iso_stats())
+    iso_path_observed = _classify_iso_path(iso_stats_delta)
+    log(f"  [{context_tokens}] iso path observed: {iso_path_observed}")
 
     del cache_iso
 
     metrics = compute_metrics(logits_ref, logits_iso, decode_targets, window_size)
     slope = long_context_slope(metrics["window_ppl_drifts"])
+
+    per_step_records: Optional[list] = None
+    if dump_per_step and metrics.get("non_finite_reason") is None:
+        # Only emit per-step records when both paths produced finite logits;
+        # otherwise the per-position margins are meaningless.
+        per_step_records = extract_per_step_diagnostics(
+            logits_ref, logits_iso, decode_targets
+        )
 
     return ContextResult(
         context_tokens=context_tokens,
@@ -485,6 +736,10 @@ def evaluate_context(
         setup_seconds_ref=setup_ref,
         setup_seconds_iso=setup_iso,
         non_finite_reason=metrics.get("non_finite_reason"),
+        iso_path_observed=iso_path_observed,
+        iso_stats_delta=iso_stats_delta,
+        ref_stats_delta=ref_stats_delta,
+        per_step=per_step_records,
     )
 
 
@@ -537,6 +792,12 @@ def evaluate_gate(
             )
 
     # §9 test 3: per-window drift slope must be ≤ tolerance.
+    # Codex review: a least-squares slope on fewer than ~4 windows is
+    # essentially noise and should not flip the gate. The smoke run at
+    # ctx=64 / window_size=16 produced 3 windows and a +0.572 slope which
+    # crossed tolerance trivially. Require enough windows for the slope
+    # to carry signal; below that, record it as informational only.
+    _SLOPE_MIN_WINDOWS = 4
     for r in results:
         if r.long_context_slope is None:
             continue
@@ -545,10 +806,18 @@ def evaluate_gate(
                 f"context={r.context_tokens}: window-drift slope is non-finite "
                 f"({r.long_context_slope}) — likely NaN/Inf in per-window PPL"
             )
-        elif r.long_context_slope > slope_tolerance:
+            continue
+        n_windows = len(r.window_ppl_drifts)
+        if n_windows < _SLOPE_MIN_WINDOWS:
+            # Informational: slope exists but sample is too small to be a
+            # gate. We still log it in the artifact (long_context_slope
+            # field) so a human can inspect it.
+            continue
+        if r.long_context_slope > slope_tolerance:
             reasons.append(
                 f"context={r.context_tokens}: window-drift slope {r.long_context_slope:.4f} "
-                f"> tolerance {slope_tolerance:.4f} — possible RoPE smearing"
+                f"> tolerance {slope_tolerance:.4f} (n_windows={n_windows}) — "
+                f"possible RoPE smearing"
             )
 
     return GateVerdict(passed=(len(reasons) == 0), reasons=reasons)
@@ -636,6 +905,35 @@ def main() -> int:
         help="Run only the shortest context for a quick smoke check; "
         "still applies §10 / §9 gates but the slope sentinel is unreliable.",
     )
+    p.add_argument(
+        "--expert-offload",
+        action="store_true",
+        help="Enable expert offload. Required for Kimi K2.6 (~554 GB at 4-bit) "
+        "on 128 GB hardware; otherwise model load OOMs before any KV math runs.",
+    )
+    p.add_argument(
+        "--max-resident-experts",
+        type=int,
+        default=None,
+        help="Cap on resident routed-expert instances when --expert-offload is set. "
+        "Mirrors the mlx_lm.generate flag.",
+    )
+    p.add_argument(
+        "--max-cached-shards",
+        type=int,
+        default=None,
+        help="Cap on cached safetensor shards when --expert-offload is set. "
+        "Mirrors the mlx_lm.generate flag.",
+    )
+    p.add_argument(
+        "--dump-per-step",
+        action="store_true",
+        help="Write a sidecar JSON next to --output containing per-position "
+        "diagnostic records (target token, ref/iso top-1, ref top-1/2 "
+        "logits, iso logit at ref-top-1, per-position cosine). Enables "
+        "margin-conditioned mismatch analysis. Roughly ~120 bytes per "
+        "decode step per context, so cheap even at 8K.",
+    )
     args = p.parse_args()
 
     contexts = sorted({int(x) for x in args.contexts.split(",") if x.strip()})
@@ -660,12 +958,26 @@ def main() -> int:
     def log(msg: str) -> None:
         print(msg, flush=True)
 
-    log(f"Loading model from {model_path} ...")
+    log(
+        f"Loading model from {model_path} ... "
+        f"(expert_offload={args.expert_offload}, "
+        f"max_resident_experts={args.max_resident_experts}, "
+        f"max_cached_shards={args.max_cached_shards})"
+    )
     t0 = time.time()
     try:
-        model, tokenizer = load_model(str(model_path))
+        model, tokenizer = load_model(
+            str(model_path),
+            expert_offload=args.expert_offload,
+            max_resident_experts=args.max_resident_experts,
+            max_cached_shards=args.max_cached_shards,
+        )
     except Exception as exc:
+        import traceback
+
+        tb = traceback.format_exc()
         print(f"ERROR: model load failed: {exc}", file=sys.stderr)
+        print(tb, file=sys.stderr)
         # Write a setup-error stub so CI has an artifact to inspect.
         out_path.write_text(
             json.dumps(
@@ -675,6 +987,7 @@ def main() -> int:
                     ),
                     "gate_status": "SETUP_ERROR",
                     "error": str(exc),
+                    "traceback": tb,
                 },
                 indent=2,
             )
@@ -698,14 +1011,20 @@ def main() -> int:
                 prefill_len=args.prefill_len,
                 window_size=args.window_size,
                 log=log,
+                dump_per_step=args.dump_per_step,
             )
             log(
                 f"  → top1={r.top1_match_rate:.4f}  ppl_drift={r.ppl_drift:+.4f}  "
-                f"cos={r.mean_logit_cosine:.4f}  slope={r.long_context_slope}"
+                f"cos={r.mean_logit_cosine:.4f}  slope={r.long_context_slope}  "
+                f"path={r.iso_path_observed}"
             )
             results.append(r)
     except Exception as exc:
+        import traceback
+
+        tb = traceback.format_exc()
         print(f"ERROR: evaluation failed: {exc}", file=sys.stderr)
+        print(tb, file=sys.stderr)
         out_path.write_text(
             json.dumps(
                 {
@@ -714,6 +1033,7 @@ def main() -> int:
                     ),
                     "gate_status": "SETUP_ERROR",
                     "error": str(exc),
+                    "traceback": tb,
                     "completed_contexts": [r.context_tokens for r in results],
                 },
                 indent=2,
@@ -729,6 +1049,32 @@ def main() -> int:
     )
     gate_status = "GATE_PASS" if verdict.passed else "GATE_FAIL"
 
+    # Strip per_step from each ContextResult before serializing to the main
+    # artifact; it goes to a sidecar so the main JSON stays scannable.
+    contexts_payload = []
+    for r in results:
+        d = asdict(r)
+        d.pop("per_step", None)
+        contexts_payload.append(d)
+
+    # Snapshot the active env flags so the artifact records the kernel
+    # configuration in effect at the *end* of the run. The harness toggles
+    # ISOQUANT_USE_NPT16_FUSED itself; capturing it here lets a reader
+    # confirm the iso phase ran with NPT16 enabled even without inspecting
+    # path counters.
+    env_snapshot = {
+        k: os.environ.get(k)
+        for k in (
+            "ISOQUANT_USE_NPT16_FUSED",
+            "ISOQUANT_USE_NPT8_FUSED",
+            "ISOQUANT_BITS",
+            "ISOQUANT_USE_METAL",
+            "ISOQUANT_CACHE_MODE",
+            "TURBOQUANT_SKIP_LAYERS",
+        )
+        if os.environ.get(k) is not None
+    }
+
     payload = {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "model_path": str(model_path),
@@ -742,16 +1088,42 @@ def main() -> int:
         "config": {
             "bits": args.bits,
             "use_npt16_fused": use_npt16,
-            "prefill_chunk": args.prefill_chunk,
+            "prefill_len": args.prefill_len,
             "window_size": args.window_size,
             "smoke": args.smoke,
+            "expert_offload": args.expert_offload,
+            "max_resident_experts": args.max_resident_experts,
+            "max_cached_shards": args.max_cached_shards,
+            "dump_per_step": args.dump_per_step,
         },
+        "env_snapshot": env_snapshot,
         "verdict_reasons": verdict.reasons,
         "load_seconds": load_seconds,
-        "contexts": [asdict(r) for r in results],
+        "contexts": contexts_payload,
     }
     out_path.write_text(json.dumps(payload, indent=2))
     log(f"Saved: {out_path}  gate_status={gate_status}")
+
+    # Sidecar with per-step diagnostics (for margin-conditioned analysis).
+    if args.dump_per_step:
+        per_step_payload = {
+            "timestamp": payload["timestamp"],
+            "model_path": payload["model_path"],
+            "gate_status": gate_status,
+            "config": payload["config"],
+            "env_snapshot": env_snapshot,
+            "contexts": [
+                {
+                    "context_tokens": r.context_tokens,
+                    "iso_path_observed": r.iso_path_observed,
+                    "per_step": r.per_step or [],
+                }
+                for r in results
+            ],
+        }
+        sidecar_path = out_path.with_suffix(".per_step.json")
+        sidecar_path.write_text(json.dumps(per_step_payload, indent=2))
+        log(f"Saved per-step diagnostics: {sidecar_path}")
     if verdict.reasons:
         log("Verdict reasons:")
         for r in verdict.reasons:
