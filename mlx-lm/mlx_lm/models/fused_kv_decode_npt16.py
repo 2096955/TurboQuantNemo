@@ -237,8 +237,28 @@ def fused_attention_npt16(
 
     if mask is not None:
         m = mask
+        # Reduce to 2D (num_heads, seq_len) by squeezing singleton axes from
+        # anywhere — not just axis 0. Kimi MLA passes pe_scores with shape
+        # (B=1, H_q, L=1, T) so axis 0 (B) AND axis 2 (L) are both singletons
+        # to strip; the prior `while m.ndim > 2: m.squeeze(0)` failed at the
+        # second iteration because axis 0 was H_q=64 by then.
         while m.ndim > 2:
-            m = m.squeeze(0)
+            sz1_axis = next((i for i, s in enumerate(m.shape) if s == 1), None)
+            if sz1_axis is None:
+                raise ValueError(
+                    f"NPT16 mask shape {tuple(m.shape)} has no singleton axis to "
+                    f"reduce to 2D (expected (num_heads={num_heads}, "
+                    f"seq_len={seq_len}))."
+                )
+            m = m.squeeze(sz1_axis)
+        # Final-shape gate: kernel C side indexes mask_data[q_head * T + t],
+        # which assumes head-major (num_heads, seq_len) row-major. Reject
+        # transposed shapes silently flattening into wrong order.
+        if m.shape not in ((num_heads, seq_len), (1, seq_len)):
+            raise ValueError(
+                f"NPT16 mask reduced to shape {tuple(m.shape)}; expected "
+                f"({num_heads}, {seq_len}) or (1, {seq_len}) before broadcast."
+            )
         if m.shape[0] == 1 and num_heads > 1:
             m = mx.broadcast_to(m, (num_heads, seq_len))
         mask_flat = m.reshape(-1).astype(mx.float32)
