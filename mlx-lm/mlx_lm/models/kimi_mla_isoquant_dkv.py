@@ -165,6 +165,13 @@ class KimiMLAIsoQuantCache:
         self._iso.compressed_keys = self._compressed_latent
         self._iso.compressed_values = self._compressed_latent
         self._iso._seq_len = self.offset
+        # Mirror the outer cache's post-finalize state onto the inner compression
+        # engine so its supports_fused_attention check passes; otherwise it
+        # reports False (still _deferred=True from __init__) and the inner
+        # fused_attention silently falls into the unfused reconstruct path,
+        # which is exactly the failure mode the harness assertion flags.
+        self._iso._deferred = False
+        self._iso.offset = self.offset
         # Share the single packed buffer for both K and V (MLA: K=V)
         self._iso._packed_keys_cache = self._packed_latent_cache
         self._iso._packed_values_cache = self._packed_latent_cache
