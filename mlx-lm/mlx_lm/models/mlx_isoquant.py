@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import os
 import time
+import traceback
+import warnings  # noqa: F401  (used in fused-Metal failure path; do not strip)
 
 import numpy as np
 import mlx.core as mx
@@ -47,6 +49,17 @@ class IsoQuantStats:
         "finalize_calls",
         "fused_metal_attempts",
         "fused_metal_failures",
+        # Per-branch attribution counters (Codex F1): increment regardless of
+        # ISOQUANT_PROFILE_METAL so _classify_iso_path can identify which
+        # fused branch ran without depending on int-truncated timing fields.
+        "fused_npt16_attempts",
+        "fused_npt16_failures",
+        "fused_npt8_attempts",
+        "fused_npt8_failures",
+        "fused_npt8_tiled_attempts",
+        "fused_npt8_tiled_failures",
+        "fused_3kernel_attempts",
+        "fused_3kernel_failures",
         "packed_cache_hits",
         "packed_cache_misses",
         "fallback_invocations",
@@ -107,6 +120,112 @@ class IsoQuantStats:
 
 
 _GLOBAL_STATS = IsoQuantStats()
+
+
+# Forensic-capture one-shot flag. Used by `fused_attention` when
+# ISOQUANT_CAPTURE_PATH is set in env: dumps the exact decode-step inputs
+# (q_rot, mask, compressed K/V, rotation matrices, centroids) on the first
+# call where layer_idx==0, then sets this flag so subsequent calls skip.
+# A list because module-level rebinds in nested scopes are awkward in CPython.
+_GLOBAL_CAPTURE_DONE = [False]
+
+
+def _capture_decode_state(
+    path: str,
+    cache,
+    queries,
+    q_rot,
+    mask,
+    scale: float,
+    T: int,
+    H_q: int,
+    H_kv: int,
+    D: int,
+    repeats: int,
+) -> None:
+    """Dump the full decode-step state needed to reproduce both attention paths
+    offline. Writes a single .npz with all relevant tensors as numpy arrays
+    plus a small metadata dict. Caller is expected to gate this so it only
+    fires once per run (see _GLOBAL_CAPTURE_DONE).
+
+    Wrapped in a try/except: forensic dumps must NEVER kill a validation
+    run — the run's primary deliverable is its top-1/ppl artifact, not the
+    capture. A failed capture should warn and let the run continue."""
+    import numpy as _np
+
+    try:
+        # mlx → numpy needs explicit fp32 cast for bf16/fp16 (numpy's PEP 3118
+        # buffer protocol can't decode 16-bit float dtypes directly). Promote
+        # everything floating to fp32 for the dump; integer types pass through.
+        def _to_np(arr):
+            if arr is None:
+                return _np.zeros(0, dtype=_np.float32)
+            if arr.dtype in (mx.bfloat16, mx.float16):
+                arr = arr.astype(mx.float32)
+            mx.eval(arr)
+            return _np.asarray(arr)
+
+        mx.eval(
+            queries,
+            q_rot,
+            cache.rotation_matrices,
+            cache.compressor.centroids,
+        )
+        if mask is not None:
+            mx.eval(mask)
+
+        # Slice prealloc-padded buffers to the actual sequence length so the
+        # offline replay sees exactly what the kernel sees this call.
+        if cache._cache_mode == "prealloc":
+            k_indices = cache.compressed_keys["indices"][:, :T, :]
+            k_xnorm = cache.compressed_keys["x_norm"][:, :T, :]
+            v_indices = cache.compressed_values["indices"][:, :T, :]
+            v_xnorm = cache.compressed_values["x_norm"][:, :T, :]
+        else:
+            k_indices = cache.compressed_keys["indices"]
+            k_xnorm = cache.compressed_keys["x_norm"]
+            v_indices = cache.compressed_values["indices"]
+            v_xnorm = cache.compressed_values["x_norm"]
+        mx.eval(k_indices, k_xnorm, v_indices, v_xnorm)
+
+        payload = {
+            "queries": _to_np(queries),
+            "q_rot": _to_np(q_rot),
+            "mask": _to_np(mask) if mask is not None else _np.zeros(0),
+            "mask_present": _np.array([1 if mask is not None else 0], dtype=_np.uint8),
+            "k_indices": _to_np(k_indices),
+            "k_xnorm": _to_np(k_xnorm),
+            "v_indices": _to_np(v_indices),
+            "v_xnorm": _to_np(v_xnorm),
+            "rotation_matrices": _to_np(cache.rotation_matrices),
+            "centroids": _to_np(cache.compressor.centroids),
+            "scale": _np.array([scale], dtype=_np.float32),
+            "meta_T": _np.array([T], dtype=_np.int64),
+            "meta_H_q": _np.array([H_q], dtype=_np.int64),
+            "meta_H_kv": _np.array([H_kv], dtype=_np.int64),
+            "meta_D": _np.array([D], dtype=_np.int64),
+            "meta_repeats": _np.array([repeats], dtype=_np.int64),
+            "meta_bit_width": _np.array([cache.bit_width], dtype=_np.int64),
+            "meta_layer_idx": _np.array([cache.layer_idx or 0], dtype=_np.int64),
+            "meta_cache_mode": _np.array(
+                [cache._cache_mode.encode("utf-8")], dtype=object
+            ),
+        }
+        _np.savez(path, **payload)
+    except Exception as exc:
+        warnings.warn(
+            f"[capture] FAILED at layer_idx={cache.layer_idx} "
+            f"({type(exc).__name__}: {exc!r}); validation continues without "
+            f"capture. Set ISOQUANT_CAPTURE_DEBUG=1 for full traceback.",
+            stacklevel=2,
+        )
+        if os.environ.get("ISOQUANT_CAPTURE_DEBUG") == "1":
+            traceback.print_exc()
+        return
+    print(
+        f"[capture] saved decode state: T={T} H_q={H_q} D={D} "
+        f"layer={cache.layer_idx} → {path}"
+    )
 
 
 def get_stats() -> IsoQuantStats:
@@ -1080,10 +1199,18 @@ class IsoQuantKVCache(TurboQuantKVCache):
         if self.compressed_keys is None or self._seq_len == 0:
             return mx.zeros_like(queries)
 
-        if not self.supports_fused_attention:
-            import warnings
+        # Force-reconstruct A/B: when ISOQUANT_FORCE_RECONSTRUCT_ATTENTION=1,
+        # route through the reconstruct+SDPA path (mathematically equivalent
+        # alternative implementation) even when supports_fused_attention=True.
+        # Lets the validation harness compare fused vs reconstruct paths on
+        # identical codebase + checkpoint without needing the
+        # supports_fused_attention=False precondition.
+        force_reconstruct = (
+            os.environ.get("ISOQUANT_FORCE_RECONSTRUCT_ATTENTION") == "1"
+        )
 
-            if self.bit_width != 3:
+        if not self.supports_fused_attention or force_reconstruct:
+            if self.bit_width != 3 and not force_reconstruct:
                 warnings.warn(
                     f"IsoQuant fused path unavailable: bit_width={self.bit_width} "
                     f"(only 3-bit supported). Using unfused O(T*d^2) path.",
@@ -1112,6 +1239,39 @@ class IsoQuantKVCache(TurboQuantKVCache):
         R_T_exp = mx.repeat(R_T, repeats, axis=0) if repeats > 1 else R_T
         q_rot = mx.squeeze(mx.matmul(q_flat[:, None, :], R_T_exp), axis=1)  # (H_q, D)
 
+        # --- Forensic capture (env-gated, one-shot) ---
+        # Set ISOQUANT_CAPTURE_PATH=/path/to/capture.npz to dump the exact
+        # (q_rot, mask, compressed_K, compressed_V, rotation_matrices,
+        # centroids, scale, T, num_heads, head_dim) on the first decode call
+        # that reaches this method. Layer-0 NOT used as the gate: Kimi
+        # configures the first `skip_layers` (default 2) layers as plain
+        # KVCache rather than IsoQuant, so layer 0 never enters this method.
+        # The global one-shot flag handles dedup. Optional ISOQUANT_CAPTURE_LAYER
+        # narrows the capture to a specific layer index if set.
+        # Used to reproduce kernel-vs-fallback divergence offline against
+        # real K2.6 inputs without re-running the full validation.
+        # Does NOT raise; the run continues and produces its normal artifact.
+        capture_path = os.environ.get("ISOQUANT_CAPTURE_PATH")
+        capture_layer_env = os.environ.get("ISOQUANT_CAPTURE_LAYER")
+        capture_layer_match = capture_layer_env is None or self.layer_idx == int(
+            capture_layer_env
+        )
+        if capture_path and not _GLOBAL_CAPTURE_DONE[0] and capture_layer_match:
+            _capture_decode_state(
+                capture_path,
+                self,
+                queries=queries,
+                q_rot=q_rot,
+                mask=mask,
+                scale=scale,
+                T=T,
+                H_q=H_q,
+                H_kv=H_kv,
+                D=D,
+                repeats=repeats,
+            )
+            _GLOBAL_CAPTURE_DONE[0] = True
+
         # --- Try Metal-fused kernels (packed 3-bit, no materialisation) ---
         if self._fused_metal_ok is not False:
             _GLOBAL_STATS.fused_metal_attempts += 1
@@ -1121,9 +1281,28 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 )
                 self._fused_metal_ok = True
                 return out[None, :, None, :].astype(queries.dtype)
-            except Exception:
+            except Exception as exc:
                 _GLOBAL_STATS.fused_metal_failures += 1
                 self._fused_metal_ok = False
+                # Forensic capture: per-cache last-error so the artifact /
+                # post-mortem can see why the fused kernel rejected this
+                # call instead of silently routing to the MLX-ops fallback.
+                # warnings.warn fires once per (category, message, lineno) by
+                # default, but kernel errors tend to vary per call site; we
+                # also stash repr+traceback on self for a deeper read.
+                self._fused_metal_last_error = (
+                    type(exc).__name__,
+                    str(exc),
+                    traceback.format_exc(),
+                )
+                warnings.warn(
+                    f"IsoQuant fused Metal kernel raised {type(exc).__name__}: "
+                    f"{exc!r} (T={T} D={D} H_q={H_q} H_kv={H_kv} "
+                    f"mask_shape={None if mask is None else tuple(mask.shape)} "
+                    f"mask_dtype={None if mask is None else mask.dtype}); "
+                    f"falling back to mlx_ops_fallback for this cache.",
+                    stacklevel=2,
+                )
 
         # --- MLX-ops fallback (centroid gather + dense matmul) ---
         out = self._fused_attention_mlx(q_rot, scale, mask, H_q, H_kv, T, D, repeats)
@@ -1226,24 +1405,53 @@ class IsoQuantKVCache(TurboQuantKVCache):
 
         if D == 256 and os.environ.get("ISOQUANT_USE_NPT8_FUSED", "0") == "1":
             if T >= self._NPT8_TILED_T_THRESHOLD:
-                out = self._fused_attention_npt8_tiled(
-                    k_packed,
-                    v_packed,
-                    centroids,
-                    k_norms,
-                    v_norms,
-                    q_rot,
-                    kv_head_map,
-                    scale,
-                    mask,
-                    H_q,
-                    H_kv,
-                    T,
-                    D,
-                    storage_stride,
-                )
+                _GLOBAL_STATS.fused_npt8_tiled_attempts += 1
+                try:
+                    out = self._fused_attention_npt8_tiled(
+                        k_packed,
+                        v_packed,
+                        centroids,
+                        k_norms,
+                        v_norms,
+                        q_rot,
+                        kv_head_map,
+                        scale,
+                        mask,
+                        H_q,
+                        H_kv,
+                        T,
+                        D,
+                        storage_stride,
+                    )
+                except Exception:
+                    _GLOBAL_STATS.fused_npt8_tiled_failures += 1
+                    raise
             else:
-                out = self._fused_attention_npt8(
+                _GLOBAL_STATS.fused_npt8_attempts += 1
+                try:
+                    out = self._fused_attention_npt8(
+                        k_packed,
+                        v_packed,
+                        centroids,
+                        k_norms,
+                        v_norms,
+                        q_rot,
+                        kv_head_map,
+                        scale,
+                        mask,
+                        H_q,
+                        H_kv,
+                        T,
+                        D,
+                        storage_stride,
+                    )
+                except Exception:
+                    _GLOBAL_STATS.fused_npt8_failures += 1
+                    raise
+        elif D == 512 and os.environ.get("ISOQUANT_USE_NPT16_FUSED", "0") == "1":
+            _GLOBAL_STATS.fused_npt16_attempts += 1
+            try:
+                out = self._fused_attention_npt16(
                     k_packed,
                     v_packed,
                     centroids,
@@ -1259,23 +1467,9 @@ class IsoQuantKVCache(TurboQuantKVCache):
                     D,
                     storage_stride,
                 )
-        elif D == 512 and os.environ.get("ISOQUANT_USE_NPT16_FUSED", "0") == "1":
-            out = self._fused_attention_npt16(
-                k_packed,
-                v_packed,
-                centroids,
-                k_norms,
-                v_norms,
-                q_rot,
-                kv_head_map,
-                scale,
-                mask,
-                H_q,
-                H_kv,
-                T,
-                D,
-                storage_stride,
-            )
+            except Exception:
+                _GLOBAL_STATS.fused_npt16_failures += 1
+                raise
         elif T <= self._SINGLE_KERNEL_T_THRESHOLD:
             out = self._fused_attention_single_kernel(
                 k_packed,
@@ -1293,23 +1487,28 @@ class IsoQuantKVCache(TurboQuantKVCache):
                 storage_stride,
             )
         else:
-            out = self._fused_attention_3kernel(
-                k_packed,
-                v_packed,
-                centroids,
-                k_norms,
-                v_norms,
-                q_rot,
-                kv_head_map,
-                scale,
-                mask,
-                H_q,
-                H_kv,
-                T,
-                D,
-                repeats,
-                storage_stride,
-            )
+            _GLOBAL_STATS.fused_3kernel_attempts += 1
+            try:
+                out = self._fused_attention_3kernel(
+                    k_packed,
+                    v_packed,
+                    centroids,
+                    k_norms,
+                    v_norms,
+                    q_rot,
+                    kv_head_map,
+                    scale,
+                    mask,
+                    H_q,
+                    H_kv,
+                    T,
+                    D,
+                    repeats,
+                    storage_stride,
+                )
+            except Exception:
+                _GLOBAL_STATS.fused_3kernel_failures += 1
+                raise
         if total_t0 is not None:
             mx.eval(out)
             mx.synchronize()
