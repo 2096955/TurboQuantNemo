@@ -1,0 +1,692 @@
+KIMI K2.6 MLA LOGIT PARITY GATE — HANDOVER
+================================================
+Last updated: 2026-05-16 (post force-reconstruct discriminator + Codex full review)
+Session: Phase 6 real-weight MLA validation on M4 Max (128 GB)
+
+==============================================================================
+CURRENT STATE (start here — supersedes everything below)
+==============================================================================
+
+The NPT=16 kernel has been DEBUGGED, FIXED, and is now FUNCTIONAL on real
+Kimi K2.6 weights. The investigation moved from "kernel raises on every
+attempt" to "kernel runs end-to-end with 0 failures across 3304 attempts."
+Two surgical fixes are in main:
+
+  f49c7fb — fix(npt16): reduce 4D MLA pe_scores mask to 2D before kernel
+            dispatch (mask-shape squeeze bug — kernel had been silently
+            failing with ValueError on every call against real K2.6)
+  251f74a — fix(kimi-mla): mirror _deferred/offset to inner _iso after
+            finalize (state-mirror so supports_fused_latent_attention
+            returns True — precondition for the kernel to even attempt
+            dispatch)
+
+Post-fix diagnostic instrumentation is also in main (commits c63126d,
+3fa90b8, 0c35749): per-branch counters, exception capture, forensic
+decode-state dump (ISOQUANT_CAPTURE_PATH), force-reconstruct flag
+(ISOQUANT_FORCE_RECONSTRUCT_ATTENTION), and three offline diagnostic
+scripts (replay_npt16_capture.py, repro_npt16_correctness.py,
+repro_npt16_distribution_sweep.py).
+
+The CENTRAL UNRESOLVED FINDING is the post-fix top-1 measurement:
+
+  Three paths on identical post-fix codebase + checkpoint + prompt at ctx=64:
+    Pre-fix mlx_ops_fallback (kernel raised → fb via exception):  0.8727
+    Post-fix kernel npt16 (3304 attempts, 0 failures):             0.8000
+    Post-fix force-reconstruct (reconstruct_keys + mx.fast.SDPA):  0.9091
+
+  None reaches the 0.99 gate. The 11pp kernel-vs-reconstruct gap reproduces
+  under controlled routing on the SAME codebase. Single-call analysis shows
+  kernel and _fused_attention_mlx agree at fp32 noise (1e-9) but both
+  disagree with reconstruct+mx.fast.SDPA by ~9e-6 per call. The ~9e-6 has
+  a confirmed precision-regime component (fp32-vs-fp16 K/V cast) but
+  isn't fully explained by it. After extensive Codex stress-testing, the
+  remaining gap is best characterized as:
+
+    "Rotated-space attention is mathematically equivalent but not
+     gate-equivalent to original-space SDPA under trajectory amplification
+     against an FP16 reference."
+
+  See "SESSION 2 CHRONICLE" below for the full audit trail.
+
+CURRENT PRODUCTION RECOMMENDATION (from Codex strategic review):
+
+  - reconstruct path (force-reconstruct flag): "fp16-compatible quality
+    gate" mode. Best measured top-1 of any bits=3 path. Loses fused
+    bandwidth wins because it materializes K/V.
+  - kernel path (default): "bandwidth/experimental" mode. Faster, lower
+    top-1 against fp16 reference. Do not promote to production until
+    multi-layer shadow-compute or longer-context evidence supports it.
+  - bits=4: separate gate-target investigation queued. Bits=4 fallback
+    already at 97.96% non-tied at ctx=64; longer context may close to 0.99.
+
+WHAT TO DO NEXT
+-----------------
+
+  P1. ISOQUANT_FORCE_FUSED_MLX=1 validation run (~22 min wall).
+      Codex's missing baseline: route through _fused_attention_mlx
+      directly, skipping the Metal kernel. Decides whether kernel is
+      the issue (force-fused-mlx → 0.9091) or rotated-space attention
+      itself is the issue (force-fused-mlx → 0.8000).
+      Add a 4-line env gate at mlx_isoquant.py around line 1276
+      (immediately before `if self._fused_metal_ok is not False:`)
+      that skips the kernel try and falls through directly to the
+      fallback at line 1295.
+
+  P2. bits=4 fallback at ctx=2K/4K/8K. ~60 min wall total.
+      Already at 0.9796 non-tied at ctx=64; longer context dilutes
+      tied positions. If hits 0.99, bits=4 reconstruct is the
+      production path.
+
+  P3. Multi-layer shadow-compute paired capture. Substantial new
+      instrumentation: at every Nth layer/decode step, compute BOTH
+      kernel and reconstruct outputs side by side, record per-stage
+      deltas (attention output, post-o_proj, post-residual, logits),
+      feed only the chosen path forward. The "first material
+      divergence" point matters more than final top1. Only do this if
+      P1 confirms the kernel itself is the issue.
+
+  P4. Codex F4 follow-up: factor _sync_inner_iso_state() helper in
+      kimi_mla_isoquant_dkv.py and call from finalize_deferred_prefill
+      AND from fused_latent_attention. Currently the sync only happens
+      at the fused-call site; making it run at finalize too tightens
+      the "after finalize, inner is fused-capable" invariant.
+
+  P5. Codex F2 follow-up: relabel iso_path_observed for the bits=4
+      outer-reconstruct case (currently mislabeled as "no_iso_dispatch";
+      should be "kimi_mla_outer_reconstruct").
+
+==============================================================================
+SESSION 2 CHRONICLE (2026-05-12 → 2026-05-16)
+==============================================================================
+
+Sequence of investigations after the kernel-fix landed:
+
+A. First-ever real fused NPT=16 validation run.
+   Top1=0.8000 with iso_path_observed=npt16, fused_npt16_attempts=3304,
+   fused_npt16_failures=0. Kernel runs end-to-end. Lower than the prior
+   pre-fix mlx_ops_fallback baseline of 0.8727. Surprising and concerning.
+
+B. Single-call replay against captured K2.6 layer 2 T=9 decode state.
+   Path: scripts/replay_npt16_capture.py against the .npz produced by
+   ISOQUANT_CAPTURE_PATH instrumentation.
+   Result: kernel vs _fused_attention_mlx linf=9.31e-09, cosine=1.000000.
+   The kernel is bit-equivalent to its own fallback at fp32 noise on
+   real inputs. NO SINGLE-CALL KERNEL CORRECTNESS BUG.
+
+C. Synthetic distribution sweep. Five variants (Gaussian tame pe,
+   sharp pe N(0,5), pe with finfo.min sentinels, Student-t df=3 K,V,
+   combinations). All variants kernel-vs-fb linf at 1e-6 noise.
+   Synthetic distributions don't reproduce the trajectory gap.
+
+D. Algorithmic-equivalence analysis (cross-combine arithmetic test).
+   Computed four outputs with explicit ops on captured tensors:
+     O_rr = invR(softmax(q_rot @ k_rot.T + m) @ v_rot)
+     O_oo = softmax(q_orig @ k_orig.T + m) @ v_orig
+     O_ro = softmax(q_rot @ k_rot.T + m) @ v_orig
+     O_or = invR(softmax(q_orig @ k_orig.T + m) @ v_rot)
+   All four agree pairwise to 1.5e-08. So rotated-vs-original-space
+   attention is mathematically equivalent under explicit fp32 matmul.
+
+E. Forced same-codebase A/B (Codex's recommended discriminator).
+   Added ISOQUANT_FORCE_RECONSTRUCT_ATTENTION=1 flag to skip the fused
+   path and route through reconstruct+mx.fast.SDPA on identical
+   post-fix code. Result: top1=0.9091 (with iso_path_observed=
+   unfused_reconstruct, unfused_fallback_calls=3304, decompress_calls=
+   9912). Confirms the 11pp gap is real on current codebase, not a
+   historical artifact.
+
+F. Precision-regime mechanism investigation. Found that:
+     reconstruct_keys() returns FP16  (cast at mlx_isoquant.py:1133)
+     get_values() returns FP16        (cast at mlx_isoquant.py:1150)
+     _decompress_batch() returns FP32 (used internally by other paths)
+   The reconstruct path's mx.fast.SDPA receives fp16 K/V; the kernel
+   and _fused_attention_mlx operate fp32 throughout. The reference path
+   (default cache) also stores fp16 K/V. So reference + reconstruct
+   share BOTH the SDPA implementation AND the fp16 precision regime;
+   kernel/_fused_attention_mlx use fp32 internally and drift from the
+   fp16 reference's precision noise pattern.
+
+   Confirmation test: cast K, V to fp16 before rotated-space matmul.
+   Result: did NOT bring rotated-space output closer to reconstruct
+   (linf 1.16e-05 vs 9.29e-06 — slightly farther). Precision-regime
+   contributes (A vs B = 7e-6 confirms fp32-vs-fp16 sensitivity exists)
+   but doesn't fully explain the rotated-vs-original gap.
+
+G. State-asymmetry hypothesis (Codex hypothesis B). Tested: is
+   _packed_latent_cache (kernel reads) ever out of sync with
+   pack_indices_3bit(_compressed_latent["indices"]) (fb-equivalent reads)?
+   Drove a synthetic cache through prefill+finalize+5 decode steps,
+   asserted parity at every checkpoint. Max byte diff = 0 throughout.
+   State asymmetry refuted.
+
+H. metric-bug discovery. Earlier 4.3e-02 linf measurements (which had
+   driven much of mid-session reasoning) turned out to be a numpy
+   broadcast artifact: out_kernel (64,512) - out_recon (1,64,1,512)
+   broadcast to (1,64,64,512) phantom comparison over 2M elements
+   instead of the actual 32K outputs. After reshape fix, real linf is
+   9.28e-06. Important enough to warrant the entire diagnostic
+   reorientation around real-magnitude differences.
+
+CONCLUSION OF SESSION 2
+
+  All single-call diagnostics agree to 1e-5 or smaller. The trajectory
+  gap is real (0.8000 vs 0.9091, reproducible). Mechanism cannot be
+  pinned down from single-call analysis alone — multi-layer
+  shadow-compute would be the next step but is substantial new work.
+
+  Per Codex: "Rotated-space attention is mathematically equivalent but
+  not gate-equivalent to original-space SDPA under trajectory
+  amplification against an FP16 reference." Not a bug per se, but a
+  measurement-regime difference that affects the validation gate's
+  reading of the kernel's quality.
+
+  Diagnostic instrumentation now committed (per-branch counters,
+  capture, force-reconstruct, three diagnostic scripts) so the next
+  session can pick up with sharp tools instead of rebuilding them.
+
+==============================================================================
+HISTORICAL TIMELINE (session 1 — kernel-fix work, kept for context)
+==============================================================================
+
+LATEST RUN — bits=3 + per-step (the previously-killed run, now done)
+---------------------------------------------------------------------
+Artifact:  artifacts/kimi_k26_profiling/real_weight_logit_parity_smoke_bits3_perstep.json
+Sidecar:   artifacts/kimi_k26_profiling/real_weight_logit_parity_smoke_bits3_perstep.per_step.json
+Headline:  top1=0.8727  ppl_drift=+0.2172  cos=0.9886  path=mlx_ops_fallback
+Verdict:   GATE_FAIL (top1 only — slope guard reported None for ctx=64 < anchor)
+Timing:    ref=397s, iso=947s
+
+NEW STRUCTURAL FINDING (was hidden before path-attribution landed in 423abe0)
+  iso_stats_delta:
+    fused_metal_attempts:  59
+    fused_metal_failures:  59      ← every NPT16 attempt raised
+    unfused_fallback_calls: 0      ← did NOT fall to "unfused_reconstruct"
+    decompress_calls:      3304    ← went to mlx_ops_fallback instead
+    compress_calls:        3363
+
+  This means: the model fix DID flip supports_fused_latent_attention to True
+  (Phase 2b assertion passes), but the NPT16 Metal kernel itself raises on
+  every call against this real checkpoint. The cache catches the exception
+  and dispatches to `mlx_ops_fallback` (a third path I had not enumerated
+  in earlier reasoning). Smoke3, Test A, and this run are bit-identical
+  (top1=0.8727 to 4 decimals) because they ALL ran mlx_ops_fallback —
+  Test A's "3-kernel" label was wrong; what really differed was the env
+  (NPT16=on vs off) but the runtime path was identical because NPT16 was
+  rejected at the kernel boundary anyway.
+
+  The fused NPT=16 kernel for D=512 MLA latent has a real bug on Kimi K2.6
+  weights. Capacity-flag was a red herring; runtime failure is the actual
+  blocker. See "OPEN INVESTIGATION" below.
+
+MARGIN-CONDITIONED ANALYSIS (bits=3 vs bits=4, both perstep)
+-------------------------------------------------------------
+                            bits=3 (mlx_ops_fallback)   bits=4 (no_iso_dispatch)
+  Total / matched              55 / 48 = 0.8727           55 / 49 = 0.8909
+  ref_margin >= 0.001          49 / 45 = 0.9184           49 / 48 = 0.9796
+  ref_margin >= 0.25           47 / 45 = 0.9574           47 / 46 = 0.9787
+  ref_margin >= 0.5            38 / 37 = 0.9737           38 / 38 = 1.0000
+  ref_margin >= 1.0            29 / 29 = 1.0000           29 / 29 = 1.0000
+  ref_margin >= 2.0            21 / 21 = 1.0000           21 / 21 = 1.0000
+  Tied (margin < 0.001)         6 /  3 = 0.5000            6 /  1 = 0.1667
+
+  Update to the previous "key finding": at the strict ref_margin >= 0.001
+  threshold, bits=3 is 91.84% (not the 97-98% I forecast). bits=4 hits
+  97.96%. The gap closes only at ref_margin >= 0.5. So bits=3 IS introducing
+  visible compression error near tight argmax boundaries (margin in
+  [0.001, 0.5]) — it's not all tied-position noise.
+
+  Interpretation:
+   - At margin >= 1.0 (29 positions, ~53% of decode steps), bits=3 is perfect.
+   - At margin in [0.001, 0.5] (11 positions, ~20%), bits=3 misses 4 (64%).
+     bits=4 misses 1 in the same band (91%). 3-bit is clearly worse here.
+   - At tied margin (6 positions), both are at chance and noise dominates.
+
+  Disagreement positions (bits=3, 7 total) skew toward small margin:
+    i=12 margin=0.875 ref=49977 iso=12 cos=0.9927
+    i=13 margin=0.250 ref=5320  iso=5160 cos=0.9808
+    i=20 margin=0.125 ref=673   iso=9442 cos=0.9849
+    i=39, 46, 49: margin=0
+    i=52 margin=0.0625
+  Only one (i=12) is a clean compression miss at non-trivial margin.
+
+GOAL
+----
+Get Kimi K2.6 (554 GB, /Volumes/Samsung9904tb/Kimi-K2.6) working on M4 Max
+via the IsoQuant MLA logit parity gate. The gate (§10 in validate_real_kv.py)
+requires top-1 match rate >= 0.99 and PPL drift < 0.5 at 8K context.
+
+CURRENT STATUS: NPT16 KERNEL BUG FOUND + FIXED, READY TO RE-VALIDATE
+----------------------------------------------------------------------
+Major resolution this session (2026-05-12 morning):
+
+  1. P1: Re-ran with ISOQUANT_PROFILE_METAL=1 — confirmed (per Codex)
+     that profiling alone does NOT surface the kernel exception text.
+     Identical numbers, identical iso_path_observed=mlx_ops_fallback,
+     no error in log.
+
+  2. Patched mlx_isoquant.py:1124 to capture+warn on fused_metal failure
+     (was silently swallowed by bare `except Exception:`). Reran (P1b).
+
+  3. P1b surfaced THE ACTUAL KERNEL BUG via warnings.warn:
+       fused_kv_decode_npt16.py:241  m = m.squeeze(0)
+       ValueError: [squeeze] Cannot squeeze axis 0 with size 64
+                   which is not equal to 1.
+
+     Root cause: kernel's mask-shape reduction loop blindly squeezed
+     axis 0 in a while-loop, expecting all leading axes to be size 1.
+     But Kimi MLA's pe_scores comes in (B=1, H_q=64, L=1, T) ndim=4.
+     First squeeze(0) strips B=1 → (64, 1, T). Second squeeze(0) hits
+     axis 0 = H_q = 64, raises. Synthetic NPT16 gate uses 2D (H_q, T)
+     masks (test_fused_npt16.py:88) so this never tripped pre-flight.
+
+  4. Patched fused_kv_decode_npt16.py:238-244 to find a singleton axis
+     anywhere (not just axis 0) and added a final-shape gate per Codex
+     review (rejects transposed shapes silently flattening wrong).
+     5-case unit test confirms (1,64,1,72)→(64,72) transform plus 4
+     other valid input shapes still work; non-singleton case correctly
+     raises.
+
+  5. P2 (Codex F1): per-branch counters added to IsoQuantStats by
+     code-generator subagent (fused_npt16_attempts/_failures, npt8,
+     npt8_tiled, 3kernel). _classify_iso_path now reads these directly
+     instead of inferring from int-truncated timing fields. New return
+     values: bare branch labels for success, `mlx_ops_fallback(<branch>)`
+     for failure attribution, `ambiguous(<a,b,...>)` when multiple
+     branches contend.
+
+  Net effect: the validation harness can now (a) run without silently
+  hitting the NPT=16 kernel bug, (b) honestly report which fused branch
+  ran, and (c) surface kernel exception text on first failure for any
+  future regressions.
+
+NEXT STEP: relaunch the bits=3 perstep validation. Expectation: this
+time iso_path_observed=npt16 (no failures), top1 should improve from
+0.8727 toward something more like 0.99 (the actual fused-NPT16-against-
+real-weights number, never measured before today). Wall time ~22 min.
+
+KEY FINDING (the big one)
+--------------------------
+The 87% top-1 "failure" is NOT a real failure. Margin-conditioned analysis
+on the bits=4 per-step sidecar proved it:
+
+  - 6/55 positions have ref_margin < 0.001 (FP16 reference itself is tied)
+    → only 1/6 matched (16.7%) — pure noise, not a compression error
+  - 49/55 positions with ref_margin > 0 → 48/49 matched (97.96%)
+  - All 21 positions with ref_margin >= 2.0 → 21/21 matched (100%)
+
+The §10 threshold of 0.99 is too tight for 55 decode steps when ~10% of
+reference next-token choices are tied at the noise floor. The harness metric
+needs a margin-conditioned variant, or the test needs to run at longer
+contexts where tied positions are diluted.
+
+COMPLETED TESTS (artifacts on disk)
+-------------------------------------
+All in artifacts/kimi_k26_profiling/:
+
+1. smoke (Smoke3)
+   File: real_weight_logit_parity_smoke.json
+   Config: bits=3, NPT16=on (env default), ctx=64, prefill=8, 55 decode steps
+   Result: top1=0.8727, ppl_drift=+0.2172, cosine=0.9886
+   Verdict: GATE_FAIL (top1 + slope)
+   Note: pre-dates iso_path_observed field
+
+2. Test A (NPT16 disabled)
+   File: real_weight_logit_parity_smoke_no_npt16.json
+   Config: bits=3, ISOQUANT_USE_NPT16_FUSED=0 (forces 3-kernel D=512 path)
+   Result: BIT-IDENTICAL to Smoke3 — same top1, ppl_drift, cosine
+   Verdict: GATE_FAIL (same reasons)
+   Conclusion: NPT=16 kernel is NOT the source of the 87%. Disproven.
+   Note: iso took 1076s (vs 513s with NPT16) — 56% slowdown matches Phase 6 A/B v2
+
+3. Test B v2 (bits=4, reconstruct path)
+   File: real_weight_logit_parity_smoke_bits4.json
+   Sidecar: real_weight_logit_parity_smoke_bits4.per_step.json (23.8K, has margins)
+   Config: bits=4, --allow-unfused-mla, --dump-per-step
+   Result: top1=0.8909, ppl_drift=+0.1563, cosine=0.9952
+   iso_path_observed: no_iso_dispatch (correct — bits=4 bypasses fused gate)
+   Verdict: GATE_FAIL (top1 only — slope guard fix worked!)
+   Conclusion: bits=4 is measurably better than bits=3 (compression-error
+   attribution confirmed), BUT margin analysis shows the remaining 11%
+   disagreement is ALL on tied reference positions.
+
+4. bits=3 + per-step re-run — FAILED (GPU timeout, no artifact written)
+   This is the run that needs to be retried after reboot.
+
+WHAT'S NOT YET PROVEN
+----------------------
+- bits=3 margin-conditioned top-1 (expected ~97% like bits=4, but no sidecar yet)
+- Parity at 2K/4K/8K contexts (all tests so far at ctx=64 only)
+- Whether the margin-conditioned threshold should replace or augment §10
+
+CODEX INDEPENDENT REVIEW — VERDICT: REWORK
+--------------------------------------------
+Codex (read-only review of the 2 uncommitted diffs) found 6 issues. F1-F3
+are HIGH severity and load-bearing for any CI gate; F4 is the model fix.
+Quoted file:line are uncommitted-tree references.
+
+  F1 HIGH — iso_path_observed is unreliable
+    _classify_iso_path() infers NPT16 vs 3-kernel from timing counters
+    (fused_single_kernel_ms etc.) which are populated only when
+    ISOQUANT_PROFILE_METAL=1. The harness never sets that. Plus
+    _snapshot_iso_stats() truncates counters to int, rounding sub-ms timing
+    to zero. So the field can be wrong even when the path is unambiguous.
+    FIX: add explicit branch counters in IsoQuantStats —
+      fused_npt16_calls, fused_npt8_calls, fused_3kernel_calls,
+      fused_mlx_ops_calls
+    incremented at the branch sites in mlx_isoquant.py:1227, 1262, 1296.
+    Don't infer path from timers.
+    → CONFIRMED: this run reports path=mlx_ops_fallback. Believing it
+       requires trusting the very inference logic Codex flagged. The
+       fused_metal_failures=59 counter IS reliable (it's incremented on
+       exception) and that's the load-bearing signal for "kernel failed".
+
+  F2 HIGH — bits=4 + allow-unfused-mla is mislabeled
+    For Kimi MLA, when outer supports_fused_latent_attention is False
+    (bits!=3 path), DeepSeek attention never calls inner
+    IsoQuantKVCache.fused_attention; it goes through the outer
+    decompressed path in deepseek_v3.py:156, with decompression in
+    kimi_mla_isoquant_dkv.py:122. That path doesn't increment
+    unfused_fallback_calls, so the artifact records "no_iso_dispatch"
+    when the truth is "kimi_mla_outer_reconstruct".
+    FIX: classify metal_attempts==0 + decompress_calls>0 as outer
+    reconstruct. The bits=4 sidecar (Test B) is mislabeled in the artifact.
+
+  F3 HIGH — CI gate has a hole
+    Phase 2b only checks the outer wrapper's capability flag. The gate
+    can still pass with iso_path_observed != "npt16" when NPT16 is
+    expected. When bits==3 + use_npt16_fused=True + allow_unfused_mla=False,
+    iso_path_observed=="npt16" must be a hard gate condition. Treat
+    ambiguous, 3kernel, mlx_ops_fallback, unfused_reconstruct, and
+    no_iso_dispatch as path failures, not parity passes.
+    → THIS BIT US TODAY: today's run passed Phase 2b, ran mlx_ops_fallback
+       all the way through, and reported a "parity" number that doesn't
+       describe the fused kernel at all.
+
+  F4 MEDIUM — model fix is correct in scope but should be factored
+    The +7 lines in kimi_mla_isoquant_dkv.py:165 sync _iso state at the
+    fused-call site, which is the right place for decode-step offset
+    correctness. (If the sync only lived in finalize_deferred_prefill,
+    inner offset would go stale after the first decode update and the
+    next fused call could attend over wrong T.) But Codex flags that the
+    invariant "after finalize, inner is fused-capable" should also hold
+    immediately, so the sync should also run at end of
+    finalize_deferred_kv_caches/finalize_deferred_prefill.
+    FIX: factor _sync_inner_iso_state() helper; call from finalize AND
+    from fused_latent_attention(). Other inner state to mirror:
+    _seq_len, compressed_keys/values, _packed_keys_cache,
+    _packed_values_cache (the current sync at L165 already covers these
+    for the fused-call site).
+
+  F5 MEDIUM — artifact contract too weak for CI when allow_unfused_mla=True
+    Recording only config.allow_unfused_mla makes it easy to compare or
+    promote an unfused artifact accidentally.
+    FIX: add expected_iso_path, observed_iso_paths, path_gate_enforced,
+    comparable_to_fused_npt16:false. Set gate_status to e.g.
+    "A_B_UNFUSED_ONLY" or add a verdict reason that prevents promotion.
+
+  F6 LOW — stale label inconsistency
+    Comment at validate_real_kv.py:139 says "mlx_fallback"; classifier
+    returns "mlx_ops_fallback" at L646.
+    FIX: centralize labels as constants.
+
+OPEN INVESTIGATION (priority 1)
+---------------------------------
+WHY does the NPT=16 fused Metal kernel raise on every attempt against
+real Kimi K2.6 weights, when synthetic gates pass (see
+artifacts/kimi_k26_profiling/npt16_synthetic_gate.json from 2026-05-02)?
+
+  Hypothesis ladder (cheapest first):
+   H1. ISOQUANT_PROFILE_METAL is needed to reveal the underlying error.
+       Re-run with that env set; the kernel exception text should land
+       in stderr/log instead of being silently caught.
+       Cost: same wall as today's run (~22 min).
+
+   H2. The kernel asserts on a tensor-shape invariant that real K2.6
+       MLA latents violate. Synthetic gate uses random tensors of
+       declared shape; real weights might have a different layout/dtype/
+       contiguity. Add print of K, V shapes/strides/dtype just before the
+       fused call (one decode step is enough — no need to instrument
+       all 59).
+       Cost: 1 small edit + 1 short re-run.
+
+   H3. The kernel needs ISOQUANT_FUSED_ENCODE=1 (or some pairing env)
+       that the harness doesn't set. Check the kernel's own preconditions.
+       Cost: read mlx_isoquant.py around the fused dispatch site.
+
+   H4. Codebook mismatch — dim_512_3bit.npz might not be the right
+       codebook for this model's MLA latent geometry. Verify codebook
+       loaded vs codebook expected by NPT=16 kernel.
+       Cost: read kernel + load site.
+
+  DO NOT touch the harness CI gate or codebook generation until H1-H3
+  have been ruled out. Capture-the-error-text first.
+
+HYPOTHESIS STATUS (revised after 2026-05-12 run)
+--------------------------------------------------
+  🔄 REOPENED: "NPT=16 kernel is specifically broken"
+     → Earlier disproof was wrong. Test A's "3-kernel" classification
+        was an inferred label; with proper counter inspection
+        (fused_metal_attempts=59, fused_metal_failures=59) we now know
+        Smoke3 / Test A / today's bits=3 run ALL ran mlx_ops_fallback.
+        The NPT=16 kernel does in fact fail at runtime against real
+        K2.6 weights. Synthetic gate passes; real weights raise. See
+        OPEN INVESTIGATION above.
+
+  ⚠️  PARTIALLY DISPROVEN: "87% top-1 = real compression failure"
+     → True for tied positions (ref_margin < 0.001): pure noise.
+     → False for the [0.001, 0.5] band: bits=3 misses 4 of 11 there
+        while bits=4 misses 1 of 11. 3-bit IS introducing real argmax
+        flips at small but non-zero margins. Margin-conditioned gate
+        would still need to set the threshold around margin ~0.5 to
+        pass bits=3, which is a meaningful concession.
+
+  ✅ CONFIRMED: "bits=4 is materially better than bits=3 in the
+     compression-relevant margin band [0.001, 0.5]"
+     → bits=3 top1=0.6364 in band (4 of 11 flips); bits=4 top1=0.9091
+        (1 of 11). Compression is doing real work here.
+
+  ⚠️  NEW OPEN: "iso_path_observed values in existing artifacts are
+     reliable signals"
+     → Codex F1: NO. Path attribution from timers is unreliable. Need
+        per-branch counters before any artifact's path label can be
+        trusted as a CI signal.
+
+  ⚠️  NEW OPEN: "the fused NPT=16 path can ever run at all on K2.6"
+     → Today's evidence: 0 of 59 attempts succeeded. Until H1-H3 are
+        explored, we cannot claim the validation is exercising the path
+        the project is supposed to validate.
+
+GIT STATE
+---------
+Latest commit: 423abe0 fix(kimi-mla): plumb expert offload + path-attribution into MLA parity gate
+  → harness-only, 386 lines in scripts/validate_real_kv.py
+  → committed cleanly, single focused commit
+
+Uncommitted changes (2 files, both load-bearing):
+
+  1. scripts/validate_real_kv.py (+82 lines since 423abe0)
+     - --allow-unfused-mla CLI flag + threaded through prefill_then_teacher_forced_decode
+     - require_fused_mla parameter: True = hard-fail (default), False = log-and-proceed
+     - Flag surfaced in artifact config block
+     - Syntax-checked (ast.parse ok), --help confirmed
+
+  2. mlx-lm/mlx_lm/models/kimi_mla_isoquant_dkv.py (+7 lines)
+     The critical fix: after finalize_deferred_kv_caches(), mirror state to inner _iso:
+       self._iso._deferred = False
+       self._iso.offset = self.offset
+     Without this, _iso reports supports_fused_latent_attention=False and silently
+     falls into the unfused reconstruct path. This fix is confirmed working by
+     all 3 successful test runs + the harness assertion catching it correctly
+     when --allow-unfused-mla is NOT set.
+
+Other modified files (user's pre-existing WIP, do not touch):
+  - docs/start-llama-server.md
+  - scripts/ppl_32k_isoquant_vs_default.py
+  - scripts/profile_kimi_speculative.py
+  - scripts/run_phase0_baseline.sh
+
+Untracked (do not commit):
+  - deploy_london_shim_cloudboost.sh — accidental, not project-related
+  - artifacts/kimi_k26_profiling/*.json — evidence artifacts, commit after bits=3 sidecar exists
+
+WHAT TO DO NEXT (revised priority order, 2026-05-12)
+------------------------------------------------------
+The previously-listed "WHAT TO DO NEXT" run instructions executed and the
+artifact is on disk. The new top-of-queue is OPEN INVESTIGATION H1-H3
+above (capture the kernel exception text), not another full-context run.
+
+P1. Run with ISOQUANT_PROFILE_METAL=1 to get the actual kernel error
+    surfacing in logs (H1). Otherwise consider instrumenting one decode
+    step to print K/V shapes/strides + caught-exception repr (H2).
+P2. Implement Codex F1 (per-branch counters) BEFORE running anything else
+    that you intend to gate on iso_path_observed. Without this, any new
+    artifact has the same trust gap.
+P3. Implement Codex F3 (path-required gate condition) once F1 lands.
+P4. Implement Codex F2 (relabel bits=4 outer-reconstruct) — small.
+P5. Implement Codex F4 (factor _sync_inner_iso_state, call from finalize
+    too) — small, increases robustness against future drift.
+P6. Re-run validations once we either (a) fix the NPT=16 kernel against
+    real weights, or (b) accept that the gate runs against
+    mlx_ops_fallback and rename the gate accordingly.
+
+LEGACY "WHAT TO DO NEXT" (kept for reference; the run completed)
+------------------------------------------------------------------
+0. Sanity-check that no zombie remains:
+     ps -p 33398 -o pid,stat,etime 2>&1 | head -3
+   Expect no row. If still present in UE state, reboot before continuing —
+   the GPU is still locked.
+
+1. Verify GPU is clean (small allocation should return instantly):
+     python3 -c "import mlx.core as mx; x = mx.zeros((4,4)); mx.eval(x); print('ok', x.shape)"
+   If this hangs > 5s or errors, do not proceed — investigate first.
+
+2. Re-run bits=3 with per-step dump (the failed run). NOTE: the harness now
+   defaults to ISOQUANT_USE_NPT16_FUSED=0; the fastest path needs an explicit
+   env. Both runs below are useful — pick based on intent:
+
+   2a. Fast path (NPT16 single-kernel, ~16-20 min):
+     cd ~/QwenCoderLocal
+     ISOQUANT_USE_NPT16_FUSED=1 PYTHONPATH=mlx-lm python3 scripts/validate_real_kv.py \
+       --model /Volumes/Samsung9904tb/Kimi-K2.6 \
+       --expert-offload --max-resident-experts 2000 \
+       --contexts 64 --prefill-len 8 \
+       --bits 3 --dump-per-step \
+       --output artifacts/kimi_k26_profiling/real_weight_logit_parity_smoke_bits3_perstep.json
+     ETA: ref ~450s + iso ~510s ≈ 16 min wall
+
+   2b. 3-kernel path (slower but kernel-isolated, ~26 min):
+     PYTHONPATH=mlx-lm python3 scripts/validate_real_kv.py \
+       --model /Volumes/Samsung9904tb/Kimi-K2.6 \
+       --expert-offload --max-resident-experts 2000 \
+       --contexts 64 --prefill-len 8 \
+       --bits 3 --dump-per-step \
+       --output artifacts/kimi_k26_profiling/real_weight_logit_parity_smoke_bits3_perstep_no_npt16.json
+     ETA: ref ~500s + iso ~1080s ≈ 26 min wall
+
+   The CRITICAL test for the margin-conditioning hypothesis is 2a — it
+   produces a sidecar comparable to the bits=4 sidecar already on disk.
+   2b is only needed if you want to confirm bit-identical output regardless
+   of fused path (Test A already proved this for the no-sidecar case).
+
+   Run 2a in the background with a Monitor tail; do NOT block on it.
+
+3. Run margin-conditioned analysis on the bits=3 per-step sidecar.
+   IMPORTANT: verify the actual key names in the existing bits=4 sidecar
+   first — this script was written from memory and may need field-name
+   tweaks. Look at the JSON before running:
+
+     python3 -c "import json; d=json.load(open('artifacts/kimi_k26_profiling/real_weight_logit_parity_smoke_bits4.per_step.json')); print(list(d.keys())); print(list(d['steps'][0].keys()) if 'steps' in d else d)"
+
+   Then run with the correct field names (likely "ref_margin" and "match"
+   but confirm). Suggested template:
+
+     python3 <<'PYEOF'
+     import json
+     path = "artifacts/kimi_k26_profiling/real_weight_logit_parity_smoke_bits3_perstep.per_step.json"
+     d = json.load(open(path))
+     steps = d["steps"]
+     tied = [s for s in steps if s["ref_margin"] < 0.001]
+     non_tied = [s for s in steps if s["ref_margin"] >= 0.001]
+     print(f"Total: {len(steps)}, Tied: {len(tied)}, Non-tied: {len(non_tied)}")
+     if non_tied:
+         print(f"Non-tied top-1: {sum(1 for s in non_tied if s['match'])/len(non_tied):.4f}")
+     if tied:
+         print(f"Tied top-1: {sum(1 for s in tied if s['match'])/len(tied):.4f}")
+     # Margin-bucket breakdown:
+     for lo in (0.001, 0.25, 0.5, 1.0, 2.0):
+         bucket = [s for s in steps if s["ref_margin"] >= lo]
+         if bucket:
+             print(f"ref_margin >= {lo}: n={len(bucket)} top1={sum(1 for s in bucket if s['match'])/len(bucket):.4f}")
+     PYEOF
+   Expected: non-tied top-1 ~97-98%, confirming bits=4 finding.
+
+   Cross-check against the bits=4 sidecar (replace path) so you have a
+   side-by-side comparison.
+
+4. Decision point based on result:
+   - If non-tied top-1 >= 0.97 on bits=3:
+     → IsoQuant MLA pipeline is VALIDATED. The gate needs a margin-conditioned
+       threshold (e.g. exclude positions where ref_margin < 0.25, then require
+       top-1 >= 0.99 on the rest). Implement the threshold update, then run at
+       2K/4K/8K for the full evidence.
+   - If non-tied top-1 < 0.95 on bits=3 (unlikely given bits=4 result):
+     → 3-bit compression is introducing real error beyond tied positions.
+       Investigate IsoQuant codebook quality for D=512 MLA latent.
+
+5. Commit plan (do NOT auto-push; confirm remote URL with the user before
+   any push, per global feedback memory feedback_confirm_push_target):
+   - Commit kimi_mla_isoquant_dkv.py fix separately:
+       "fix(kimi-mla): sync _deferred/offset to inner _iso after finalize"
+     This is the one-file load-bearing fix; small, focused, safe to land alone.
+   - Commit the --allow-unfused-mla harness additions:
+       "feat(scripts): add --allow-unfused-mla flag for MLA reconstruct A/B"
+   - Commit evidence artifacts once bits=3 per-step exists:
+       "evidence(kimi-mla): add real-weight logit parity smoke artifacts"
+     Stage only the four real_weight_logit_parity_smoke_*.json files plus
+     the per-step sidecar — NOT deploy_london_shim_cloudboost.sh (unrelated)
+     and NOT the user's other modified WIP files (see GIT STATE below).
+   - Do NOT amend 423abe0; create new commits only.
+
+CODEX AUDIT ITEMS (from earlier review, status)
+-------------------------------------------------
+  #1 (path counters) — DONE, in code, populated from Test B onward
+  #2 (move sync to finalize_deferred_prefill) — DEFERRED, wait for root cause clarity
+  #3 (slope guard) — DONE, working (Test B proved it)
+  #4 (fused-path assertion) — DONE, now soft/hard via --allow-unfused-mla
+  #5 (per-step margins) — DONE, --dump-per-step flag, sidecar produced
+
+MODEL / ENVIRONMENT
+---------------------
+  Model: /Volumes/Samsung9904tb/Kimi-K2.6 (554 GB, kimi_k25 arch)
+  Machine: M4 Max, 128 GB unified memory
+  Expert offload: --max-resident-experts 2000 (~9.2% resident)
+  SSD: /Volumes/Samsung9904tb (Samsung 990 Pro 4TB)
+  PYTHONPATH: mlx-lm (editable install)
+  Key env: ISOQUANT_USE_NPT16_FUSED defaults to 0 unless explicitly set to 1
+  Codebooks: mlx-lm/mlx_lm/models/turboquant_codebooks/dim_512_{3,4}bit.npz
+
+TIMING REFERENCE (ctx=64, all on same machine same session)
+-------------------------------------------------------------
+  smoke3:   ref=451s, iso=513s  (NPT16)
+  Test A:   ref=497s, iso=1076s (3-kernel, expected 2x slower)
+  Test B:   ref=667s, iso=1962s (bits=4 reconstruct, slowest path)
+  Note: ref times crept up across runs (451→497→667) — likely OS cache pressure
+  from back-to-back expert-offload runs. After reboot, expect ref ~450s again.
+
+PITFALLS TO AVOID (lessons from this session)
+-----------------------------------------------
+  - Don't trust setup_seconds_iso < setup_seconds_ref as proof the fused path
+    ran. Always check `iso_path_observed` in the artifact (added in 423abe0).
+    Older artifacts pre-dating that field can't tell you which path ran.
+  - Don't run two back-to-back full validations without checking memory
+    pressure — expert offload + 554 GB model leaves little headroom.
+  - The fused gate is bit_width == 3 specifically. --bits 4 falls into
+    the reconstruct path automatically; that's the intended A/B, not a bug.
+  - ISOQUANT_USE_NPT16_FUSED defaults to 0 in the env. To exercise the
+    fastest fused path you MUST set it to 1 explicitly.
+  - The iso run has internal Metal timeouts that can leave the process in
+    UE state for 40+ minutes. If you see UE in `ps`, do NOT issue another
+    iso run on the same GPU — it will compound. Reboot first.
+  - Don't add features to the harness while the validation is unproven.
+    Codex item #2 (move sync into finalize_deferred_prefill) is intentionally
+    deferred until bits=3 per-step lands so we don't conflate causes.
