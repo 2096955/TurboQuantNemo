@@ -1,0 +1,47 @@
+{
+  "timestamp": "2026-05-11T18:08:23Z",
+  "model_path": "/Volumes/Samsung9904tb/Kimi-K2.6",
+  "gate_status": "GATE_FAIL",
+  "thresholds": {
+    "top1_threshold": 0.99,
+    "ppl_drift_threshold": 0.5,
+    "slope_tolerance": 0.05,
+    "ppl_drift_anchor_tokens": 8192
+  },
+  "config": {
+    "bits": 3,
+    "use_npt16_fused": true,
+    "prefill_len": 8,
+    "window_size": 16,
+    "smoke": false,
+    "expert_offload": true,
+    "max_resident_experts": 2000,
+    "max_cached_shards": null
+  },
+  "verdict_reasons": [
+    "context=64: top1_match_rate 0.8727 < threshold 0.9900",
+    "context=64: window-drift slope 0.5721 > tolerance 0.0500 \u2014 possible RoPE smearing"
+  ],
+  "load_seconds": 9.03048324584961,
+  "contexts": [
+    {
+      "context_tokens": 64,
+      "n_compared_positions": 55,
+      "top1_match_rate": 0.8727272727272727,
+      "ppl_ref": 7.807192047918947,
+      "ppl_iso": 8.02439783036533,
+      "ppl_drift": 0.217205782446384,
+      "mean_logit_cosine": 0.9886062741279602,
+      "window_ppl_drifts": [
+        -0.43390973032796065,
+        0.2749456089896274,
+        0.7103455792791369
+      ],
+      "window_size": 16,
+      "long_context_slope": 0.5721276548035488,
+      "setup_seconds_ref": 451.0373320579529,
+      "setup_seconds_iso": 512.9587519168854,
+      "non_finite_reason": null
+    }
+  ]
+}

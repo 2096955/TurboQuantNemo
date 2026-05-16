@@ -1,0 +1,126 @@
+{
+  "capture_path": "/Users/anthonylui/QwenCoderLocal/artifacts/kimi_k26_profiling/npt16_decode_capture_v3.npz",
+  "shapes": {
+    "T": 9,
+    "H_q": 64,
+    "H_kv": 1,
+    "D": 512,
+    "repeats": 64,
+    "bit_width": 3,
+    "layer_idx": 2,
+    "mask_present": true
+  },
+  "scale": 0.14467962086200714,
+  "end_to_end": {
+    "stage": "end_to_end_post_inverse",
+    "shape": [
+      64,
+      512
+    ],
+    "linf": 9.313225746154785e-09,
+    "mse": 1.1456830952965442e-18,
+    "cosine": 1.0
+  },
+  "fallback_intermediates": [
+    {
+      "stage": "k_rot_scaled",
+      "shape": [
+        64,
+        9,
+        512
+      ],
+      "max_abs": 0.03656932711601257,
+      "mean": -0.0003991108969785273,
+      "std": 0.013251247815787792
+    },
+    {
+      "stage": "v_rot_scaled",
+      "shape": [
+        64,
+        9,
+        512
+      ],
+      "max_abs": 0.03656932711601257,
+      "mean": -0.0003991108969785273,
+      "std": 0.013251247815787792
+    },
+    {
+      "stage": "scores_pre_mask",
+      "shape": [
+        64,
+        9
+      ],
+      "max_abs": 1.2930657863616943,
+      "mean": -0.016013557091355324,
+      "std": 0.23715241253376007
+    },
+    {
+      "stage": "scores_post_mask",
+      "shape": [
+        64,
+        9
+      ],
+      "max_abs": 10.003390312194824,
+      "mean": 1.2291364669799805,
+      "std": 2.0657033920288086
+    },
+    {
+      "stage": "attn_weights",
+      "shape": [
+        64,
+        9
+      ],
+      "max_abs": 0.8539240956306458,
+      "mean": 0.1111111119389534,
+      "std": 0.1527797430753708
+    },
+    {
+      "stage": "output_rot_pre_inverse",
+      "shape": [
+        64,
+        512
+      ],
+      "max_abs": 0.03181793540716171,
+      "mean": -0.0002591045922599733,
+      "std": 0.004899132996797562
+    }
+  ],
+  "attention_sharpness": {
+    "mean_max_attn_weight": 0.450658917427063,
+    "p99_attn_weight": 0.7947814464569092
+  },
+  "bisect": {
+    "output_rot_serial_vs_matmul": {
+      "stage": "output_rot_serial_vs_matmul",
+      "shape": [
+        64,
+        512
+      ],
+      "linf": 3.725290298461914e-09,
+      "mse": 1.1201871140709754e-19,
+      "cosine": 1.0
+    },
+    "scores_serial_vs_matmul": {
+      "stage": "scores_serial_vs_matmul",
+      "shape": [
+        64,
+        9
+      ],
+      "linf": 9.5367431640625e-07,
+      "mse": 2.2424872017905856e-14,
+      "cosine": 1.0
+    }
+  },
+  "mask_stats": {
+    "shape": [
+      1,
+      64,
+      1,
+      9
+    ],
+    "min": -9.9375,
+    "max": 7.625,
+    "mean": 1.2451499700546265,
+    "abs_max": 9.9375
+  }
+}

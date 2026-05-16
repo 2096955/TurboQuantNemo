@@ -1,0 +1,21 @@
+{
+  "shapes": {
+    "H_q": 64,
+    "H_kv": 1,
+    "D": 512,
+    "T": 64
+  },
+  "end_to_end": {
+    "stage": "end_to_end (post-inverse-rotation)",
+    "shape": [
+      1,
+      64,
+      1,
+      512
+    ],
+    "linf": 1.4901161193847656e-06,
+    "mse": 5.155927497012963e-14,
+    "cosine": 1.0
+  },
+  "verdict": "AGREE_ON_SYNTHETIC"
+}

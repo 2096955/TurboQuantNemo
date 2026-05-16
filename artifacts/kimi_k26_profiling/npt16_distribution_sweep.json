@@ -1,0 +1,54 @@
+{
+  "variants": [
+    {
+      "label": "V0_baseline_gauss_tame_pe",
+      "linf": 1.9073486328125e-06,
+      "mse": 5.107830255762433e-14,
+      "cosine": 1.0,
+      "score_max_abs_finite": 10.353182792663574,
+      "mean_max_attn_weight": 0.46368932723999023,
+      "wall_s": 0.08
+    },
+    {
+      "label": "V1_gauss_sharp_pe_N(0,5)",
+      "linf": 1.9073486328125e-06,
+      "mse": 7.622225198017016e-14,
+      "cosine": 1.0,
+      "score_max_abs_finite": 22.946277618408203,
+      "mean_max_attn_weight": 0.7728367447853088,
+      "wall_s": 0.02
+    },
+    {
+      "label": "V2_gauss_pe_with_sentinels",
+      "linf": 1.0728836059570312e-06,
+      "mse": 4.042011408737778e-14,
+      "cosine": 1.0,
+      "score_max_abs_finite": 3.4028234663852886e+38,
+      "mean_max_attn_weight": 0.5108597874641418,
+      "wall_s": 0.02
+    },
+    {
+      "label": "V3_studentT_kv_tame_pe",
+      "linf": 3.337860107421875e-06,
+      "mse": 5.3610524494100004e-14,
+      "cosine": 1.0,
+      "score_max_abs_finite": 10.850098609924316,
+      "mean_max_attn_weight": 0.416968435049057,
+      "wall_s": 0.02
+    },
+    {
+      "label": "V4_studentT_kv_sharp_pe",
+      "linf": 3.814697265625e-06,
+      "mse": 7.023668349400228e-14,
+      "cosine": 1.0,
+      "score_max_abs_finite": 21.261411666870117,
+      "mean_max_attn_weight": 0.6882043480873108,
+      "wall_s": 0.02
+    }
+  ],
+  "shapes": {
+    "H_q": 64,
+    "D": 512,
+    "T": 64
+  }
+}
