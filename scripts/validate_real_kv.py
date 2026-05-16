@@ -137,7 +137,7 @@ class ContextResult:
     # NPT16 metal path ran (the inner IsoQuantKVCache could still fall back
     # to reconstruct, see kimi_mla_isoquant_dkv.py:125 comment).
     iso_path_observed: Optional[str] = (
-        None  # "npt16" | "3kernel" | "single_kernel" | "mlx_fallback" | "unfused_reconstruct" | "ambiguous"
+        None  # "npt16" | "npt8" | "npt8_tiled" | "npt8_or_npt8_tiled" | "3kernel" | "single_kernel" | "mlx_ops_fallback" | "mlx_ops_fallback(<branch>)" | "unfused_reconstruct" | "ambiguous" | "ambiguous(<a,b,...>)"
     )
     iso_stats_delta: dict = field(default_factory=dict)
     ref_stats_delta: dict = field(default_factory=dict)
@@ -192,6 +192,8 @@ def prefill_then_teacher_forced_decode(
     tokens,
     cache,
     prefill_len: int,
+    require_fused_mla: bool = True,
+    log=None,
 ):
     """Prefill the first ``prefill_len`` tokens single-shot, finalize any
     deferred KV state on the cache list, then teacher-force the remaining
@@ -203,6 +205,21 @@ def prefill_then_teacher_forced_decode(
     ``supports_fused_latent_attention=True`` — which only becomes true
     after ``finalize_deferred_kv_caches`` is called on a
     ``KimiMLAIsoQuantCache``).
+
+    Args:
+      require_fused_mla:
+        Codex audit HIGH 4: when True (default), raise if any
+        KimiMLAIsoQuantCache reports supports_fused_latent_attention=False
+        after finalize. This catches accidentally falling through to the
+        reconstruct path when the operator intended to test the fused
+        NPT16 path.
+
+        When False, the same check still runs but only logs a notice;
+        the harness then proceeds with whatever path the model picks.
+        Use this to deliberately exercise the unfused reconstruct path
+        (e.g. ``--bits 4``, where the fused gate is ``bit_width == 3``)
+        as part of an A/B that asks "is the parity miss caused by the
+        fused kernels or by IsoQuant compression itself?"
 
     Returns:
       decode_logits: numpy array of shape (T - prefill_len, V) — the
@@ -232,11 +249,7 @@ def prefill_then_teacher_forced_decode(
     # that defines finalize_deferred_prefill); no-op on default caches.
     finalize_deferred_kv_caches(cache)
 
-    # ---- Phase 2b: assert IsoQuant MLA caches are now fused-capable ----
-    # Codex audit HIGH 4: the harness must prove it actually exercises the
-    # fused NPT16 path, not silently validate the reconstruct fallback.
-    # If supports_fused_latent_attention is False here, the wrong code path
-    # is being measured (e.g. wrong --bits, wrong head_dim, finalize never ran).
+    # ---- Phase 2b: assert/notice IsoQuant MLA caches' fused capability ----
     try:
         from mlx_lm.models.kimi_mla_isoquant_dkv import KimiMLAIsoQuantCache
     except ImportError:
@@ -249,14 +262,28 @@ def prefill_then_teacher_forced_decode(
             and not getattr(c, "supports_fused_latent_attention", False)
         ]
         if non_fused:
-            raise RuntimeError(
-                "IsoQuant MLA caches at indices "
-                f"{non_fused} report supports_fused_latent_attention=False after "
-                "finalize_deferred_kv_caches(); the harness would silently "
-                "validate the reconstruct fallback instead of the fused NPT16 "
-                "path. Check --bits (must be 3), head_dim, and that the model "
-                "actually has KimiMLAIsoQuantCache instances."
+            msg = (
+                f"{len(non_fused)} IsoQuant MLA caches report "
+                f"supports_fused_latent_attention=False after "
+                f"finalize_deferred_kv_caches() (indices "
+                f"{non_fused[:8]}{'...' if len(non_fused) > 8 else ''})."
             )
+            if require_fused_mla:
+                raise RuntimeError(
+                    msg + " The harness would silently validate the reconstruct "
+                    "fallback instead of the fused NPT16 path. Check --bits "
+                    "(must be 3), head_dim, and that the model actually has "
+                    "KimiMLAIsoQuantCache instances. Pass --allow-unfused-mla "
+                    "to suppress this hard-fail and proceed with whichever "
+                    "path the model chooses (useful for bits!=3 A/B runs)."
+                )
+            else:
+                if log is not None:
+                    log(
+                        f"  notice: {msg} Proceeding because "
+                        f"--allow-unfused-mla is set; this run measures the "
+                        f"reconstruct path, not the fused NPT16 kernel."
+                    )
 
     # ---- Phase 3: teacher-forced decode loop ----
     # At step i, feed tokens[:, prefill_len + i : prefill_len + i + 1] and
@@ -579,62 +606,82 @@ def _diff_iso_stats(before: dict, after: dict) -> dict:
 
 def _classify_iso_path(delta: dict) -> str:
     """Map a stats delta to a single label naming which inner path actually
-    ran during the iso phase. Returns one of:
+    ran during the iso phase.
 
-      * ``"npt16"``                 — ``ISOQUANT_USE_NPT16_FUSED=1``
-                                      kernel ran (D=512 single-pass).
-      * ``"npt8_or_npt8_tiled"``    — ``ISOQUANT_USE_NPT8_FUSED=1`` ran
-                                      (D=256 fused).
-      * ``"single_kernel"``         — Branch ``T <= _SINGLE_KERNEL_T_THRESHOLD``
-                                      kernel ran. Threshold currently 0,
-                                      so this is effectively dead code.
-      * ``"3kernel"``               — Default fused metal path
-                                      (``_fused_attention_3kernel``).
-      * ``"mlx_ops_fallback"``      — Metal path attempted then failed; a
-                                      ``_fused_attention_mlx`` ran. Detected
-                                      by ``fused_metal_failures > 0``.
-      * ``"unfused_reconstruct"``   — Inner ``supports_fused_attention``
-                                      returned False; ``reconstruct_keys``
-                                      + base SDPA ran. Detected by
-                                      ``unfused_fallback_calls > 0``.
-      * ``"no_iso_dispatch"``       — Cache was selected but no fused
-                                      attempt was made (e.g. all layers
-                                      skipped, or IsoQuant cache never hit).
-      * ``"ambiguous"``             — Counters disagree, e.g. mixed kernels
-                                      across layers/steps; the artifact
-                                      records both buckets so a human can
-                                      decide.
+    Codex F1 update: per-branch attempt/failure counters
+    (``fused_npt16_attempts``, ``fused_npt8_attempts``,
+    ``fused_npt8_tiled_attempts``, ``fused_3kernel_attempts``) are now the
+    primary attribution source. They increment regardless of
+    ``ISOQUANT_PROFILE_METAL`` and survive the int-truncation that breaks
+    the timing-based heuristic. Timing fields are still consulted only as
+    a tie-breaker for back-compat.
+
+    Returns one of:
+
+      * ``"npt16"`` / ``"npt8"`` / ``"npt8_tiled"`` — fused kernel that
+        actually ran (per per-branch attempts counter).
+      * ``"npt8_or_npt8_tiled"`` — legacy fallback when only timing is
+        available (no per-branch counters); kept for back-compat.
+      * ``"3kernel"`` — default fused metal path.
+      * ``"single_kernel"`` — ``T <= _SINGLE_KERNEL_T_THRESHOLD`` (dead
+        code at threshold=0; only reachable via timing inference).
+      * ``"mlx_ops_fallback"`` — metal attempted then failed; the MLX-ops
+        fallback ran. Detected by ``fused_metal_failures > 0``.
+      * ``"mlx_ops_fallback(<branch>)"`` — same, with the failing branch
+        identified via per-branch attempts counters (e.g. ``npt16``,
+        ``3kernel``). Surfaces *which* branch tripped the fallback.
+      * ``"unfused_reconstruct"`` — inner ``supports_fused_attention``
+        returned False; ``reconstruct_keys`` + base SDPA ran.
+      * ``"no_iso_dispatch"`` — cache selected but no fused attempt made.
+      * ``"ambiguous"`` / ``"ambiguous(<a,b,...>)"`` — counters disagree
+        (multiple branches with attempts and no clear winner).
     """
     if not delta:
         return "no_iso_dispatch"
     unfused = delta.get("unfused_fallback_calls", 0)
     metal_attempts = delta.get("fused_metal_attempts", 0)
     metal_failures = delta.get("fused_metal_failures", 0)
-    if metal_attempts == 0 and unfused > 0:
+
+    # Per-branch attempt counters (Codex F1). Source of truth when present.
+    branch_attempts = {
+        "npt16": delta.get("fused_npt16_attempts", 0),
+        "npt8": delta.get("fused_npt8_attempts", 0),
+        "npt8_tiled": delta.get("fused_npt8_tiled_attempts", 0),
+        "3kernel": delta.get("fused_3kernel_attempts", 0),
+    }
+    nonzero_branches = [b for b, n in branch_attempts.items() if n > 0]
+    total_branch_attempts = sum(branch_attempts.values())
+
+    if metal_attempts == 0 and total_branch_attempts == 0 and unfused > 0:
         return "unfused_reconstruct"
-    if metal_attempts == 0 and unfused == 0:
+    if metal_attempts == 0 and total_branch_attempts == 0 and unfused == 0:
         return "no_iso_dispatch"
-    # Metal path attempted at least once.
+
+    # Metal path attempted at least once. If a branch failed, attribute
+    # the fallback to the branch with the most attempts (best signal we
+    # have without per-call attribution).
     if metal_failures > 0:
+        if nonzero_branches:
+            top_branch = max(branch_attempts.items(), key=lambda kv: kv[1])[0]
+            return f"mlx_ops_fallback({top_branch})"
         return "mlx_ops_fallback"
-    # Metal path succeeded. Discriminate by which fused timing counter moved.
+
+    # Metal succeeded. Prefer per-branch attempt counters.
+    if len(nonzero_branches) == 1:
+        return nonzero_branches[0]
+    if len(nonzero_branches) > 1:
+        return f"ambiguous({','.join(sorted(nonzero_branches))})"
+
+    # No per-branch counters incremented — fall back to legacy timing
+    # inference (older artifacts; unlikely to hit on fresh runs).
     qk = delta.get("fused_qk_ms", 0)
     val = delta.get("fused_value_ms", 0)
     val_tiled = delta.get("fused_value_tiled_ms", 0)
     inv = delta.get("fused_inverse_ms", 0)
     sk = delta.get("fused_single_kernel_ms", 0)
-    total = delta.get("fused_metal_total_ms", 0)
-    # The 3-kernel path increments qk/value/inverse separately and does
-    # NOT touch fused_single_kernel_ms. NPT16 / NPT8 / NPT8-tiled all run
-    # under the single-kernel umbrella and bump fused_single_kernel_ms
-    # (and fused_metal_total_ms), but not the three-kernel timers.
     three_kernel_signal = qk > 0 or val > 0 or val_tiled > 0 or inv > 0
     single_kernel_signal = sk > 0
     if single_kernel_signal and not three_kernel_signal:
-        # Distinguish NPT16 (D=512) from NPT8 (D=256) via env var, since
-        # the counters share a single timer. The only way the single-kernel
-        # path runs at D=512 is if NPT16 is enabled, so the env var is a
-        # reliable disambiguator at classification time.
         if os.environ.get("ISOQUANT_USE_NPT16_FUSED", "0") == "1":
             return "npt16"
         if os.environ.get("ISOQUANT_USE_NPT8_FUSED", "0") == "1":
@@ -644,9 +691,6 @@ def _classify_iso_path(delta: dict) -> str:
         return "3kernel"
     if three_kernel_signal and single_kernel_signal:
         return "ambiguous"
-    # metal_attempts > 0 but no per-kernel timer moved. Could happen if
-    # mx.eval was deferred and counters lag, but harness uses mx.eval per
-    # step so this should be rare.
     return "ambiguous"
 
 
@@ -665,6 +709,7 @@ def evaluate_context(
     window_size: int,
     log,
     dump_per_step: bool = False,
+    allow_unfused_mla: bool = False,
 ) -> ContextResult:
     import numpy as np
 
@@ -682,8 +727,16 @@ def evaluate_context(
     ref_stats_before = _snapshot_iso_stats()
     t0 = time.time()
     cache_ref = make_caches(model, "default", bits=bits)
+    # Reference path uses the default cache, which has no
+    # KimiMLAIsoQuantCache instances; the require_fused_mla check is a
+    # no-op there. Pass require_fused_mla=False for clarity.
     logits_ref = prefill_then_teacher_forced_decode(
-        model, tokens, cache_ref, prefill_len
+        model,
+        tokens,
+        cache_ref,
+        prefill_len,
+        require_fused_mla=False,
+        log=log,
     )
     # logits_ref shape: (T - prefill_len, V); we only have targets for
     # T - prefill_len - 1 of them (the last decode step has no next-token
@@ -701,7 +754,12 @@ def evaluate_context(
     t0 = time.time()
     cache_iso = make_caches(model, "isoquant", bits=bits)
     logits_iso = prefill_then_teacher_forced_decode(
-        model, tokens, cache_iso, prefill_len
+        model,
+        tokens,
+        cache_iso,
+        prefill_len,
+        require_fused_mla=not allow_unfused_mla,
+        log=log,
     )
     logits_iso = logits_iso[: decode_targets.shape[0]]
     setup_iso = time.time() - t0
@@ -934,6 +992,17 @@ def main() -> int:
         "margin-conditioned mismatch analysis. Roughly ~120 bytes per "
         "decode step per context, so cheap even at 8K.",
     )
+    p.add_argument(
+        "--allow-unfused-mla",
+        action="store_true",
+        help="Suppress the hard-fail when KimiMLAIsoQuantCache.supports_"
+        "fused_latent_attention is False after finalize (e.g. --bits 4 "
+        "where the fused gate requires bit_width==3). The default is to "
+        "fail loudly so a configuration mistake doesn't silently measure "
+        "the reconstruct path while the operator thinks they're testing "
+        "the fused NPT16 kernel. Set this only when you deliberately want "
+        "to A/B the reconstruct path.",
+    )
     args = p.parse_args()
 
     contexts = sorted({int(x) for x in args.contexts.split(",") if x.strip()})
@@ -1012,6 +1081,7 @@ def main() -> int:
                 window_size=args.window_size,
                 log=log,
                 dump_per_step=args.dump_per_step,
+                allow_unfused_mla=args.allow_unfused_mla,
             )
             log(
                 f"  → top1={r.top1_match_rate:.4f}  ppl_drift={r.ppl_drift:+.4f}  "
@@ -1095,6 +1165,7 @@ def main() -> int:
             "max_resident_experts": args.max_resident_experts,
             "max_cached_shards": args.max_cached_shards,
             "dump_per_step": args.dump_per_step,
+            "allow_unfused_mla": args.allow_unfused_mla,
         },
         "env_snapshot": env_snapshot,
         "verdict_reasons": verdict.reasons,
